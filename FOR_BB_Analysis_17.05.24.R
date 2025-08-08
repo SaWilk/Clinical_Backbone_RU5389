@@ -55,9 +55,8 @@ switch(whoami,
        path <- "Documents/Psychologie/Klinischer Job/FOR/R_Auswertung/"},
        "dhcp-172-21-5-162.wlan.uni-hamburg.de.local" = {name <- "/Users/luciafrohn/"; 
        path <- "Documents/Psychologie/Klinischer Job/FOR/R_Auswertung/"},
-       "UN-LAP-015977" = {name <- "C:/Users/bbf7366/"};
-       # Get the directory of the currently running script
-       path <- dirname(rstudioapi::getSourceEditorContext()$path)
+       "UN-LAP-015977" = {name <- dirname(rstudioapi::getSourceEditorContext()$path);
+       path = file.path("raw_data")}
 )
  
 #switch (whoami,

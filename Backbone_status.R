@@ -12,40 +12,51 @@ whoami<- Sys.info()[[4]]; print(whoami)
 
 switch(whoami,
        "KOPSY-D-033080" = {name <- "K:/vol2011/bba3488/";
-       path <- "FOR/"}
+       path <- "FOR/"},
+       "UN-LAP-015977" = {name <- dirname(rstudioapi::getSourceEditorContext()$path);
+       path = file.path("raw_data")}
 )
 
 
 ## Backbone surveys ------------------------------------------------------------
-file_adults <-"results_adults_07042025.csv"
+#file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
+file_adults <- "results-survey564757.csv"
 file_adolescents <- "results-survey585676.csv"
 file_children <- "results-survey798916.csv"
 
 ## Load data -------------------------------------------------------------------
 
-dat_adults <- read.csv(paste0(name,path, file_adults))
-dat_adolescents <- read.csv(paste0(name,path, file_adolescents))
-dat_children <- read.csv(paste0(name,path, file_children))
+dat_adults <- read.csv(file.path(name,path, file_adults))
+dat_adolescents <- read.csv(file.path(name,path, file_adolescents))
+dat_children <- read.csv(file.path(name,path, file_children))
   
+
+idx_chr <- as.character(c(0:9, 99))
+
 
 # adult data
 # create data sets for each project 
-for (i in c(0:9, 99)) {
-  assign(paste0("data_adults_p_", i), subset(dat_adults, project == i))
-}
+parts_adults <- split(dat_adults, dat_adults$Projekt.)
+list2env(
+  setNames(parts_adults[idx_chr], paste0("data_adults_p_", idx_chr)),
+  .GlobalEnv
+)
 
 # adolescent data
 # create data sets for each project
-for (i in c(0:9, 99)) {
-  assign(paste0("data_adolescents_p_", i), subset(dat_adolescents, project == i))
-}
+parts_adolescents <- split(dat_adolescents, dat_adolescents$Projekt.)
+list2env(
+  setNames(parts_adolescents[idx_chr], paste0("data_adolescents_p_", idx_chr)),
+  .GlobalEnv
+)
 
 # chlidren data
 # create data sets for each project
-for (i in c(0:9, 99)) {
-  assign(paste0("data_children_p_", i), subset(dat_children, project == i))
-}
-
+parts_children <- split(dat_children, dat_children$Projekt.)
+list2env(
+  setNames(parts_children[idx_chr], paste0("data_children_p_", idx_chr)),
+  .GlobalEnv
+)
 
 ## Psyctoolkit cognitive tasks -------------------------------------------------
 # load files with overview of the data (not the actuall txt files with the data!)
