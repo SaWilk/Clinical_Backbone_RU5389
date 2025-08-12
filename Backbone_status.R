@@ -51,6 +51,7 @@ switch(whoami,
 source(file.path(function_path, "separate_by_project.R"))
 source(file.path(function_path, "separate_by_project_cog.R"))
 source(file.path(function_path, "remove_test_rows.R"))
+source(file.path(function_path, "copy_psytool_files.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -102,10 +103,20 @@ psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file
 psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
 psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
 
+psytool_info_adults <- remove_test_rows(psytool_info_adults, "psytool_info")
+psytool_info_children <- remove_test_rows(psytool_info_children, "psytool_info")
+psytool_info_adults_remote <- remove_test_rows(psytool_info_adults_remote, "psytool_info")
+psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "psytool_info")
   
-separate_by_project_cog(psytool_info_adults, cogtest_out_path)
+separate_by_project(psytool_info_adults, cogtest_out_path)
+separate_by_project(psytool_info_adults_remote, cogtest_out_path)
+separate_by_project(psytool_info_children, cogtest_out_path)
+separate_by_project(psytool_info_adolescents, cogtest_out_path)
 
 
+## Get the Experimental Data Sets Associated with the project ------------------
 
+
+copy_psytool_files()
 
 
