@@ -22,9 +22,11 @@
 
 
 # Note:
-# For the script to run you should have a main folder (set as working directory) containing two sub folders called data_questionnaires and 
+# For the script to run you should have a main folder (set as working directory) 
+# containing two sub folders called data_questionnaires and 
 # data_tasks (containing subfolders wcst, BACS and LNS).
-# In order to access the relevant data, the script specifies the specific subfolders within their respective sections.
+# In order to access the relevant data, the script specifies the specific 
+# subfolders within their respective sections.
 
 # You can use the given structure - or you need to adapt the script to your folder structure below.  
 

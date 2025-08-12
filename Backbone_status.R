@@ -37,7 +37,11 @@ switch(whoami,
        setwd(name);
        in_path = file.path("raw_data");
        out_path = file.path("01_project_data");
-       function_path = file.path("functions")}
+       survey_out_path = file.path(out_path, "survey_data");
+       function_path = file.path("functions");
+       psytool_path = file.path("raw_data", "psytoolkit");
+       cogtest_out_path = file.path(out_path, "experiment_data");
+       }
 )
 
 
@@ -45,6 +49,9 @@ switch(whoami,
 
 
 source(file.path(function_path, "separate_by_project.R"))
+source(file.path(function_path, "separate_by_project_cog.R"))
+source(file.path(function_path, "remove_test_rows.R"))
+
 
 ## Backbone surveys ------------------------------------------------------------
 #file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
@@ -60,64 +67,45 @@ dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents))
 dat_children <- read.csv(file.path(name,in_path, file_children))
   
 
+# remove Versuchspersonennummer 99999 from all datasets ------------------------
+
+
+dat_adults <- remove_test_rows(dat_adults, "Adults")
+dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents")
+dat_children <- remove_test_rows(dat_children, "Children")
+
+
+# Separate the data by project and store on disk
+
 separate_by_project(dat_adults, out_path)
 separate_by_project(dat_adolescents, out_path)
 separate_by_project(dat_children, out_path)
 
 
-idx_chr <- as.character(c(0:9, 99))
-
-# adult data
-# create data sets for each project 
-parts_adults <- split(dat_adults, dat_adults$Projekt.)
-list2env(
-  setNames(parts_adults[idx_chr], paste0("data_adults_p_", idx_chr)),
-  .GlobalEnv
-)
-
-# adolescent data
-# create data sets for each project
-parts_adolescents <- split(dat_adolescents, dat_adolescents$Projekt.)
-list2env(
-  setNames(parts_adolescents[idx_chr], paste0("data_adolescents_p_", idx_chr)),
-  .GlobalEnv
-)
-
-# chlidren data
-# create data sets for each project
-parts_children <- split(dat_children, dat_children$Projekt.)
-list2env(
-  setNames(parts_children[idx_chr], paste0("data_children_p_", idx_chr)),
-  .GlobalEnv
-)
-
 ## Psyctoolkit cognitive tasks -------------------------------------------------
-# load files with overview of the data (not the actuall txt files with the data!)
+# load files with overview of the data (not the actual txt files with the data!)
 
 file_cog <- "results-survey415148.csv"
 dat_cog <- read.csv(file.path(name,in_path, file_cog))
 
+dat_cog <- remove_test_rows(dat_cog, "cogtests")
 
-cog_adults <- "info_adults.csv"
-cog_adolescents <- "info_adolescents.csv"
-cog_children <- "info_children.csv"
-
-
-## Load data -------------------------------------------------------------------
-info_adults_cog <- read.csv(paste0(name,in_path, cog_adults))
-info_adolescents_cog <- read.csv(paste0(name,in_path, cog_adolescents))
-info_children_cog <- read.csv(paste0(name,in_path, cog_children))
+separate_by_project_cog(dat_cog, out_path)
 
 
-# adults
-# create data sets for each project
-for (i in c(0:9, 99)) {
-  assign(paste0("info_adults_cog_p_", i), subset(info_adults_cog, p == i))
-}
+## Read in Cognitive Task Data from Psytoolkit ---------------------------------
 
-# children
-# create data sets for each project
-for (i in c(6,8, 99)) {
-  assign(paste0("info_children_cog_p_", i), subset(info_children_cog, p == i))
-}
+file_psytool_info = "data.csv";
+
+psytool_info_adults <- read.csv(file.path(name, psytool_path, "adults", file_psytool_info))
+psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file_psytool_info))
+psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
+psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
+
+  
+separate_by_project_cog(psytool_info_adults, cogtest_out_path)
+
+
+
+
 

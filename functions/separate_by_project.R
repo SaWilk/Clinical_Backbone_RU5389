@@ -1,4 +1,4 @@
-separate_by_project <- function(df, out_path = NULL) {
+separate_by_project <- function(df, out_path = NULL, export_csv = FALSE) {
   # pick up global 'out_path' only if not provided
   if (is.null(out_path)) out_path <- get0("out_path", inherits = TRUE)
   
@@ -41,7 +41,9 @@ separate_by_project <- function(df, out_path = NULL) {
     # Save only if non-empty
     if (!is_empty_df(d)) {
       base <- sprintf("%s_%s_%s", as.character(pid), date_str, sample_tag)
-      utils::write.csv(d, file.path(out_path, paste0(base, ".csv")), row.names = FALSE, na = "")
+      if (export_csv) {
+        utils::write.csv(d, file.path(out_path, paste0(base, ".csv")), row.names = FALSE, na = "")
+      }
       writexl::write_xlsx(d, file.path(out_path, paste0(base, ".xlsx")))
     }
   }
