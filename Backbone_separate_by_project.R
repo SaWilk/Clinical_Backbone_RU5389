@@ -1,0 +1,235 @@
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# FOR: Backbone Separate Data by Project 
+# Author: Saskia Wilken (saskia.wilken@uni-hamburg.de) & Antonia Bott (antonia.bott@uni-hamburg.de)
+# 2025-08-08 (Date initially edited by SW)
+#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# This script 
+# (1) reads questionnaire data exported from LimeSurvey and PsyToolkit
+
+# (2) Fixes Issues with VP ID assignment
+
+# (3) Creates project-specific data files in the environment as well as on disk
+
+
+# clean up R environment
+rm(list=ls())
+cat("\014")
+
+# install packages
+if(!require("dplyr")){install.packages("dplyr")};library(dplyr)
+if(!require("tidyr")){install.packages("tidyr")};library(tidyr)
+if(!require("writexl")){install.packages("writexl")};library(tidyr)
+
+
+## Set working directory -------------------------------------------------------
+
+whoami<- Sys.info()[[4]]; print(whoami)
+
+# if you are not in this list add your computer here
+
+switch(whoami,
+       "KOPSY-D-033080" = {name <- "K:/vol2011/bba3488/";
+       path <- "FOR/"},
+       "UN-LAP-015977" = {name <- dirname(rstudioapi::getSourceEditorContext()$path);
+       }
+)
+
+setwd(name);
+in_path = file.path("raw_data");
+out_path = file.path("01_project_data");
+survey_out_path = file.path(out_path, "survey_data");
+function_path = file.path("functions");
+psytool_path = file.path("raw_data", "psytoolkit");
+cogtest_out_path = file.path(out_path, "experiment_data");
+
+
+## Source required functions --------------------
+
+source(file.path(function_path, "separate_by_project.R"))
+source(file.path(function_path, "separate_by_project_cog.R"))
+source(file.path(function_path, "remove_test_rows.R"))
+source(file.path(function_path, "copy_psytool_files.R"))
+
+
+## Backbone surveys ------------------------------------------------------------
+
+#file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
+file_adults <- "results-survey564757.csv"
+file_adolescents <- "results-survey585676.csv"
+file_children <- "results-survey798916.csv"
+
+
+## Load data -------------------------------------------------------------------
+
+dat_adults <- read.csv(file.path(name,in_path, file_adults))
+dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents))
+dat_children <- read.csv(file.path(name,in_path, file_children))
+  
+
+# remove Test Datasets from all Project data -----------------------------------
+
+dat_adults <- remove_test_rows(dat_adults, "Adults")
+dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents")
+dat_children <- remove_test_rows(dat_children, "Children")
+
+
+# Fix issues with project assignment -------------------------------------------
+
+dat_adults$Projekt.[which(dat_adults$Versuchspersonennummer. == 2048)]
+# assuming this is project 2 since project 1 does not collect data and the id starts with a 2
+dat_adults$Projekt.[which(dat_adults$Versuchspersonennummer. == 2048)] = 2;
+
+dat_adults$Projekt.[which(dat_adults$Versuchspersonennummer. == 99017)]
+# assuming this is project 9 since project 1 does not collect data and the id 
+# starts with a 9. also project 9 IDs are actually consecutive and 17 is missing. 
+dat_adults$Projekt.[which(dat_adults$Versuchspersonennummer. == 99017)] = 9;
+
+
+# Remove empty Rows --------------------------------------------------------
+
+LAST_P_EMPTY = 6;
+# empty entries did not get pat page LAST_P_EMPTY. I assume this is a technical issue usually 
+# and I remove it. I also remove when only cognitive tests were performed sicne thre is no quest data. 
+# I do not remove incomplete entries 
+
+# Project 3
+PROJECT = 3;
+# adult
+sum((dat_children$Aus.Link.von.Psytoolkit == "cogn" | dat_children$Letzte.Seite < LAST_P_EMPTY) 
+    & dat_children$Projekt. == PROJECT, na.rm = TRUE)
+empty_ch_3 = dat_children[which(
+  (dat_children$Aus.Link.von.Psytoolkit == "cogn" | dat_children$Letzte.Seite < LAST_P_EMPTY) 
+  & dat_children$Projekt. == PROJECT),"Versuchspersonennummer."]
+# 30017
+dat_children <- dat_children[!(dat_children$Projekt. == PROJECT & 
+                                 (dat_children$Aus.Link.von.Psytoolkit == "cogn" | dat_children$Letzte.Seite < LAST_P_EMPTY)), ];
+# child
+sum(dat_adults$Letzte.Seite < LAST_P_EMPTY & dat_adults$Projekt. == PROJECT, na.rm = TRUE)
+empty_ad_3 = dat_adults[which(dat_adults$Letzte.Seite < LAST_P_EMPTY & dat_adults$Projekt. == PROJECT),"Versuchspersonennummer."]
+dat_adults <- dat_adults[!(dat_adults$Projekt. == PROJECT & dat_adults$Letzte.Seite < LAST_P_EMPTY), ];
+
+# Project 7
+PROJECT = 7;
+# adult
+sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT, na.rm = TRUE)
+empty_ad_7 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT),"Versuchspersonennummer."]
+#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
+dat_adults <- dat_adults[!(dat_adults$Projekt. == PROJECT & 
+                             (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
+# adolescent
+sum((dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY) & dat_adolescents$Projekt. == PROJECT, na.rm = TRUE)
+empty_adlsc_7 = dat_adolescents[which((dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY) & dat_adolescents$Projekt. == PROJECT),"Versuchspersonennummer."]
+#  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
+#  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
+#  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
+#  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
+dat_adolescents <- dat_adolescents[!(dat_adolescents$Projekt. == PROJECT & 
+                             (dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY)), ];
+
+# Project 8
+# PROJECT = 8;
+# adult
+# sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT, na.rm = TRUE)
+# empty_ad_8 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT),"Versuchspersonennummer."]
+#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
+# dat_adults <- dat_adults[!(dat_adults$Projekt. == PROJECT & 
+#                             (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
+
+
+# Project 9
+PROJECT = 9;
+sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT, na.rm = TRUE)
+empty_ad_9 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults$Projekt. == PROJECT),"Versuchspersonennummer."]
+#  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
+dat_adults <- dat_adults[!(dat_adults$Projekt. == PROJECT & (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
+
+
+# Fix ID naming issues --------------------------------------------------------
+
+# Project 2
+PROJECT = 2;
+# wrong entry
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 20035)] = 20036; 
+# assuming a 0 (or many) 0s are missing
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 4 & dat_adults$Projekt. == PROJECT)] = 20004;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 6 & dat_adults$Projekt. == PROJECT)] = 20006;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 15 & dat_adults$Projekt. == PROJECT)] = 20015;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2023 & dat_adults$Projekt. == PROJECT)] = 20023;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 26 & dat_adults$Projekt. == PROJECT)] = 20026;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 35 & dat_adults$Projekt. == PROJECT)] = 20035;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2041 & dat_adults$Projekt. == PROJECT)] = 20041;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2044 & dat_adults$Projekt. == PROJECT)] = 20044;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2046 & dat_adults$Projekt. == PROJECT)] = 20046;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2048 & dat_adults$Projekt. == PROJECT)] = 20048;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 2052 & dat_adults$Projekt. == PROJECT)] = 20052;
+# Project 3
+PROJECT = 3;
+# assuming a 0 (or many) 0s are missing
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 1 & dat_adults$Projekt. == PROJECT)] = 30001;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 3 & dat_adults$Projekt. == PROJECT)] = 30003;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 8 & dat_adults$Projekt. == PROJECT)] = 30008;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 9 & dat_adults$Projekt. == PROJECT)] = 30009;
+# assuming the wrong initial number was given since the projects in question do not collect data (yet)
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 10002 & dat_adults$Projekt. == PROJECT)] = 30002;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 10005 & dat_adults$Projekt. == PROJECT)] = 30005;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 10006 & dat_adults$Projekt. == PROJECT)] = 30006;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 10007 & dat_adults$Projekt. == PROJECT)] = 30007;
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 40019 & dat_adults$Projekt. == PROJECT)] = 30019;
+
+# Project 9
+# assuming a 0 (or many) 0s are missing
+dat_adults$Versuchspersonennummer.[which(dat_adults$Versuchspersonennummer. == 9901)] = 99001
+
+# Handle duplicate IDs ---------------------------------------------------------
+sort(unique(dat_adults$Versuchspersonennummer.[duplicated(dat_adults$Versuchspersonennummer.)]))
+
+
+
+
+# Separate the data by project and store on disk
+
+separate_by_project(dat_adults, out_path)
+separate_by_project(dat_adolescents, out_path)
+separate_by_project(dat_children, out_path)
+
+
+## Psyctoolkit cognitive tasks -------------------------------------------------
+# load files with overview of the data (not the actual txt files with the data!)
+
+file_general <- "results-survey415148.csv"
+dat_general <- read.csv(file.path(name,in_path, file_general))
+
+dat_general <- remove_test_rows(dat_general, "general")
+
+separate_by_project_cog(dat_general, out_path)
+
+
+## Read in Cognitive Task Data from Psytoolkit ---------------------------------
+
+file_psytool_info = "data.csv";
+
+psytool_info_adults <- read.csv(file.path(name, psytool_path, "adults", file_psytool_info))
+psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file_psytool_info))
+psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
+psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
+
+psytool_info_adults <- remove_test_rows(psytool_info_adults, "psytool_info")
+psytool_info_children <- remove_test_rows(psytool_info_children, "psytool_info")
+psytool_info_adults_remote <- remove_test_rows(psytool_info_adults_remote, "psytool_info")
+psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "psytool_info")
+  
+separate_by_project(psytool_info_adults, cogtest_out_path)
+separate_by_project(psytool_info_adults_remote, cogtest_out_path)
+separate_by_project(psytool_info_children, cogtest_out_path)
+separate_by_project(psytool_info_adolescents, cogtest_out_path)
+
+
+## Get the Experimental Data Sets Associated with the project ------------------
+
+
+copy_psytool_files()
+
+

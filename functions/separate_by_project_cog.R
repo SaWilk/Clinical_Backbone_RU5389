@@ -34,7 +34,7 @@ separate_by_project_cog <- function(df, out_path = NULL, export_csv = FALSE) {
   }
   
   date_str <- format(Sys.Date(), "%Y-%m-%d")
-  sample_tag <- "cogtests"
+  sample_tag <- "general_info"
   
   for (lbl in proj_labels) {
     d <- parts[[lbl]]
