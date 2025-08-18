@@ -65,10 +65,20 @@ file_children <- "results-survey798916.csv"
 ## Load data -------------------------------------------------------------------
 
 # Questionnaires
-dat_adults <- read.csv(file.path(name,in_path, file_adults))
-dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents))
-dat_children <- read.csv(file.path(name,in_path, file_children))
+dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";")
+dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";")
+dat_children <- read.csv(file.path(name,in_path, file_children), sep = ";")
 
+colnames(dat_adults)
+
+[1] "id"                             "submitdate"                     "lastpage"                      
+[4] "startlanguage"                  "seed"                           "startdate"                     
+[7] "datestamp"                      "refurl"                         "vpid"                          
+[10] "project"                        "remid"                          "remidcheck"                    
+[13] "warning"                        "consent"                        "comp"                          
+[16] "end"                            "Instr"                          "IDAS
+"CAPEfreq     "CAPEdistr      AQ  Alk1  Tab1  Cann1 Stim1 Opi1  Hal1  Inh1  Med1  And1
+ASRS  BISBAS  IUS   APS   TICS    CTQ   MAP   OBQ   PIPR    FMPSD   K   OCIR  MCQ
 
 # Data Overview
 file_general <- "results-survey415148.csv"
