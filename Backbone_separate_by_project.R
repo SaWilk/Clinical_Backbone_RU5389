@@ -69,8 +69,11 @@ dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";")
 dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";")
 dat_children <- read.csv(file.path(name,in_path, file_children), sep = ";")
 
-colnames(dat_adults)
+# Which columns are completely NA?
+empty_cols <- sapply(dat_adults, function(x) all(is.na(x)))
 
+# Names of such columns
+names(empty_cols[empty_cols])
 [1] "id"                             "submitdate"                     "lastpage"                      
 [4] "startlanguage"                  "seed"                           "startdate"                     
 [7] "datestamp"                      "refurl"                         "vpid"                          
@@ -79,6 +82,13 @@ colnames(dat_adults)
 [16] "end"                            "Instr"                          "IDAS
 "CAPEfreq     "CAPEdistr      AQ  Alk1  Tab1  Cann1 Stim1 Opi1  Hal1  Inh1  Med1  And1
 ASRS  BISBAS  IUS   APS   TICS    CTQ   MAP   OBQ   PIPR    FMPSD   K   OCIR  MCQ
+eyesight"                       "hearing"                       
+[514] "height"                         "weight"                         "psychomedication"              
+[517] "psychodrug"                     "othermedication"                "otherdrug"                     
+[520] "relativesInfo"                  "parents.001."                   "parents.002."                  
+[523] "parentsgender.001."             "parentsgender.002."             "parentscontact.001."           
+[526] "parentscontact.002."            "siblings"                       "siblingsnames.001."            
+[529] "siblingsnames.002."             "siblingsnames.003."
 
 # Data Overview
 file_general <- "results-survey415148.csv"
