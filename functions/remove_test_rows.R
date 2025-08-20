@@ -19,6 +19,7 @@ remove_test_rows <- function(df, name) {
   
   # Candidate participant ID column names (in order of preference)
   id_cols <- c(
+    "vpid", 
     "Versuchspersonennummer.",
     "Versuchspersonen.ID...Participant.ID",
     "id",
