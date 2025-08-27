@@ -4,7 +4,8 @@ extract_pilot_by_vpid <- function(
     export_csv = FALSE,
     sample = NULL,
     pilot_ids = NULL,
-    pilot_regex = NULL
+    pilot_regex = NULL,
+    vpid_col = NULL   # NEW: optional explicit column override
 ) {
   # ---- setup out_path & dependency ----
   if (is.null(out_path)) out_path <- get0("out_path", inherits = TRUE)
@@ -13,15 +14,6 @@ extract_pilot_by_vpid <- function(
   if (!requireNamespace("writexl", quietly = TRUE)) {
     stop("Package 'writexl' is required. Install it with install.packages('writexl').")
   }
-  
-  # ---- find vpid column (new + legacy) ----
-  # keep 'id' in the candidates so PsyToolkit exports work out of the box
-  id_cols <- c("id", "vpid", "Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "vpid_1")
-  id_col <- intersect(id_cols, names(df))[1]
-  if (is.na(id_col)) stop("No participant ID column found. Tried: ", paste(id_cols, collapse = ", "))
-  
-  # ensure character
-  vpid <- trimws(as.character(df[[id_col]]))
   
   # ---- infer sample if not given (from the name used in the call) ----
   normalize_sample <- function(x) {
@@ -33,14 +25,36 @@ extract_pilot_by_vpid <- function(
     "unknown"
   }
   txt <- tryCatch(paste(deparse(substitute(df)), collapse = ""), error = function(e) "")
-  if (is.null(sample)) {
-    sample <- normalize_sample(txt)
+  sample <- if (is.null(sample)) normalize_sample(txt) else normalize_sample(sample)
+  
+  # ---- detect PsyToolkit exports (for column choice & naming only) ----
+  looks_psytool <- (("id" %in% names(df)) && ("p" %in% names(df)) && ncol(df) < 20) ||
+    grepl("psytool_info", tolower(txt), fixed = TRUE)
+  
+  # ---- choose participant ID column (prefer vpid; 'id' only if PsyToolkit or no vpid) ----
+  legacy_cols <- c("Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "vpid_1")
+  # Explicit override wins if valid
+  if (!is.null(vpid_col) && vpid_col %in% names(df)) {
+    id_col <- vpid_col
+    id_src <- sprintf("explicit override '%s'", vpid_col)
+  } else if ("vpid" %in% names(df)) {
+    id_col <- "vpid"
+    id_src <- "vpid"
+  } else if (any(legacy_cols %in% names(df))) {
+    id_col <- intersect(legacy_cols, names(df))[1]
+    id_src <- sprintf("legacy '%s'", id_col)
+  } else if (looks_psytool && "id" %in% names(df)) {
+    id_col <- "id"
+    id_src <- "psytool 'id'"
+  } else if ("id" %in% names(df)) {
+    id_col <- "id"
+    id_src <- "generic 'id'"
   } else {
-    sample <- normalize_sample(sample)
+    stop("No participant ID column found. Tried: vpid, ", paste(legacy_cols, collapse = ", "), ", id")
   }
   
-  # ---- detect PsyToolkit exports for naming only ----
-  looks_psytool <- ("p" %in% names(df) && "id" %in% names(df)) || grepl("psytool_info", tolower(txt), fixed = TRUE)
+  # ensure character
+  vpid <- trimws(as.character(df[[id_col]]))
   
   # ---- choose pilot matcher (priority: exact IDs > regex > conservative default) ----
   if (!is.null(pilot_ids)) {
@@ -81,8 +95,8 @@ extract_pilot_by_vpid <- function(
   
   # ---- messaging & return ----
   message(
-    "extract_pilot_by_vpid: sample='", sample, "', vpid_col='", id_col,
-    "', moved ", nrow(pilot_df), " pilot rows; keeping ", nrow(main_df), " rows. Matcher: ", match_src, "."
+    "extract_pilot_by_vpid: sample='", sample, "', vpid_col='", id_col, "' (", id_src, ")",
+    ", moved ", nrow(pilot_df), " pilot rows; keeping ", nrow(main_df), " rows. Matcher: ", match_src, "."
   )
   return(main_df)
 }

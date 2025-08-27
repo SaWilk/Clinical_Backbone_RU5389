@@ -57,6 +57,7 @@ source(file.path(function_path, "separate_by_project.R"))
 source(file.path(function_path, "remove_test_rows.R"))
 source(file.path(function_path, "copy_psytool_files.R"))
 source(file.path(function_path, "extract_pilot_by_vpid.R"))
+source(file.path(function_path, "resolve_duplicates.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -106,6 +107,9 @@ psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolesce
 psytool_info_children <- remove_test_rows(psytool_info_children, "Children")
 
 
+##########################################################################
+## Data Cleaning for Questionnaire Data ----------------------------------
+##########################################################################
 
 # Set column name variables ----------------------------------------------------
 
@@ -113,7 +117,9 @@ vp_col <- "vpid"
 project_col <- "project"
 last_page <- "lastpage"
 link_col <- "comp"
-id_col = "id"
+id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in the 
+# questionnaire data this is an unqiue incrementing numbercoutning the datasets
+
 
 # Fix issues with project assignment -------------------------------------------
 
@@ -146,7 +152,7 @@ empty_ch_3 = dat_children_parents[which(
 dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT & 
                                  (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ];
 # child
-sum(dat_adults$Letzte.Seite < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
+sum(dat_adults$last_page < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
 empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), vp_col]
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ];
 
@@ -156,7 +162,7 @@ PROJECT = 7;
 sum((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
 empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
 #  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & 
+dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                              (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 # adolescent
 sum((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT, na.rm = TRUE)
@@ -165,18 +171,23 @@ empty_adlsc_7 = dat_adolescents[which((dat_adolescents[[link_col]] == "cogn" | d
 #  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
 #  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
 #  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
-dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT & 
+dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
                                        (dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY)), ];
 
 # Project 8
-# PROJECT = 8;
+PROJECT = 8;
 # adult
 sum((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
 empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
  # 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
-
+# children
+sum((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ch_8 = dat_children_parents[which((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT), vp_col]
+# 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
+dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT &
+                             (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ];
 
 # Project 9
 PROJECT = 9;
@@ -229,19 +240,25 @@ dat_adults[[vp_col]][which(dat_adults[[id_col]] == 316 & dat_adults[[project_col
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001
 
 
+# Special Case Project 8: Remap VPIDs so children and adults have unqiue IDs -------------
+
+# TODO: do it. 
+
+
+# Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
+
+# TODO: do it
+
+
 # Handle duplicate IDs ---------------------------------------------------------
 
-id_col = "id";
-
 # list of duplicates
-sort(unique(dat_adults[[vp_col]][duplicated(dat_adults[[vp_col]])]))
-sort(unique(dat_adults[["id"]][duplicated(dat_adults[["id"]])]))
+# sort(unique(dat_adults[[vp_col]][duplicated(dat_adults[[vp_col]])]))
+# sort(unique(dat_adolescents[[vp_col]][duplicated(dat_adolescents[[vp_col]])]))
+# sort(unique(dat_children_parents[[vp_col]][duplicated(dat_children_parents[[vp_col]])]))
 
+# Delete not needed, incomplete or faulty datasets 
 
-sort(unique(dat_adolescents[[vp_col]][duplicated(dat_adolescents[[vp_col]])]))
-sort(unique(dat_children_parents[[vp_col]][duplicated(dat_children_parents[[vp_col]])]))
-
-# Delete not needed, incomplete or faulty datasets ------------------------------------------
 # using list of "ids" that can be deleted
 # these are the entries in the output file, not the vp identifiers. 
 
@@ -250,16 +267,52 @@ dat_adults <- dat_adults %>%
   dplyr::filter(!id %in% del_id_ad)
 
 
+# --- Example usage with your three datasets ---
+# Assume vp_col is a string like "vp_id"
+# Adults
+res_adults <- resolve_duplicates(dat_adults, vp_col, dataset_name = "adults")
+dat_adults <- res_adults$cleaned
+trash_adults <- res_adults$trash_bin
+
+# [adults] Multiple complete datasets for vpid=80009 — please resolve manually.
+# [adults] Multiple complete datasets for vpid=80011 — please resolve manually.
+# [adults] Multiple complete datasets for vpid=99001 — please resolve manually.
+
+# Adolescents
+res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents")
+dat_adolescents <- res_adolescents$cleaned
+trash_adolescents <- res_adolescents$trash_bin
+
+# [adolescents] Multiple complete datasets for vpid=70076 — please resolve manually.
+# [adolescents] Multiple complete datasets for vpid=70072 — please resolve manually.
+# [adolescents] Multiple complete datasets for vpid=70084 — please resolve manually.
+# [adolescents] Multiple complete datasets for vpid=70062 — please resolve manually.
+# Waiting for resonse from Ibrahim.... 
+
+# Children/Parents
+res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, dataset_name = "children_parents")
+dat_children_parents <- res_children_parents$cleaned
+trash_children_parents <- res_children_parents$trash_bin
+
+# [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
+# [children_parents] Multiple complete datasets for vpid=80005, form=P — please resolve manually.
+
+#  One combined trash bin for easy cross-checking:
+# TODO: save as extra variable (like pilots) and also include empty rows
+
 
 # Gather Pilot Participant IDs WIP -------------------------------------------------
 
-pilot_ad_2 = c(20002, 20001, 20003, 20004);
-pilot_ad_2 = c(20002, 20001, 20003, 20004);
-pilot_asc_7 = c(79001, 79002, 79003, 79004, 79005, 79006, 79007, 79008, 79009, 79010, 79011, 79012, 79013, 79014, 79015)
-pilot_ad_7 = c(79019, 77001)
+# TODO: use the general_info to obtain the info which type of data collection was performed. 
 
-pilot_ad_all = c(pilot_ad_2, pilot_ad_7)
-pilot_asc_all = c(pilot_asc_7)
+pilot_ad_2 = c(20002, 20001, 20003, 20004);
+pilot_ad_9 = c();
+pilot_ad_7 = c(79001, 79002, 79003, 79004, 79005, 79006, 79007, 79008, 79009, 79010, 79011, 79012, 79013, 79014, 79015, 79016);
+
+pilot_asc_7 = c(79019, 77001);
+
+pilot_ad_all = c(pilot_ad_2, pilot_ad_7, pilot_ad_9);
+pilot_asc_all = c(pilot_asc_7);
 
 # Move to separate file and from original dataset
 
@@ -268,22 +321,188 @@ dat_adults <- extract_pilot_by_vpid(
   out_path = out_path,
   export_csv = FALSE,
   pilot_ids = pilot_ad_all,
-  sample = "adults"
-)
-dat_adults <- extract_pilot_by_vpid(
+  sample = "adults",
+  vpid_col = "vpid"
+);
+psytool_info_adults <- extract_pilot_by_vpid(
   psytool_info_adults,
   out_path = cogtest_out_path,
   export_csv = FALSE,
-  pilot_ids = pilot_vec_ad,
-  sample = "adults"
-)
+  pilot_ids = pilot_ad_all,
+  sample = "adults",
+  vpid_col = "id"
+);
+dat_adolescents <- extract_pilot_by_vpid(
+  dat_adolescents,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilot_asc_all,
+  sample = "adolescents",
+  vpid_col = "vpid"
+);
+
+
+# Separate the data by project and store on disk ------------------------------
+
+# Questionnaires
+separate_by_project(dat_adults, out_path, "adults")
+separate_by_project(dat_adolescents, out_path, "adolescents")
+separate_by_project(dat_children_parents, out_path, "children")
+
+
+##########################################################################
+## Data Cleaning for Cognitive Test Data ---------------------------------
+##########################################################################
+
+# Set column name variables ----------------------------------------------------
+
+vp_col <- "id"
+project_col <- "p"
+# last_page <- "lastpage"
+link_col <- "comp"
+id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in the 
+# questionnaire data this is an unqiue incrementing numbercoutning the datasets
+
+# Fix issues with project assignment -------------------------------------------
+
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 2048)]
+# assuming this is project 2 since project 1 does not collect data and the id starts with a 2
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 2048)] = 2;
+
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)]
+# assuming this is project 9 since project 1 does not collect data and the id 
+# starts with a 9. also project 9 IDs are actually consecutive and 17 is missing. 
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)] = 9;
+
+
+# Remove empty Rows --------------------------------------------------------
+
+LAST_P_EMPTY = 6;
+# empty entries did not get pat page LAST_P_EMPTY. I assume this is a technical issue usually 
+# and I remove it. I also remove when only cognitive tests were performed sicne thre is no quest data. 
+# I do not remove incomplete entries in this step
+
+# Project 3
+PROJECT = 3;
+# adult
+sum((psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY) 
+    & psytool_info_children[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ch_3 = psytool_info_children[which(
+  (psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY) 
+  & psytool_info_children[[project_col]] == PROJECT), vp_col]
+# 30017
+psytool_info_children <- psytool_info_children[!(psytool_info_children[[project_col]] == PROJECT & 
+                                                 (psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY)), ];
+# child
+sum(psytool_info_adults$last_page < LAST_P_EMPTY & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ad_3 = psytool_info_adults[which(psytool_info_adults[[last_page]] < LAST_P_EMPTY & psytool_info_adults[[project_col]] == PROJECT), vp_col]
+psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & psytool_info_adults[[last_page]] < LAST_P_EMPTY), ];
+
+# Project 7
+PROJECT = 7;
+# adult
+sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ad_7 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
+#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
+psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & 
+                             (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
+# adolescent
+sum((psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY) & psytool_info_adolescents[[project_col]] == PROJECT, na.rm = TRUE)
+empty_adlsc_7 = psytool_info_adolescents[which((psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY) & psytool_info_adolescents[[project_col]] == PROJECT), vp_col]
+#  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
+#  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
+#  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
+#  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
+psytool_info_adolescents <- psytool_info_adolescents[!(psytool_info_adolescents[[project_col]] == PROJECT & 
+                                       (psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY)), ];
+
+# Project 8
+# PROJECT = 8;
+# adult
+sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ad_8 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
+# 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
+psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT &
+                             (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
+
+
+# Project 9
+PROJECT = 9;
+sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
+empty_ad_9 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
+#  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
+psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
+
+
+# Fix ID naming issues --------------------------------------------------------
+
+# Project 2
+PROJECT = 2;
+# wrong entry
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 20035)] = 20036; 
+# assuming a 0 (or many) 0s are missing
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4 & psytool_info_adults[[project_col]] == PROJECT)] = 20004;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 6 & psytool_info_adults[[project_col]] == PROJECT)] = 20006;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 15 & psytool_info_adults[[project_col]] == PROJECT)] = 20015;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2023 & psytool_info_adults[[project_col]] == PROJECT)] = 20023;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 26 & psytool_info_adults[[project_col]] == PROJECT)] = 20026;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 35 & psytool_info_adults[[project_col]] == PROJECT)] = 20035;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2041 & psytool_info_adults[[project_col]] == PROJECT)] = 20041;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2044 & psytool_info_adults[[project_col]] == PROJECT)] = 20044;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2046 & psytool_info_adults[[project_col]] == PROJECT)] = 20046;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2048 & psytool_info_adults[[project_col]] == PROJECT)] = 20048;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2051 & psytool_info_adults[[project_col]] == PROJECT)] = 20051;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2052 & psytool_info_adults[[project_col]] == PROJECT)] = 20052;
+# Project 3
+PROJECT = 3;
+# assuming a 0 (or many) 0s are missing
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 1 & psytool_info_adults[[project_col]] == PROJECT)] = 30001;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 3 & psytool_info_adults[[project_col]] == PROJECT)] = 30003;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 8 & psytool_info_adults[[project_col]] == PROJECT)] = 30008;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9 & psytool_info_adults[[project_col]] == PROJECT)] = 30009;
+
+# assuming the wrong initial number was given since the projects in question do not collect data (yet)
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10002 & psytool_info_adults[[project_col]] == PROJECT)] = 30002;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10005 & psytool_info_adults[[project_col]] == PROJECT)] = 30005;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10006 & psytool_info_adults[[project_col]] == PROJECT)] = 30006;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psytool_info_adults[[project_col]] == PROJECT)] = 30007;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] = 30019;
+
+# falsely named datasets
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 227 & psytool_info_adults[[project_col]] == PROJECT)] = 30047;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 316 & psytool_info_adults[[project_col]] == PROJECT)] = 30057;
+
+# Project 9
+# assuming a 0 (or many) 0s are missing
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9901)] = 99001
+
+
+# Handle duplicate IDs ---------------------------------------------------------
+
+id_col = "id";
+
+# list of duplicates
+sort(unique(psytool_info_adults[[vp_col]][duplicated(psytool_info_adults[[vp_col]])]))
+sort(unique(psytool_info_adults[["id"]][duplicated(psytool_info_adults[["id"]])]))
+
+
+sort(unique(psytool_info_adolescents[[vp_col]][duplicated(psytool_info_adolescents[[vp_col]])]))
+sort(unique(psytool_info_children[[vp_col]][duplicated(psytool_info_children[[vp_col]])]))
+
+# Delete not needed, incomplete or faulty datasets ------------------------------------------
+# using list of "ids" that can be deleted
+# these are the entries in the output file, not the vp identifiers. 
+
+del_id_ad = c(59, 80) # Hendrik Heinbockel said they can be deleted as they are incomplete
+psytool_info_adults <- psytool_info_adults %>%
+  dplyr::filter(!id %in% del_id_ad)
 
 
 # Check if the VP IDs in Psytool (cognitive tests) align with the IDs of the questionnaire data (questionnaires) ------------
 
-all_sub_quest = c(dat_adults$vpid, 
-                  dat_children_parents$vpid,
-                  dat_adolescents$vpid);
+all_sub_quest = c(psytool_info_adults$vpid, 
+                  psytool_info_children$vpid,
+                  psytool_info_adolescents$vpid);
 
 all_sub_quest <- all_sub_quest[!(is.na(all_sub_quest) | all_sub_quest == "")]
 
@@ -318,169 +537,11 @@ no_test_ids # <- also these - they seem to have no cognitive test data
 
 
 
-# Separate the data by project and store on disk
+# Separate the data by project and store on disk ------------------------------
 
-separate_by_project(dat_adults, out_path, "adults")
-separate_by_project(dat_adolescents, out_path, "dat_adolescents")
-separate_by_project(dat_children_parents, out_path, "dat_children_parents")
-
-
-## Experimenter Page -------------------------------------------------
-
-
-# Set column name variables ----------------------------------------------------
-
-vp_col <- "vpid"
-project_col <- "project"
-
-# Remove tester entries
-
-dat_general <- remove_test_rows(dat_general, "general")
-
-
-# Fix issues with project assignment -------------------------------------------
-
-dat_general[[project_col]][which(dat_general[[vp_col]] == 2048)]
-# assuming this is project 2 since project 1 does not collect data and the id starts with a 2
-dat_general[[project_col]][which(dat_general[[vp_col]] == 2048)] = 2;
-# DOES NOT APPEAR FOR SOME REASON... WHY? IS THERE PSYTOOLKIT DATA?
-
-dat_general[[project_col]][which(dat_general[[vp_col]] == 99017)]
-# assuming this is project 9 since project 1 does not collect data and the id 
-# starts with a 9. also project 9 IDs are actually consecutive and 17 is missing. 
-dat_general[[project_col]][which(dat_general[[vp_col]] == 99017)] = 9;
-# NEITHER, SAME QUESTION
-sort(dat_general[[vp_col]])
-
-
-
-# Remove empty Rows --------------------------------------------------------
-
-LAST_P_EMPTY = 2;
-# empty entries did not get pat page LAST_P_EMPTY. I assume this is a technical issue usually 
-# and I remove it. I also remove when only cognitive tests were performed sicne thre is no quest data. 
-# I do not remove incomplete entries 
-
-# Project 2
-PROJECT = "P2(Donner & Lincoln)";
-# adult
-sum((dat_general$Letzte.Seite < LAST_P_EMPTY) 
-    & dat_general[[project_col]] == PROJECT, na.rm = TRUE)
-empty_2 = dat_general[which(
-  (dat_general$Letzte.Seite < LAST_P_EMPTY) 
-  & dat_general[[project_col]] == PROJECT), vp_col]
-# 30017
-dat_general <- dat_general[!(dat_general[[project_col]] == PROJECT & 
-                                 (dat_general$Letzte.Seite < LAST_P_EMPTY)), ];
-
-
-# Project 3
-PROJECT = 3;
-# adult
-sum((dat_children_parents$Aus.Link.von.Psytoolkit == "cogn" | dat_children_parents$Letzte.Seite < LAST_P_EMPTY) 
-    & dat_children_parents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ch_3 = dat_children_parents[which(
-  (dat_children_parents$Aus.Link.von.Psytoolkit == "cogn" | dat_children_parents$Letzte.Seite < LAST_P_EMPTY) 
-  & dat_children_parents[[project_col]] == PROJECT), vp_col]
-# 30017
-dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT & 
-                                 (dat_children_parents$Aus.Link.von.Psytoolkit == "cogn" | dat_children_parents$Letzte.Seite < LAST_P_EMPTY)), ];
-# child
-sum(dat_adults$Letzte.Seite < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_3 = dat_adults[which(dat_adults$Letzte.Seite < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), vp_col]
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults$Letzte.Seite < LAST_P_EMPTY), ];
-
-# Project 7
-PROJECT = 7;
-# adult
-sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_7 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
-#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & 
-                             (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
-# adolescent
-sum((dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_adlsc_7 = dat_adolescents[which((dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT), vp_col]
-#  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
-#  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
-#  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
-#  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
-dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT & 
-                                       (dat_adolescents$Aus.Link.von.Psytoolkit == "cogn" | dat_adolescents$Letzte.Seite < LAST_P_EMPTY)), ];
-
-# Project 8
-# PROJECT = 8;
-# adult
-# sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-# empty_ad_8 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
-#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
-# dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & 
-#                             (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
-
-
-# Project 9
-PROJECT = 9;
-sum((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_9 = dat_adults[which((dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
-#  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & (dat_adults$Aus.Link.von.Psytoolkit == "cogn" | dat_adults$Letzte.Seite < LAST_P_EMPTY)), ];
-
-
-# Fix ID naming issues --------------------------------------------------------
-
-# Project 2
-PROJECT = 2;
-# wrong entry
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 20035)] = 20036; 
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4 & dat_adults[[project_col]] == PROJECT)] = 20004;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 6 & dat_adults[[project_col]] == PROJECT)] = 20006;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 15 & dat_adults[[project_col]] == PROJECT)] = 20015;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2023 & dat_adults[[project_col]] == PROJECT)] = 20023;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 26 & dat_adults[[project_col]] == PROJECT)] = 20026;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 35 & dat_adults[[project_col]] == PROJECT)] = 20035;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2041 & dat_adults[[project_col]] == PROJECT)] = 20041;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2044 & dat_adults[[project_col]] == PROJECT)] = 20044;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2046 & dat_adults[[project_col]] == PROJECT)] = 20046;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2048 & dat_adults[[project_col]] == PROJECT)] = 20048;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2052 & dat_adults[[project_col]] == PROJECT)] = 20052;
-# Project 3
-PROJECT = 3;
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 1 & dat_adults[[project_col]] == PROJECT)] = 30001;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 3 & dat_adults[[project_col]] == PROJECT)] = 30003;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 8 & dat_adults[[project_col]] == PROJECT)] = 30008;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9 & dat_adults[[project_col]] == PROJECT)] = 30009;
-# assuming the wrong initial number was given since the projects in question do not collect data (yet)
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10002 & dat_adults[[project_col]] == PROJECT)] = 30002;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10005 & dat_adults[[project_col]] == PROJECT)] = 30005;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10006 & dat_adults[[project_col]] == PROJECT)] = 30006;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10007 & dat_adults[[project_col]] == PROJECT)] = 30007;
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 40019 & dat_adults[[project_col]] == PROJECT)] = 30019;
-
-# Project 9
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001
-
-
-# Handle duplicate IDs ---------------------------------------------------------
-sort(unique(dat_adults[[vp_col]][duplicated(dat_adults[[vp_col]])]))
-
-
-# Split by Project -------------------------------------------------------------
-
-separate_by_project_cog(dat_general, out_path)
-
-
-## Process Cognitive Task Data from Psytoolkit ---------------------------------
-
-psytool_info_adults <- remove_test_rows(psytool_info_adults, "psytool_info")
-psytool_info_children <- remove_test_rows(psytool_info_children, "psytool_info")
-psytool_info_adults_remote <- remove_test_rows(psytool_info_adults_remote, "psytool_info")
-psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "psytool_info")
-  
+# Cognitive Tests  
 separate_by_project(psytool_info_adults, cogtest_out_path)
-separate_by_project(psytool_info_adults_remote, cogtest_out_path)
+# separate_by_project(psytool_info_adults_remote, cogtest_out_path)
 separate_by_project(psytool_info_children, cogtest_out_path)
 separate_by_project(psytool_info_adolescents, cogtest_out_path)
 

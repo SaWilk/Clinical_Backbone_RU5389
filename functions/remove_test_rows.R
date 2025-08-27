@@ -9,7 +9,7 @@ remove_test_rows <- function(df, name) {
   }
   
   # List of explicit test IDs to remove
-  bad_ids <- c("123456", "99998")
+  bad_ids <- c("123456", "99998", "89999", "79999")
   
   # If data collection column exists, keep only main data collection rows
   if ("Datenerhebung...Data.collection." %in% names(df)) {

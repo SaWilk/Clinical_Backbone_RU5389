@@ -10,14 +10,10 @@
 # - reads the "children/parents" and "adults" questionnaire data
 # - loads Remote ↔ Participant ID mappings from the Excel sheet "Combined"
 # - fixes known data-entry issues before any checks
-# - for rows with a non-empty remid, looks up Remote_ID and writes the matching Participant_ID into vpid
+# - requires remid == remidcheck (except when remid == "XXXXX")
+# - if remid == "XXXXX", uses remidcheck as the final vpid (and logs these rows)
+# - for valid rows, maps Remote_ID → Participant_ID, writes to vpid, and clears remid/remidcheck
 # - saves the updated data as "..._remids_translated.csv"
-#
-# Note:
-# - remid and vpid are numeric-only by design (but may be stored as character).
-# - Columns remid and vpid exist in the survey exports; we do not create or standardize them.
-# - Before making changes, we check for remids that have no correspondence in the Excel sheet.
-#   We now IGNORE any remids containing letters (e.g., 'xxxxx') in that check.
 
 # clean up R environment
 rm(list = ls())
@@ -40,6 +36,10 @@ script_dir <- tryCatch(dirname(rstudioapi::getSourceEditorContext()$path),
 in_path      <- file.path(script_dir, "raw_data")
 info_path    <- file.path(script_dir, "information")
 
+# optional log dir for Project 8 special-case notes
+log_dir <- file.path(script_dir, "01_project_data", "logs")
+if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
 file_children_parents <- "results-survey798916.csv"
 file_adults           <- "results-survey564757.csv"
 
@@ -52,7 +52,6 @@ xlsx_sheet  <- "Combined"
 # load data --------------------------------------------------------------------
 dat_children_parents <- read.csv(file.path(in_path, file_children_parents),
                                  sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
-
 dat_adults <- read.csv(file.path(in_path, file_adults),
                        sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
 
@@ -86,56 +85,144 @@ fix_mistyped_remid <- function(df) {
 dat_children_parents <- fix_mistyped_remid(dat_children_parents)
 dat_adults           <- fix_mistyped_remid(dat_adults)
 
-# helper: find unmapped remids (ignoring any with letters) ---------------------
-find_unmapped <- function(df, remote_ids) {
-  # take non-empty remids
-  remids <- unique(df$remid[!is.na(df$remid) & df$remid != ""])
-  remids_chr <- as.character(remids)
+# utilities --------------------------------------------------------------------
+is_blank <- function(x) is.na(x) | x == ""
+
+# Handle special "XXXXX" case: set vpid from remidcheck and log ----------------
+handle_xxxxx <- function(df, dataset_name) {
+  remid_chr  <- as.character(df$remid)
+  check_chr  <- as.character(df$remidcheck)
   
-  # keep only numeric remids OR known allowed special tokens (like "R70999")
-  is_numeric <- grepl("^[0-9]+$", remids_chr)
-  whitelist  <- remids_chr %in% c("R70999")
+  xmask <- !is.na(remid_chr) & toupper(remid_chr) == "XXXXX" & !is_blank(check_chr)
   
-  candidates <- remids_chr[is_numeric | whitelist]
+  log_df <- NULL
+  if (any(xmask)) {
+    # Assign vpid from remidcheck for these rows
+    df$vpid[xmask]        <- check_chr[xmask]
+    # Clear remid & remidcheck afterwards
+    df$remid[xmask]       <- NA
+    df$remidcheck[xmask]  <- NA
+    
+    # Prepare a log for Project 8
+    log_df <- data.frame(
+      dataset      = dataset_name,
+      row_index    = which(xmask),
+      remid_used   = "XXXXX",
+      vpid_from_remidcheck = check_chr[xmask],
+      stringsAsFactors = FALSE
+    )
+  }
+  list(df = df, log = log_df)
+}
+
+# Identity check before any mapping (except for the "XXXXX" rows) --------------
+#  - if remid & remidcheck are BOTH non-blank and NOT identical -> print and skip mapping
+#  - if one or both are blank -> proceed (that's typical)
+#  - "XXXXX" rows are handled above and excluded from mismatch warnings
+flag_and_report_mismatches <- function(df, dataset_name) {
+  remid_chr  <- as.character(df$remid)
+  check_chr  <- as.character(df$remidcheck)
+  
+  xmask <- !is.na(remid_chr) & toupper(remid_chr) == "XXXXX"
+  both_present <- !is_blank(remid_chr) & !is_blank(check_chr)
+  mismatch <- both_present & (remid_chr != check_chr) & !xmask
+  
+  if (any(mismatch)) {
+    idx <- which(mismatch)
+    cat("\n[", dataset_name, "] remid vs remidcheck mismatch rows (", length(idx), "):\n", sep = "")
+    for (i in idx) {
+      cat("  row ", i, ": remid='", remid_chr[i], "', remidcheck='", check_chr[i], "' -> MANUAL CHECK NEEDED (skipped)\n", sep = "")
+    }
+  }
+  
+  # Return a logical vector of rows eligible for mapping (exclude mismatches)
+  eligible <- !mismatch
+  eligible
+}
+
+# Unmapped check (ignores letter-only, ignores 'XXXXX', ignores mismatches) ----
+find_unmapped <- function(df, remote_ids, eligible_rows) {
+  remid_chr  <- as.character(df$remid)
+  check_chr  <- as.character(df$remidcheck)
+  
+  xmask      <- !is.na(remid_chr) & toupper(remid_chr) == "XXXXX"
+  use_mask   <- eligible_rows & !xmask & !is_blank(remid_chr)
+  
+  candidates <- remid_chr[use_mask]
+  
+  # Keep only numeric or whitelisted "R70999"
+  is_numeric <- grepl("^[0-9]+$", candidates)
+  whitelist  <- candidates %in% c("R70999")
+  candidates <- candidates[is_numeric | whitelist]
   
   setdiff(candidates, as.character(remote_ids))
 }
 
-# pre-check for unmapped remids (no modification yet) --------------------------
-unmapped_children <- find_unmapped(dat_children_parents, map_ids$Remote_ID)
-unmapped_adults   <- find_unmapped(dat_adults,           map_ids$Remote_ID)
-
-if (length(unmapped_children) > 0 || length(unmapped_adults) > 0) {
-  if (length(unmapped_children) > 0) {
-    cat("\n[children/parents] remids without mapping (n=", length(unmapped_children), "):\n", sep = "")
-    print(unmapped_children)
-  }
-  if (length(unmapped_adults) > 0) {
-    cat("\n[adults] remids without mapping (n=", length(unmapped_adults), "):\n", sep = "")
-    print(unmapped_adults)
-  }
-  stop("\nUnmapped remids detected (ignoring any entries containing letters). Please update the Excel mapping and re-run.")
+# translate function (applies only to eligible rows) ---------------------------
+translate_remids <- function(df, map_tbl, eligible_rows) {
+  # Join key
+  df$remid_chr <- as.character(df$remid)
+  
+  # Do the join
+  df <- df |>
+    dplyr::left_join(map_tbl, by = c("remid_chr" = "Remote_ID"))
+  
+  # Apply translation only on eligible rows where mapping exists
+  can_translate <- eligible_rows & !is_blank(df$remid_chr) & !is.na(df$Participant_ID)
+  
+  df$vpid[can_translate] <- df$Participant_ID[can_translate]
+  
+  # Clear remid & remidcheck after successful translation
+  df$remid[can_translate]      <- NA
+  df$remidcheck[can_translate] <- NA
+  
+  # Cleanup
+  df <- dplyr::select(df, -remid_chr, -Participant_ID)
+  df
 }
 
-# translate function -----------------------------------------------------------
-translate_remids <- function(df, map_tbl) {
-  df |>
-    dplyr::mutate(remid_chr = as.character(remid)) |>
-    dplyr::left_join(map_tbl, by = c("remid_chr" = "Remote_ID")) |>
-    dplyr::mutate(
-      vpid  = ifelse(!is.na(remid) & as.character(remid) != "" & !is.na(Participant_ID),
-                     Participant_ID,
-                     vpid),
-      remid = ifelse(!is.na(remid) & as.character(remid) != "" & !is.na(Participant_ID),
-                     NA,  # clear remid after successful translation
-                     remid)
-    ) |>
-    dplyr::select(-remid_chr, -Participant_ID)
-}
-# translate and save -----------------------------------------------------------
-dat_children_parents_out <- translate_remids(dat_children_parents, map_ids)
-dat_adults_out           <- translate_remids(dat_adults,           map_ids)
+# PROCESS: children/parents ----------------------------------------------------
+res_cp <- handle_xxxxx(dat_children_parents, "children_parents")
+dat_children_parents <- res_cp$df
+log_cp <- res_cp$log
 
+eligible_cp <- flag_and_report_mismatches(dat_children_parents, "children/parents")
+
+unmapped_children <- find_unmapped(dat_children_parents, map_ids$Remote_ID, eligible_cp)
+if (length(unmapped_children) > 0) {
+  cat("\n[children/parents] remids without mapping (n=", length(unmapped_children), "):\n", sep = "")
+  print(unmapped_children)
+  stop("\nUnmapped remids detected (ignoring letter-only and 'XXXXX', and skipping mismatches). Please update the Excel mapping and re-run.")
+}
+
+dat_children_parents_out <- translate_remids(dat_children_parents, map_ids, eligible_cp)
+
+# PROCESS: adults --------------------------------------------------------------
+res_ad <- handle_xxxxx(dat_adults, "adults")
+dat_adults <- res_ad$df
+log_ad <- res_ad$log
+
+eligible_ad <- flag_and_report_mismatches(dat_adults, "adults")
+
+unmapped_adults <- find_unmapped(dat_adults, map_ids$Remote_ID, eligible_ad)
+if (length(unmapped_adults) > 0) {
+  cat("\n[adults] remids without mapping (n=", length(unmapped_adults), "):\n", sep = "")
+  print(unmapped_adults)
+  stop("\nUnmapped remids detected (ignoring letter-only and 'XXXXX', and skipping mismatches). Please update the Excel mapping and re-run.")
+}
+
+dat_adults_out <- translate_remids(dat_adults, map_ids, eligible_ad)
+
+# Write Project 8 log for 'XXXXX' fallbacks ------------------------------------
+log_all <- dplyr::bind_rows(log_cp, log_ad)
+if (!is.null(log_all) && nrow(log_all) > 0) {
+  ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  log_file <- file.path(log_dir, paste0("project8_xxxxx_fallback_log_", ts, ".csv"))
+  write.table(log_all, file = log_file, sep = ";", dec = ".", row.names = FALSE, qmethod = "double")
+  cat("\nProject 8 'XXXXX' fallback log written to:\n", log_file, "\n")
+}
+
+# save results -----------------------------------------------------------------
 write.table(dat_children_parents_out,
             file = file.path(in_path, out_children_parents),
             sep = ";", dec = ".", row.names = FALSE, qmethod = "double")
