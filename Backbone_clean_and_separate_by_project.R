@@ -53,7 +53,7 @@ cogtest_out_path = file.path(out_path, "experiment_data");
 ## Source required functions --------------------
 
 source(file.path(function_path, "separate_by_project.R"))
-source(file.path(function_path, "separate_by_project_cog.R"))
+# source(file.path(function_path, "separate_by_project_cog.R"))
 source(file.path(function_path, "remove_test_rows.R"))
 source(file.path(function_path, "copy_psytool_files.R"))
 source(file.path(function_path, "extract_pilot_by_vpid.R"))
@@ -62,9 +62,9 @@ source(file.path(function_path, "extract_pilot_by_vpid.R"))
 ## Backbone surveys ------------------------------------------------------------
 
 #file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
-file_adults <- "results-survey564757.csv"
+file_adults <- "results-survey564757_remids_translated.csv"
 file_adolescents <- "results-survey585676.csv"
-file_children_parents <- "results-survey798916.csv"
+file_children_parents <- "results-survey798916_remids_translated.csv"
 
 
 ## Load data -------------------------------------------------------------------
@@ -90,63 +90,21 @@ file_psytool_info = "data.csv";
 psytool_info_adults <- read.csv(file.path(name, psytool_path, "adults", file_psytool_info))
 psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file_psytool_info))
 psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
+# seems unimportant, only test data. 
 psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
 
 
-# Check if the VP IDs in General Info align with the IDs of the questionnaire data ------------
-
-all_sub_quest = c(dat_adults$vpid, 
-                  dat_children_parents$vpid,
-                  dat_adolescents$vpid);
-
-all_sub_quest <- all_sub_quest[!(is.na(all_sub_quest) | all_sub_quest == "")]
-
-idx_vec = which(!(all_sub_quest %in% dat_general$vpid))
-
-no_general_ids = all_sub_quest[idx_vec]
-# no IDs inconsistent
-
-all_sub_test = c(psytool_info_adults$id, 
-            psytool_info_children$id,
-            psytool_info_adolescents$id);
-all_sub_test <- all_sub_test[!(is.na(all_sub_test) | all_sub_test == "")]
-
-idx_vec_test = which(!(all_sub_test %in% all_sub_quest))
-no_quest_ids = all_sub_test[idx_vec_test]
-no_quest_ids = no_quest_ids[!no_quest_ids == 99999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 99998]
-no_quest_ids = no_quest_ids[!no_quest_ids == 999999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 123456]
-no_quest_ids = no_quest_ids[!no_quest_ids == 11111]
-no_quest_ids = no_quest_ids[!no_quest_ids == 89999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 9999999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 9999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 999]
-no_quest_ids = no_quest_ids[!no_quest_ids == 0]
-no_quest_ids = no_quest_ids[!no_quest_ids == "999test"]
-
-
-no_quest_ids # <- these have to be fixed - they seem to have no questionnaire data.
-# [1] "8008"     "219"      "30019"    "1001_A"   "1001"     "P7_100"   "30055"    "42"       "P7_14"    "P7_100"   "30080"   
-# [12] "1001"     "P7"       "42"       "P7_001_A" "1001"     "p8_1001"  "62102"    "62989"    "62006"    "62110"    "62020"   
-# [23] "62009"    "62023"    "62998"    "62012"    "62103"    "62003"    "62102"    "62992"    "79999"     
-
-
-idx_vec_quest = which(!(all_sub_quest %in% all_sub_test ))
-no_test_ids = all_sub_quest[idx_vec_quest]
-no_test_ids = no_test_ids[!no_test_ids == 99998]
-no_test_ids = no_test_ids[!no_test_ids == 11111]
-no_test_ids # <- also these - they seem to have no cognitive test data
-# [1] "79001"  "79002"  "79003"  "79004"  "79005"  "79006"  "79007"  "79008"  "79009"  "79010"  "79011"  "79012"  "79013"  "79014" 
-# [15] "79015"  "50201"  "50001"  "50002"  "50003"  "50004"  "50005"  "50006"  "50007"  "50008"  "50009"  "50010"  "50011"  "50012" 
-# [29] "50013"  "50014"  "50015"  "9901"   "99017"  "50202"  "50204"  "70101"  "70101"  "70101"  "2051"   "30086"  "30085"  "{vpid}"
-# [43] "30087"  "{vpid}" "62044"  "62124"  "78050"  "70001"  "70001"  "70087"  "70087" 
-
 # remove Test Datasets from all Project data -----------------------------------
+
 
 dat_adults <- remove_test_rows(dat_adults, "Adults")
 dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents")
 dat_children_parents <- remove_test_rows(dat_children_parents, "Children")
+
+psytool_info_adults <- remove_test_rows(psytool_info_adults, "Adults")
+psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents")
+psytool_info_children <- remove_test_rows(psytool_info_children, "Children")
+
 
 
 # Set column name variables ----------------------------------------------------
@@ -288,34 +246,77 @@ sort(unique(dat_children_parents[[vp_col]][duplicated(dat_children_parents[[vp_c
 # these are the entries in the output file, not the vp identifiers. 
 
 del_id_ad = c(59, 80) # Hendrik Heinbockel said they can be deleted as they are incomplete
-# FOR SOME REASON THIS SIMPLE CODE DOESN'T WORK RELIABLY?
-dat_adults <- dat_adults[!dat_adults[[id_col]] == del_id_ad, ]
+dat_adults <- dat_adults %>%
+  dplyr::filter(!id %in% del_id_ad)
 
 
-# Gather Pilot Participant IDs -------------------------------------------------
+
+# Gather Pilot Participant IDs WIP -------------------------------------------------
 
 pilot_ad_2 = c(20002, 20001, 20003, 20004);
 pilot_ad_2 = c(20002, 20001, 20003, 20004);
+pilot_asc_7 = c(79001, 79002, 79003, 79004, 79005, 79006, 79007, 79008, 79009, 79010, 79011, 79012, 79013, 79014, 79015)
+pilot_ad_7 = c(79019, 77001)
 
-
-pilot_vec_ad = c(pilot_ad_2)
+pilot_ad_all = c(pilot_ad_2, pilot_ad_7)
+pilot_asc_all = c(pilot_asc_7)
 
 # Move to separate file and from original dataset
 
 dat_adults <- extract_pilot_by_vpid(
   dat_adults,
   out_path = out_path,
-  export_csv = TRUE,
+  export_csv = FALSE,
+  pilot_ids = pilot_ad_all,
+  sample = "adults"
+)
+dat_adults <- extract_pilot_by_vpid(
+  psytool_info_adults,
+  out_path = cogtest_out_path,
+  export_csv = FALSE,
   pilot_ids = pilot_vec_ad,
   sample = "adults"
 )
-# dat_adolescents <- extract_pilot_by_vpid(
-#   dat_adolescents,
-#   out_path = "out",
-#   export_csv = TRUE,
-#   pilot_ids = pilot_vec_adlsc,
-#   sample = "adults"
-# )
+
+
+# Check if the VP IDs in Psytool (cognitive tests) align with the IDs of the questionnaire data (questionnaires) ------------
+
+all_sub_quest = c(dat_adults$vpid, 
+                  dat_children_parents$vpid,
+                  dat_adolescents$vpid);
+
+all_sub_quest <- all_sub_quest[!(is.na(all_sub_quest) | all_sub_quest == "")]
+
+idx_vec = which(!(all_sub_quest %in% dat_general$vpid))
+
+no_general_ids = all_sub_quest[idx_vec]
+# no IDs inconsistent
+
+all_sub_test = c(psytool_info_adults$id, 
+                 psytool_info_children$id,
+                 psytool_info_adolescents$id);
+all_sub_test <- all_sub_test[!(is.na(all_sub_test) | all_sub_test == "")]
+
+idx_vec_test = which(!(all_sub_test %in% all_sub_quest))
+no_quest_ids = all_sub_test[idx_vec_test]
+
+
+no_quest_ids # <- these have to be fixed - they seem to have no questionnaire data.
+# [1] "8008"     "219"      "30019"    "1001_A"   "1001"     "P7_100"   "30055"    "42"       "P7_14"    "P7_100"   "30080"   
+# [12] "1001"     "P7"       "42"       "P7_001_A" "1001"     "p8_1001"  "62102"    "62989"    "62006"    "62110"    "62020"   
+# [23] "62009"    "62023"    "62998"    "62012"    "62103"    "62003"    "62102"    "62992"    "79999"     
+
+
+idx_vec_quest = which(!(all_sub_quest %in% all_sub_test ))
+no_test_ids = all_sub_quest[idx_vec_quest]
+
+no_test_ids # <- also these - they seem to have no cognitive test data
+# [1] "79001"  "79002"  "79003"  "79004"  "79005"  "79006"  "79007"  "79008"  "79009"  "79010"  "79011"  "79012"  "79013"  "79014" 
+# [15] "79015"  "50201"  "50001"  "50002"  "50003"  "50004"  "50005"  "50006"  "50007"  "50008"  "50009"  "50010"  "50011"  "50012" 
+# [29] "50013"  "50014"  "50015"  "9901"   "99017"  "50202"  "50204"  "70101"  "70101"  "70101"  "2051"   "30086"  "30085"  "{vpid}"
+# [43] "30087"  "{vpid}" "62044"  "62124"  "78050"  "70001"  "70001"  "70087"  "70087" 
+
+
 
 # Separate the data by project and store on disk
 

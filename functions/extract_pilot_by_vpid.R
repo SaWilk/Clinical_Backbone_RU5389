@@ -1,16 +1,3 @@
-# Extract pilot subjects by vpid and remove them from the dataset
-# - You can define pilots via exact IDs (pilot_ids) or a regex (pilot_regex).
-# - If neither is provided, we use a conservative default regex that matches
-#   vpid values starting with "pilot" or "pil" (case-insensitive). If nothing
-#   matches, no rows are moved.
-#
-# Returns the dataset *without* the pilot rows (so you can reassign),
-# and also creates an env var 'pilot_<sample>' with the pilot rows.
-#
-# Example:
-#   dat_adults <- extract_pilot_by_vpid(dat_adults, out_path="out", pilot_regex="^99\\d+$", sample="adults")
-#   dat_children_parents <- extract_pilot_by_vpid(dat_children_parents, out_path="out",
-#                                                 pilot_ids=c("9001","9002"), sample="children_parents")
 extract_pilot_by_vpid <- function(
     df,
     out_path = NULL,
@@ -28,7 +15,8 @@ extract_pilot_by_vpid <- function(
   }
   
   # ---- find vpid column (new + legacy) ----
-  id_cols <- c("vpid", "Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "id", "vpid_1")
+  # keep 'id' in the candidates so PsyToolkit exports work out of the box
+  id_cols <- c("id", "vpid", "Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "vpid_1")
   id_col <- intersect(id_cols, names(df))[1]
   if (is.na(id_col)) stop("No participant ID column found. Tried: ", paste(id_cols, collapse = ", "))
   
@@ -44,23 +32,26 @@ extract_pilot_by_vpid <- function(
     if (grepl("adults", x)) return("adults")
     "unknown"
   }
+  txt <- tryCatch(paste(deparse(substitute(df)), collapse = ""), error = function(e) "")
   if (is.null(sample)) {
-    # best-effort: parse the text of the df argument
-    txt <- tryCatch(paste(deparse(substitute(df)), collapse = ""), error = function(e) "")
     sample <- normalize_sample(txt)
   } else {
     sample <- normalize_sample(sample)
   }
   
-  # ---- choose pilot matcher ----
-  # Priority: exact IDs > regex > conservative default (matches "pilot"/"pil" prefixes)
+  # ---- detect PsyToolkit exports for naming only ----
+  looks_psytool <- ("p" %in% names(df) && "id" %in% names(df)) || grepl("psytool_info", tolower(txt), fixed = TRUE)
+  
+  # ---- choose pilot matcher (priority: exact IDs > regex > conservative default) ----
   if (!is.null(pilot_ids)) {
     pilot_mask <- vpid %in% as.character(pilot_ids)
-  } else {
-    if (is.null(pilot_regex) || !nzchar(pilot_regex)) {
-      pilot_regex <- "(?i)^(pilot|pil)\\b"  # safe default; matches none in many datasets
-    }
+    match_src <- sprintf("exact IDs on '%s'", id_col)
+  } else if (!is.null(pilot_regex) && nzchar(pilot_regex)) {
     pilot_mask <- grepl(pilot_regex, vpid, perl = TRUE)
+    match_src <- sprintf("vpid regex on '%s'", id_col)
+  } else {
+    pilot_mask <- grepl("(?i)^(pilot|pil)\\b", vpid, perl = TRUE)  # conservative default
+    match_src <- sprintf("default vpid regex on '%s'", id_col)
   }
   
   # ---- split ----
@@ -69,12 +60,16 @@ extract_pilot_by_vpid <- function(
   
   # ---- assign env var + save to disk (one sheet/file) ----
   date_str <- format(Sys.Date(), "%Y-%m-%d")
-  # env var: pilot_<sample>
   env_name <- sprintf("pilot_%s", sample)
   assign(env_name, pilot_df, envir = .GlobalEnv)
   
-  # file name: pilot_<date>_<sample>.(xlsx/csv)
-  base <- sprintf("pilot_%s_%s", date_str, sample)
+  # filename: add "psytool_info" midfix if this is PsyToolkit data
+  base <- if (looks_psytool) {
+    sprintf("pilot_%s_psytool_info_%s", date_str, sample)
+  } else {
+    sprintf("pilot_%s_%s", date_str, sample)
+  }
+  
   if (nrow(pilot_df) > 0) {
     if (export_csv) {
       utils::write.csv(pilot_df, file.path(out_path, paste0(base, ".csv")), row.names = FALSE, na = "")
@@ -87,7 +82,7 @@ extract_pilot_by_vpid <- function(
   # ---- messaging & return ----
   message(
     "extract_pilot_by_vpid: sample='", sample, "', vpid_col='", id_col,
-    "', moved ", nrow(pilot_df), " pilot rows; keeping ", nrow(main_df), " rows."
+    "', moved ", nrow(pilot_df), " pilot rows; keeping ", nrow(main_df), " rows. Matcher: ", match_src, "."
   )
   return(main_df)
 }
