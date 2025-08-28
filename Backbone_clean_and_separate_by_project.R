@@ -27,6 +27,10 @@ if(!require("writexl")){install.packages("writexl")};library(tidyr)
 
 options(scipen = 999)  # disable scientific notation globally
 
+# Get Today ----------------------------------------------------------------
+
+
+today <- format(Sys.Date(), "%Y-%m-%d")  # "2025-08-28"
 
 ## Set working directory -------------------------------------------------------
 
@@ -77,14 +81,11 @@ dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";")
 dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";")
 dat_children_parents <- read.csv(file.path(name,in_path, file_children_parents), sep = ";")
 
-names(dat_adults)[1:15]
-
 
 # Data Overview
 file_general <- "results-survey415148.csv"
 dat_general <- read.csv(file.path(name,in_path, file_general), sep = ";")
 
-names(dat_general)[1:15]
 
 
 # Psytoolkit Tests
@@ -100,13 +101,13 @@ psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents"
 # remove Test Datasets from all Project data -----------------------------------
 
 
-dat_adults <- remove_test_rows(dat_adults, "Adults")
-dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents")
-dat_children_parents <- remove_test_rows(dat_children_parents, "Children")
+dat_adults <- remove_test_rows(dat_adults, "Adults", dat_general)
+dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents", dat_general)
+dat_children_parents <- remove_test_rows(dat_children_parents, "Children", dat_general)
 
-psytool_info_adults <- remove_test_rows(psytool_info_adults, "Adults")
-psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents")
-psytool_info_children <- remove_test_rows(psytool_info_children, "Children")
+psytool_info_adults <- remove_test_rows(psytool_info_adults, "Adults", dat_general)
+psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents", dat_general)
+psytool_info_children <- remove_test_rows(psytool_info_children, "Children", dat_general)
 
 
 ##########################################################################
@@ -145,30 +146,18 @@ LAST_P_EMPTY = 6;
 # Project 3
 PROJECT = 3;
 # adult
-sum((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) 
-    & dat_children_parents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ch_3 = dat_children_parents[which(
-  (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) 
-  & dat_children_parents[[project_col]] == PROJECT), vp_col]
-# 30017
-dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT & 
-                                 (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ];
-# child
-sum(dat_adults$last_page < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), vp_col]
+empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ]
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ];
 
 # Project 7
 PROJECT = 7;
 # adult
-sum((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
+empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
 #  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                              (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 # adolescent
-sum((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_adlsc_7 = dat_adolescents[which((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT), vp_col]
+empty_adlsc_7 = dat_adolescents[which((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT), ]
 #  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
 #  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
 #  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
@@ -179,24 +168,39 @@ dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
 # Project 8
 PROJECT = 8;
 # adult
-sum((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
+empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
  # 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 # children
-sum((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ch_8 = dat_children_parents[which((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT), vp_col]
+empty_ch_8 = dat_children_parents[which((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT), ]
 # 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT &
                              (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ];
 
 # Project 9
 PROJECT = 9;
-sum((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_9 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), vp_col]
+empty_ad_9 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
 #  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
+
+
+# put them into a list
+ads <- list(empty_ad_3, empty_ad_7, empty_ad_8, empty_ad_9)
+
+# keep only the non-empty ones
+ads_non_empty <- ads[lengths(ads) > 0]
+
+# bind them together (if any left)
+all_empty_ad <- if (length(ads_non_empty) > 0) {
+  do.call(rbind, ads_non_empty)
+} else {
+  data.frame()  # return empty df if all were empty
+}
+
+all_empty_ad$.__reason__. = "empty";
+empty_ch_8$.__reason__. = "empty";
+empty_adlsc_7$.__reason__. = "empty";
 
 
 # Fix ID naming issues --------------------------------------------------------
@@ -259,7 +263,7 @@ dat_children_parents <- correct_child_vpids(dat_children_parents)
 # using list of "ids" that can be deleted
 # these are the entries in the output file, not the vp identifiers. 
 
-del_id_ad = c(59, 80) # Hendrik Heinbockel said they can be deleted as they are incomplete
+del_id_ad = c(59, 80) # Hendrik said they can be deleted as they are incomplete
 dat_adults <- dat_adults %>%
   dplyr::filter(!id %in% del_id_ad)
 
@@ -273,7 +277,9 @@ trash_adults <- res_adults$trash_bin
 
 # [adults] Multiple complete datasets for vpid=80009 — please resolve manually.
 # [adults] Multiple complete datasets for vpid=80011 — please resolve manually.
+# TODO: Leo fragen
 # [adults] Multiple complete datasets for vpid=99001 — please resolve manually.
+# TODO: Hendrik fragen
 
 # Adolescents
 res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents")
@@ -292,16 +298,35 @@ dat_children_parents <- res_children_parents$cleaned
 trash_children_parents <- res_children_parents$trash_bin
 
 # [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
+# TODO: Nina fragen
 # [children_parents] Multiple complete datasets for vpid=80505, form=P — please resolve manually.
+# TODO: Johannes fragen
 
 # Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
 
 check_vpid_forms(dat_children_parents)
 
+# ⚠️ vpid 80350:
+#   - Missing forms: A
+# ⚠️ vpid 80505:
+#   - Duplicate forms: P
+# ⚠️ vpid 80516:
+#   - Missing forms: A
+# might simply not yet have been recorded. 
 
 
-#  One combined trash bin for easy cross-checking:
-# TODO: save as extra variable (like pilots) and also include empty rows
+# Save the Trash just to be safe ------------------------------------
+
+# build combined dfs
+all_trash_adults       <- rbind(all_empty_ad, trash_adults)
+all_trash_children     <- rbind(empty_ch_8, trash_children_parents)
+all_trash_adolescents  <- rbind(empty_adlsc_7, trash_adolescents)
+
+
+# write each one to disk
+write_xlsx(all_trash_adults,      file.path(out_path, sprintf("deleted-rows_%s_adults.xlsx", today)))
+write_xlsx(all_trash_children,    file.path(out_path, sprintf("deleted-rows_%s_children.xlsx", today)))
+write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_adolescents.xlsx", today)))
 
 
 # Gather Pilot Participant IDs WIP -------------------------------------------------
