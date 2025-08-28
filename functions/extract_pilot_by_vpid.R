@@ -1,3 +1,63 @@
+# -------------------------------------------------------------------------
+# extract_pilot_by_vpid()
+#
+# Purpose:
+#   Identifies and extracts "pilot" participants from a dataset based on the
+#   contents of their participant ID (vpid) column. Pilot rows are removed
+#   from the main dataset and written to a separate dataset both on disk and
+#   in the R environment.
+#
+# Behavior:
+#   - Determines the participant ID column to use in the following order:
+#       • Explicit override via `vpid_col` (if valid).
+#       • vpid
+#       • Legacy columns: Versuchspersonennummer., 
+#         Versuchspersonen.ID...Participant.ID, vpid_1
+#       • If the dataset looks like a PsyToolkit export: id
+#       • Otherwise: id (generic fallback).
+#   - Defines pilot participants based on one of:
+#       • `pilot_ids`: exact ID values to treat as pilots.
+#       • `pilot_regex`: a regular expression to match IDs.
+#       • Default (if neither provided): IDs starting with "pilot"/"pil"
+#         (case-insensitive).
+#   - Splits the dataset into:
+#       • pilot_df : all pilot rows.
+#       • main_df  : all remaining rows.
+#   - Infers the sample name from the dataset variable name (adults, 
+#     adolescents, children_parents), or accepts an explicit `sample` arg.
+#   - Assigns the pilot rows into the global environment as 
+#     `pilot_<sample>`.
+#   - Writes the pilot rows to disk (xlsx always, csv optional). File naming:
+#       • pilot_<YYYY-MM-DD>_<sample>.xlsx (default)
+#       • pilot_<YYYY-MM-DD>_psytool_info_<sample>.xlsx (if PsyToolkit data).
+#   - If no pilot rows are found, still assigns an empty pilot dataset in
+#     the environment but skips writing a file.
+#
+# Input:
+#   df         : data frame to check.
+#   out_path   : output directory for pilot files (must exist or will be created).
+#   export_csv : logical; also write CSV alongside XLSX if TRUE.
+#   sample     : optional string; overrides sample detection.
+#   pilot_ids  : optional vector of IDs to treat as pilots (exact match).
+#   pilot_regex: optional regex string to detect pilots from vpid.
+#   vpid_col   : optional string; explicit override for participant ID column.
+#
+# Output:
+#   - Returns the main dataset (pilot rows removed).
+#   - Creates an environment variable `pilot_<sample>` with pilot rows.
+#   - Writes pilot rows to disk (xlsx, and optionally csv).
+#   - Prints a message summarizing the action (rows moved, column used, matcher).
+#
+# Example:
+#   dat_adults <- extract_pilot_by_vpid(
+#     dat_adults,
+#     out_path   = "out",
+#     export_csv = TRUE,
+#     pilot_regex= "^9",
+#     sample     = "adults"
+#   )
+#
+# -------------------------------------------------------------------------
 extract_pilot_by_vpid <- function(
     df,
     out_path = NULL,
@@ -33,7 +93,6 @@ extract_pilot_by_vpid <- function(
   
   # ---- choose participant ID column (prefer vpid; 'id' only if PsyToolkit or no vpid) ----
   legacy_cols <- c("Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "vpid_1")
-  # Explicit override wins if valid
   if (!is.null(vpid_col) && vpid_col %in% names(df)) {
     id_col <- vpid_col
     id_src <- sprintf("explicit override '%s'", vpid_col)
@@ -56,7 +115,7 @@ extract_pilot_by_vpid <- function(
   # ensure character
   vpid <- trimws(as.character(df[[id_col]]))
   
-  # ---- choose pilot matcher (priority: exact IDs > regex > conservative default) ----
+  # ---- choose pilot matcher ----
   if (!is.null(pilot_ids)) {
     pilot_mask <- vpid %in% as.character(pilot_ids)
     match_src <- sprintf("exact IDs on '%s'", id_col)
@@ -72,12 +131,11 @@ extract_pilot_by_vpid <- function(
   pilot_df <- df[pilot_mask, , drop = FALSE]
   main_df  <- df[!pilot_mask, , drop = FALSE]
   
-  # ---- assign env var + save to disk (one sheet/file) ----
+  # ---- assign env var + save to disk ----
   date_str <- format(Sys.Date(), "%Y-%m-%d")
   env_name <- sprintf("pilot_%s", sample)
   assign(env_name, pilot_df, envir = .GlobalEnv)
   
-  # filename: add "psytool_info" midfix if this is PsyToolkit data
   base <- if (looks_psytool) {
     sprintf("pilot_%s_psytool_info_%s", date_str, sample)
   } else {

@@ -1,3 +1,69 @@
+# -------------------------------------------------------------------------
+# resolve_duplicates()
+#
+# Purpose:
+#   Detects and resolves duplicate participant datasets based on VP-ID
+#   (and, for children/parents project 8, VP-ID + form).
+#
+# Behavior:
+#   - Identifies duplicates in the given dataset according to these rules:
+#       • General case: duplicates defined by `vp_id` (column name given by vp_col).
+#       • Special case: for `children_parents` where project == 8,
+#         duplicates are defined by `vp_id + form`. This allows each VP-ID
+#         to have one entry for each form (A, C, P) without being flagged.
+#   - Resolution rules:
+#       1. If exactly one row has a non-empty `submitdate`, keep it and remove
+#          all others for that VP-ID (or VP-ID + form).
+#       2. If multiple rows have `submitdate`:
+#            - Remove all incomplete rows (no submitdate).
+#            - Keep all complete rows but print a warning (⚠️) to resolve manually.
+#       3. If no row has `submitdate`, check `lastpage`:
+#            - If exactly one row has `lastpage` > threshold (default 17),
+#              keep it and remove the others.
+#            - If multiple rows have `lastpage` > threshold, keep all and
+#              print a warning (⚠️).
+#            - If none have `lastpage` > threshold, keep all and print a warning (⚠️).
+#   - Special handling:
+#       • Rows with missing/empty VP-ID and also incomplete
+#         (no submitdate and lastpage ≤ threshold) are ignored entirely
+#         (not kept, not moved to trash_bin).
+#   - All removed rows are collected in a `trash_bin` data frame with a reason
+#     column for easy cross-checking.
+#
+# Input:
+#   df                 : data frame with at least the following columns:
+#                          - vp_col (e.g., "vpid") : participant ID
+#                          - submitdate            : completion flag (empty if incomplete)
+#                          - lastpage              : last page reached (numeric)
+#                        For dataset_name == "children_parents":
+#                          - project : must exist
+#                          - form    : must exist if project == 8
+#   vp_col             : string, name of the VP-ID column.
+#   dataset_name       : string, used in messages (e.g. "adults",
+#                        "adolescents", "children_parents").
+#   lastpage_threshold : numeric, cutoff for considering a dataset as
+#                        "almost complete" (default: 17).
+#
+# Output:
+#   - Returns a list with two elements:
+#       $cleaned   : data frame with duplicates resolved/removed.
+#       $trash_bin : data frame of removed rows, with an added column
+#                    `.__reason__` describing why they were removed.
+#   - Prints messages (⚠️) to the console when manual resolution is required.
+#
+# Example:
+#   res_adults <- resolve_duplicates(dat_adults, "vpid", dataset_name = "adults")
+#   dat_adults <- res_adults$cleaned
+#   trash_adults <- res_adults$trash_bin
+#
+#   res_children_parents <- resolve_duplicates(dat_children_parents,
+#                                              "vpid",
+#                                              dataset_name = "children_parents")
+#   dat_children_parents <- res_children_parents$cleaned
+#   trash_children_parents <- res_children_parents$trash_bin
+#
+# -------------------------------------------------------------------------
+
 resolve_duplicates <- function(df, vp_col, dataset_name = "dataset", lastpage_threshold = 17) {
   if (!all(c(vp_col, "submitdate", "lastpage") %in% names(df))) {
     stop(sprintf("[%s] Missing required columns. Need: %s, submitdate, lastpage",
@@ -65,7 +131,7 @@ resolve_duplicates <- function(df, vp_col, dataset_name = "dataset", lastpage_th
       }
       
     } else if (n_submit > 1) {
-      # NEW: remove all incomplete rows; keep all complete rows; warn for manual resolution
+      # remove all incomplete rows, keep all complete ones
       incompletes <- idx[!df$.__has_submit__.[idx]]
       if (length(incompletes) > 0) {
         keep_flag[incompletes] <- FALSE
@@ -78,12 +144,11 @@ resolve_duplicates <- function(df, vp_col, dataset_name = "dataset", lastpage_th
         tb$.__reason__. <- msg
         trash_bin <- rbind(trash_bin, tb)
       }
-      # message about multiple completes remaining
       if (!is.na(form_lab)) {
-        message(sprintf("[%s] Multiple complete datasets for %s=%s, form=%s — please resolve manually.",
+        message(sprintf("⚠️ [%s] Multiple complete datasets for %s=%s, form=%s — please resolve manually.",
                         dataset_name, vp_col, vpid_lab, form_lab))
       } else {
-        message(sprintf("[%s] Multiple complete datasets for %s=%s — please resolve manually.",
+        message(sprintf("⚠️ [%s] Multiple complete datasets for %s=%s — please resolve manually.",
                         dataset_name, vp_col, vpid_lab))
       }
       
@@ -105,28 +170,25 @@ resolve_duplicates <- function(df, vp_col, dataset_name = "dataset", lastpage_th
           trash_bin <- rbind(trash_bin, tb)
         }
       } else if (length(high_lp) > 1) {
-        # still ambiguous; keep all, warn
         if (!is.na(form_lab)) {
-          message(sprintf("[%s] Multiple incomplete datasets with lastpage > %s for %s=%s, form=%s — please resolve manually.",
+          message(sprintf("⚠️ [%s] Multiple incomplete datasets with lastpage > %s for %s=%s, form=%s — please resolve manually.",
                           dataset_name, lastpage_threshold, vp_col, vpid_lab, form_lab))
         } else {
-          message(sprintf("[%s] Multiple incomplete datasets with lastpage > %s for %s=%s — please resolve manually.",
+          message(sprintf("⚠️ [%s] Multiple incomplete datasets with lastpage > %s for %s=%s — please resolve manually.",
                           dataset_name, lastpage_threshold, vp_col, vpid_lab))
         }
       } else {
-        # no clear winner; keep all, warn
         if (!is.na(form_lab)) {
-          message(sprintf("[%s] Multiple incomplete datasets for %s=%s, form=%s — please resolve manually.",
+          message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s, form=%s — please resolve manually.",
                           dataset_name, vp_col, vpid_lab, form_lab))
         } else {
-          message(sprintf("[%s] Multiple incomplete datasets for %s=%s — please resolve manually.",
+          message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s — please resolve manually.",
                           dataset_name, vp_col, vpid_lab))
         }
       }
     }
   }
   
-  # finalize: drop helpers
   cleaned <- df[keep_flag, , drop = FALSE]
   cleaned$.__has_submit__. <- NULL
   cleaned$.__lp_num__. <- NULL

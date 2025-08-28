@@ -1,3 +1,57 @@
+# -------------------------------------------------------------------------
+# copy_psytool_files()
+#
+# Purpose:
+#   Collects cognitive test data files (WCST_1, LNS_1, BACS_1) referenced in
+#   psytoolkit environment data frames and copies them into a standardized
+#   folder structure grouped by project and sample.
+#
+# Behavior:
+#   - Looks for environment objects named like:
+#       data_<sampleTag>_psytool_p_<project>
+#     where <sampleTag> contains one of:
+#       • adults
+#       • adolescents
+#       • children
+#       • adults_remote
+#   - Parses the project number (1–9 only; 0/99 are skipped).
+#   - Resolves relative paths in columns WCST_1, LNS_1, BACS_1 against the
+#     sample’s raw data folder, e.g.:
+#       <working_dir>/raw_data/psytoolkit/adults/experiment_data
+#   - Copies each referenced file into:
+#       <cogtest_out_path>/<project>/<sample>/
+#     preserving the original filenames (flat layout).
+#   - Skips files that are missing or already exist at the destination.
+#   - Creates log entries for every file processed with status:
+#       • copied
+#       • exists
+#       • missing_source
+#       • empty_path
+#       • copy_failed
+#   - At the end, writes a CSV log named:
+#       psytool_copy_log_<YYYY-MM-DD>.csv
+#     into <cogtest_out_path>.
+#
+# Input:
+#   env_objects     : character vector of environment object names to process.
+#                     If NULL (default), scans all objects in .GlobalEnv.
+#   cogtest_out_path: optional string, base output folder. If not provided,
+#                     defaults to <working_dir>/01_project_data/experiment_data.
+#
+# Output:
+#   - Returns invisibly a data frame of log entries.
+#   - Writes a CSV log file summarizing copy results.
+#   - Prints a message with the log path.
+#
+# Example:
+#   # Collect all env objects for adults and process:
+#   adults_objs <- ls(pattern = "^data_.*adults.*_psytool_p_[0-9]+$")
+#   copy_psytool_files(adults_objs)
+#
+#   # Or simply run on everything in environment:
+#   copy_psytool_files()
+#
+# -------------------------------------------------------------------------
 copy_psytool_files <- function(env_objects = NULL, cogtest_out_path = NULL) {
   # dynamic base dir from working directory
   base_dir <- normalizePath(getwd(), winslash = "\\", mustWork = TRUE)

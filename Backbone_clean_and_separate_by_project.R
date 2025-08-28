@@ -58,6 +58,8 @@ source(file.path(function_path, "remove_test_rows.R"))
 source(file.path(function_path, "copy_psytool_files.R"))
 source(file.path(function_path, "extract_pilot_by_vpid.R"))
 source(file.path(function_path, "resolve_duplicates.R"))
+source(file.path(function_path, "correct_child_vpids.R"))
+source(file.path(function_path, "check_vpid_forms.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -242,12 +244,7 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001
 
 # Special Case Project 8: Remap VPIDs so children and adults have unqiue IDs -------------
 
-# TODO: do it. 
-
-
-# Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
-
-# TODO: do it
+dat_children_parents <- correct_child_vpids(dat_children_parents)
 
 
 # Handle duplicate IDs ---------------------------------------------------------
@@ -295,7 +292,13 @@ dat_children_parents <- res_children_parents$cleaned
 trash_children_parents <- res_children_parents$trash_bin
 
 # [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
-# [children_parents] Multiple complete datasets for vpid=80005, form=P — please resolve manually.
+# [children_parents] Multiple complete datasets for vpid=80505, form=P — please resolve manually.
+
+# Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
+
+check_vpid_forms(dat_children_parents)
+
+
 
 #  One combined trash bin for easy cross-checking:
 # TODO: save as extra variable (like pilots) and also include empty rows
