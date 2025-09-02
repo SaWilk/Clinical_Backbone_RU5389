@@ -260,6 +260,12 @@ dat_children_parents <- correct_child_vpids(dat_children_parents)
 
 # Delete not needed, incomplete or faulty datasets 
 
+# Project 8
+del_vpid_ad = 80350 # Johannes said they can be deleted as they are pilots
+dat_children_parents <- dat_children_parents %>%
+  dplyr::filter(!vpid %in% del_vpid_ad)
+
+# Project 3
 # using list of "ids" that can be deleted
 # these are the entries in the output file, not the vp identifiers. 
 
@@ -336,10 +342,11 @@ write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_a
 pilot_ad_2 = c(20002, 20001, 20003, 20004);
 pilot_ad_9 = c();
 pilot_ad_7 = c(79001, 79002, 79003, 79004, 79005, 79006, 79007, 79008, 79009, 79010, 79011, 79012, 79013, 79014, 79015, 79016);
+pilot_ad_8 = c(80350)
 
 pilot_asc_7 = c(79019, 77001);
 
-pilot_ad_all = c(pilot_ad_2, pilot_ad_7, pilot_ad_9);
+pilot_ad_all = c(pilot_ad_2, pilot_ad_7, pilot_ad_9, pilot_ad_8);
 pilot_asc_all = c(pilot_asc_7);
 
 # Move to separate file and from original dataset
