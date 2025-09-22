@@ -64,14 +64,17 @@ source(file.path(function_path, "extract_pilot_by_vpid.R"))
 source(file.path(function_path, "resolve_duplicates.R"))
 source(file.path(function_path, "correct_child_vpids.R"))
 source(file.path(function_path, "check_vpid_forms.R"))
+source(file.path(function_path, "find_pilot_ids.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
 
 #file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
-file_adults <- "results-survey564757_remids_translated.csv"
-file_adolescents <- "results-survey585676.csv"
-file_children_parents <- "results-survey798916_remids_translated.csv"
+file_adults <- "results-survey564757_remids_translated.csv";
+file_adolescents <- "results-survey585676.csv";
+file_children_parents <- "results-survey798916_remids_translated.csv";
+file_parents_p6 <- "results-survey191355.csv";
+file_children_p6 <- "results-survey518972.csv";
 
 
 ## Load data -------------------------------------------------------------------
@@ -80,6 +83,8 @@ file_children_parents <- "results-survey798916_remids_translated.csv"
 dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";")
 dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";")
 dat_children_parents <- read.csv(file.path(name,in_path, file_children_parents), sep = ";")
+dat_parents_p6 <- read.csv(file.path(name,in_path, file_parents_p6), sep = ";")
+dat_children_p6 <- read.csv(file.path(name,in_path, file_children_p6), sep = ";")
 
 
 # Data Overview
@@ -87,13 +92,12 @@ file_general <- "results-survey415148.csv"
 dat_general <- read.csv(file.path(name,in_path, file_general), sep = ";")
 
 
-
 # Psytoolkit Tests
 file_psytool_info = "data.csv";
 
 psytool_info_adults <- read.csv(file.path(name, psytool_path, "adults", file_psytool_info))
 psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file_psytool_info))
-psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
+#psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
 # seems unimportant, only test data. 
 psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
 
@@ -126,11 +130,11 @@ id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in
 
 # Fix issues with project assignment -------------------------------------------
 
-dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)]
+dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)];
 # assuming this is project 2 since project 1 does not collect data and the id starts with a 2
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)] = 2;
 
-dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)]
+dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)];
 # assuming this is project 9 since project 1 does not collect data and the id 
 # starts with a 9. also project 9 IDs are actually consecutive and 17 is missing. 
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)] = 9;
@@ -146,13 +150,13 @@ LAST_P_EMPTY = 6;
 # Project 3
 PROJECT = 3;
 # adult
-empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ]
+empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ];
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ];
 
 # Project 7
 PROJECT = 7;
 # adult
-empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
+empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
 #  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                              (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
@@ -168,7 +172,7 @@ dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
 # Project 8
 PROJECT = 8;
 # adult
-empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
+empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
  # 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
@@ -180,20 +184,20 @@ dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col
 
 # Project 9
 PROJECT = 9;
-empty_ad_9 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
+empty_ad_9 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
 #  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 
 
 # put them into a list
-ads <- list(empty_ad_3, empty_ad_7, empty_ad_8, empty_ad_9)
+ads <- list(empty_ad_3, empty_ad_7, empty_ad_8, empty_ad_9);
 
 # keep only the non-empty ones
-ads_non_empty <- ads[lengths(ads) > 0]
+ads_non_empty <- ads[lengths(ads) > 0];
 
 # bind them together (if any left)
 all_empty_ad <- if (length(ads_non_empty) > 0) {
-  do.call(rbind, ads_non_empty)
+  do.call(rbind, ads_non_empty);
 } else {
   data.frame()  # return empty df if all were empty
 }
@@ -243,12 +247,12 @@ dat_adults[[vp_col]][which(dat_adults[[id_col]] == 316 & dat_adults[[project_col
 
 # Project 9
 # assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001;
 
 
 # Special Case Project 8: Remap VPIDs so children and adults have unqiue IDs -------------
 
-dat_children_parents <- correct_child_vpids(dat_children_parents)
+dat_children_parents <- correct_child_vpids(dat_children_parents);
 
 
 # Handle duplicate IDs ---------------------------------------------------------
@@ -263,7 +267,7 @@ dat_children_parents <- correct_child_vpids(dat_children_parents)
 # Project 8
 del_vpid_ad = 80350 # Johannes said they can be deleted as they are pilots
 dat_children_parents <- dat_children_parents %>%
-  dplyr::filter(!vpid %in% del_vpid_ad)
+  dplyr::filter(!vpid %in% del_vpid_ad);
 
 # Project 3
 # using list of "ids" that can be deleted
@@ -271,15 +275,13 @@ dat_children_parents <- dat_children_parents %>%
 
 del_id_ad = c(59, 80) # Hendrik said they can be deleted as they are incomplete
 dat_adults <- dat_adults %>%
-  dplyr::filter(!id %in% del_id_ad)
+  dplyr::filter(!id %in% del_id_ad);
 
 
-# --- Example usage with your three datasets ---
-# Assume vp_col is a string like "vp_id"
 # Adults
-res_adults <- resolve_duplicates(dat_adults, vp_col, dataset_name = "adults")
-dat_adults <- res_adults$cleaned
-trash_adults <- res_adults$trash_bin
+res_adults <- resolve_duplicates(dat_adults, vp_col, dataset_name = "adults");
+dat_adults <- res_adults$cleaned;
+trash_adults <- res_adults$trash_bin;
 
 # [adults] Multiple complete datasets for vpid=80009 — please resolve manually.
 # [adults] Multiple complete datasets for vpid=80011 — please resolve manually.
@@ -288,20 +290,19 @@ trash_adults <- res_adults$trash_bin
 # TODO: Hendrik fragen
 
 # Adolescents
-res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents")
-dat_adolescents <- res_adolescents$cleaned
-trash_adolescents <- res_adolescents$trash_bin
+res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents");
+dat_adolescents <- res_adolescents$cleaned;
+trash_adolescents <- res_adolescents$trash_bin;
 
 # [adolescents] Multiple complete datasets for vpid=70076 — please resolve manually.
 # [adolescents] Multiple complete datasets for vpid=70072 — please resolve manually.
-# [adolescents] Multiple complete datasets for vpid=70084 — please resolve manually.
 # [adolescents] Multiple complete datasets for vpid=70062 — please resolve manually.
 # Waiting for resonse from Ibrahim.... 
 
 # Children/Parents
-res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, dataset_name = "children_parents")
-dat_children_parents <- res_children_parents$cleaned
-trash_children_parents <- res_children_parents$trash_bin
+res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, dataset_name = "children_parents");
+dat_children_parents <- res_children_parents$cleaned;
+trash_children_parents <- res_children_parents$trash_bin;
 
 # [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
 # TODO: Nina fragen
@@ -313,7 +314,7 @@ trash_children_parents <- res_children_parents$trash_bin
 check_vpid_forms(dat_children_parents)
 
 # ⚠️ vpid 80350:
-#   - Missing forms: A
+#   - Missing forms: A - PILOT
 # ⚠️ vpid 80505:
 #   - Duplicate forms: P
 # ⚠️ vpid 80516:
@@ -337,17 +338,22 @@ write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_a
 
 # Gather Pilot Participant IDs WIP -------------------------------------------------
 
-# TODO: use the general_info to obtain the info which type of data collection was performed. 
+pilots_ad_auto = find_pilot_ids(dat_general, dat_adults)
+pilots_asc_auto = find_pilot_ids(dat_general, dat_adolescents)
+pilots_ch_auto = find_pilot_ids(dat_general, dat_children_parents)
 
-pilot_ad_2 = c(20002, 20001, 20003, 20004);
+pilot_ad_2 = c(20004);
 pilot_ad_9 = c();
-pilot_ad_7 = c(79001, 79002, 79003, 79004, 79005, 79006, 79007, 79008, 79009, 79010, 79011, 79012, 79013, 79014, 79015, 79016);
 pilot_ad_8 = c(80350)
 
-pilot_asc_7 = c(79019, 77001);
+pilot_asc_7 = c();
 
-pilot_ad_all = c(pilot_ad_2, pilot_ad_7, pilot_ad_9, pilot_ad_8);
-pilot_asc_all = c(pilot_asc_7);
+pilot_ch_6 = c(62973,
+               62980)
+
+pilot_ad_all = c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto);
+pilot_asc_all = c(pilots_asc_auto);
+pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
 
 # Move to separate file and from original dataset
 
@@ -375,7 +381,14 @@ dat_adolescents <- extract_pilot_by_vpid(
   sample = "adolescents",
   vpid_col = "vpid"
 );
-
+dat_children_parents <- extract_pilot_by_vpid(
+  dat_children_parents,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "children_parents",
+  vpid_col = "vpid"
+);
 
 # Separate the data by project and store on disk ------------------------------
 
