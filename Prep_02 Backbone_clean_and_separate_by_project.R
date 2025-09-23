@@ -108,10 +108,14 @@ psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents"
 dat_adults <- remove_test_rows(dat_adults, "Adults", dat_general)
 dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents", dat_general)
 dat_children_parents <- remove_test_rows(dat_children_parents, "Children", dat_general)
+dat_parents_p6 <- remove_test_rows(dat_parents_p6, "Children", dat_general)
+dat_children_p6 <- remove_test_rows(dat_children_p6, "Children", dat_general)
+
 
 psytool_info_adults <- remove_test_rows(psytool_info_adults, "Adults", dat_general)
 psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents", dat_general)
 psytool_info_children <- remove_test_rows(psytool_info_children, "Children", dat_general)
+
 
 
 ##########################################################################
@@ -152,6 +156,17 @@ PROJECT = 3;
 # adult
 empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ];
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ];
+
+# Project 6
+# these are different questionnaires
+LAST_P_EMPTY = 2;
+# children
+empty_ch_6 = dat_children_p6[which(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
+dat_children_p6 <- dat_children_p6[!(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
+LAST_P_EMPTY = 2;
+# parents
+empty_p_6 = dat_parents_p6[which(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
+dat_parents_p6 <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
 
 # Project 7
 PROJECT = 7;
@@ -285,9 +300,7 @@ trash_adults <- res_adults$trash_bin;
 
 # [adults] Multiple complete datasets for vpid=80009 — please resolve manually.
 # [adults] Multiple complete datasets for vpid=80011 — please resolve manually.
-# TODO: Leo fragen
-# [adults] Multiple complete datasets for vpid=99001 — please resolve manually.
-# TODO: Hendrik fragen
+# Leo fragen, waiting for response...
 
 # Adolescents
 res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents");
@@ -305,9 +318,14 @@ dat_children_parents <- res_children_parents$cleaned;
 trash_children_parents <- res_children_parents$trash_bin;
 
 # [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
-# TODO: Nina fragen
+# TODO: Harry fragen
 # [children_parents] Multiple complete datasets for vpid=80505, form=P — please resolve manually.
 # TODO: Johannes fragen
+
+# Project 6 children parents
+res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, dataset_name = "children_p6");
+dat_children_p6 <- res_children_p6$cleaned;
+trash_children_p6 <- res_children_p6$trash_
 
 # Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
 

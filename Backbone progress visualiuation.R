@@ -26,7 +26,7 @@ axis_labels <- c(p2="p2", p3="p3", p4="p4", p5="p5", p6="p6", p7="p7", p8="p8", 
 # Desired sample sizes
 total_targets <- c(
   p2 = 80,
-  p3 = 130,
+  p3 = 260,
   p4 = NA,   # not yet determined
   p5 = 100,
   p6 = 80,
@@ -34,6 +34,9 @@ total_targets <- c(
   p8 = 194,
   p9 = 120
 )
+
+# Tiny manual adjustments (applied after aggregation)
+manual_adj <- c(p6 = -1L, p7 = -3L, p8 = -2L)
 
 # ---- Helpers ----
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -60,7 +63,7 @@ parse_filename <- function(f) {
 }
 
 # ---- Aggregation rules ----
-# p6: NO EXCEPTION (use default sum of rows)
+# p6: default (no exception)
 # p7: adolescents + adults
 # p8: adults + children + floor(children_parents_rows / 3)
 tally_rules <- function(df) {
@@ -77,9 +80,9 @@ tally_rules <- function(df) {
     dplyr::mutate(
       n_p8_combo = n_p8_basic + floor(n_p8_cp_rows / 3),
       n_final = dplyr::case_when(
-        project == 7 ~ n_p7_combo,    # adolescents + adults
-        project == 8 ~ n_p8_combo,    # adults + children + floor(children_parents/3)
-        TRUE ~ n_default              # everyone else, incl. p6: plain count
+        project == 7 ~ n_p7_combo,
+        project == 8 ~ n_p8_combo,
+        TRUE ~ n_default
       )
     ) %>%
     dplyr::select(project, n = n_final)
@@ -98,14 +101,23 @@ agg <- tally_rules(meta)
 
 # Impute zeros for missing projects
 agg_full <- dplyr::left_join(data.frame(project = 2:9), agg, by = "project") %>%
-  dplyr::mutate(n = tidyr::replace_na(n, 0L),
-                project_id = paste0("p", project))
+  dplyr::mutate(
+    n = tidyr::replace_na(n, 0L),
+    project_id = paste0("p", project)
+  )
 
-# Attach total_n and compute %
+# ---- Apply manual adjustments (clamped at 0)
+adj_vec <- manual_adj[agg_full$project_id]
+adj_vec[is.na(adj_vec)] <- 0L
+agg_full$n <- pmax(agg_full$n + as.integer(adj_vec), 0L)
+
+# ---- Compute progress ----
 progress <- agg_full %>%
-  dplyr::mutate(total_n = as.numeric(total_targets[project_id]),
-                pct = ifelse(is.na(total_n) | total_n == 0, NA_real_, 100 * n / total_n),
-                pct_clamped = pmin(pct, 100))
+  dplyr::mutate(
+    total_n = as.numeric(total_targets[project_id]),
+    pct = ifelse(is.na(total_n) | total_n == 0, NA_real_, 100 * n / total_n),
+    pct_clamped = pmin(pct, 100)
+  )
 
 # ---- Plot ----
 progress$project_id <- factor(progress$project_id,
@@ -131,20 +143,18 @@ p <- ggplot(progress, aes(x = forcats::fct_inorder(project_id))) +
     size = 3.6
   ) +
   coord_flip(clip = "off") +
-  scale_y_continuous(limits = c(0, 110), breaks = c(0, 25, 50, 75, 100), expand = expansion(mult = c(0.02, 0.12))) +
-  labs(x = NULL, y = "Percent of target (0–100%)", title = "Recruitment Progress by Project") +
+  # show tick labels (keep 0–100 extent for spacing)
+  scale_y_continuous(limits = c(0, 110),
+                     breaks = c(0, 25, 50, 75, 100),
+                     labels = c("0", "25", "50", "75", "100"),
+                     expand = expansion(mult = c(0.02, 0.12))) +
+  labs(x = NULL, y = 'Percent of "target sample size"', title = "completed backbone datasets") +
   theme_classic(base_size = 12) +
   theme(
     panel.background = element_rect(fill = "white", color = NA),
     plot.background  = element_rect(fill = "white", color = NA),
-    axis.title.y     = element_blank()
+    axis.title.y     = element_blank()  # y title is on the horizontal axis after coord_flip
   )
 
 ggsave(output_png, p, width = png_width, height = png_height, dpi = png_dpi)
 message("Saved: ", normalizePath(output_png))
-
-# ---- Optional: print a compact table ----
-progress %>%
-  dplyr::mutate(pct = ifelse(is.na(pct), NA, round(pct, 1))) %>%
-  dplyr::select(project_id, n, total_n, pct) %>%
-  print(n = Inf)
