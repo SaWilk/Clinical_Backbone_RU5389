@@ -22,6 +22,8 @@ cat("\014")
 if(!require("dplyr")){install.packages("dplyr")};library(dplyr)
 if(!require("tidyr")){install.packages("tidyr")};library(tidyr)
 if(!require("writexl")){install.packages("writexl")};library(tidyr)
+if(!require("openxlsx")){install.packages("openxlsx")};library(openxlsx)
+
 
 # Esure proper number display -------------------------------------------------
 
@@ -65,6 +67,7 @@ source(file.path(function_path, "resolve_duplicates.R"))
 source(file.path(function_path, "correct_child_vpids.R"))
 source(file.path(function_path, "check_vpid_forms.R"))
 source(file.path(function_path, "find_pilot_ids.R"))
+source(file.path(function_path, "compare_vpcodes.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -159,11 +162,11 @@ dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[la
 
 # Project 6
 # these are different questionnaires
-LAST_P_EMPTY = 2;
+LAST_P_EMPTY = 3;
 # children
 empty_ch_6 = dat_children_p6[which(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
 dat_children_p6 <- dat_children_p6[!(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
-LAST_P_EMPTY = 2;
+LAST_P_EMPTY = 3;
 # parents
 empty_p_6 = dat_parents_p6[which(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
 dat_parents_p6 <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
@@ -172,15 +175,10 @@ dat_parents_p6 <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY), 
 PROJECT = 7;
 # adult
 empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
-#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                              (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 # adolescent
 empty_adlsc_7 = dat_adolescents[which((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT), ]
-#  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
-#  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
-#  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
-#  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
 dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
                                        (dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY)), ];
 
@@ -188,19 +186,16 @@ dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
 PROJECT = 8;
 # adult
 empty_ad_8 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
- # 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 # children
 empty_ch_8 = dat_children_parents[which((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT), ]
-# 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
 dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT &
                              (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ];
 
 # Project 9
 PROJECT = 9;
 empty_ad_9 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
-#  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ];
 
 
@@ -323,9 +318,13 @@ trash_children_parents <- res_children_parents$trash_bin;
 # TODO: Johannes fragen
 
 # Project 6 children parents
+vp_col = "VPCode";
 res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, dataset_name = "children_p6");
 dat_children_p6 <- res_children_p6$cleaned;
-trash_children_p6 <- res_children_p6$trash_
+trash_children_p6 <- res_children_p6$trash_bin
+res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, dataset_name = "children_p6");
+dat_parents_p6 <- res_parents_p6$cleaned;
+trash_parents_p6 <- res_parents_p6$trash_bin
 
 # Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
 
@@ -354,11 +353,12 @@ write_xlsx(all_trash_children,    file.path(out_path, sprintf("deleted-rows_%s_c
 write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_adolescents.xlsx", today)))
 
 
-# Gather Pilot Participant IDs WIP -------------------------------------------------
+# Gather Pilot Participant IDs -------------------------------------------------
 
 pilots_ad_auto = find_pilot_ids(dat_general, dat_adults)
 pilots_asc_auto = find_pilot_ids(dat_general, dat_adolescents)
 pilots_ch_auto = find_pilot_ids(dat_general, dat_children_parents)
+
 
 pilot_ad_2 = c(20004);
 pilot_ad_9 = c();
@@ -367,7 +367,14 @@ pilot_ad_8 = c(80350)
 pilot_asc_7 = c();
 
 pilot_ch_6 = c(62973,
-               62980)
+               62980, 
+               62998,
+               62992,
+               62987,
+               62989,
+               62994,
+               62970
+)
 
 pilot_ad_all = c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto);
 pilot_asc_all = c(pilots_asc_auto);
@@ -407,6 +414,56 @@ dat_children_parents <- extract_pilot_by_vpid(
   sample = "children_parents",
   vpid_col = "vpid"
 );
+dat_children_p6 <- extract_pilot_by_vpid(
+  dat_children_p6,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "children_p6",
+  vpid_col = "VPCode"
+);
+dat_parents_p6 <- extract_pilot_by_vpid(
+  dat_parents_p6,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "parents_p6",
+  vpid_col = "VPCode"
+);
+
+
+# Do Children and Parent Questionnaires Match in VP ID?
+
+res3 <- compare_vpcodes_three(
+  dat_children_p6,
+  dat_parents_p6,
+  dat_children_parents,     # will be filtered to project == 6
+  id_col_12   = "VPCode",
+  wcst_id_col   = "vpid",
+  wcst_project_col = "project",
+  project_value = 6
+)
+
+
+# Build a wide table: one row per unique ID, columns = categories
+all_ids <- sort(unique(unlist(res3$ids)))
+cats <- names(res3$ids)
+
+wide_ids <- data.frame(vpid = all_ids, stringsAsFactors = FALSE)
+for (nm in cats) {
+  present <- all_ids %in% res3$ids[[nm]]
+  wide_ids[[nm]] <- ifelse(present, all_ids, NA)
+}
+
+# Write Excel: counts + wide IDs
+wb <- createWorkbook()
+addWorksheet(wb, "Counts")
+writeData(wb, "Counts", res3$counts)
+
+addWorksheet(wb, "IDs_wide")
+writeData(wb, "IDs_wide", wide_ids)
+
+saveWorkbook(wb, "VPCode_comparison_wide.xlsx", overwrite = TRUE)
 
 # Separate the data by project and store on disk ------------------------------
 
@@ -414,6 +471,9 @@ dat_children_parents <- extract_pilot_by_vpid(
 separate_by_project(dat_adults, out_path, "adults")
 separate_by_project(dat_adolescents, out_path, "adolescents")
 separate_by_project(dat_children_parents, out_path, "children")
+separate_by_project(dat_children_p6, out_path, "children_p6")
+separate_by_project(dat_parents_p6, out_path, "parents_p6")
+
 
 
 ##########################################################################

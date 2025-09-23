@@ -23,20 +23,20 @@ refline_color <- "grey60"
 # Manual axis labels (edit freely)
 axis_labels <- c(p2="p2", p3="p3", p4="p4", p5="p5", p6="p6", p7="p7", p8="p8", p9="p9")
 
-# Desired sample sizes
+# Desired sample sizes (p3 updated to 260; p6 TBD)
 total_targets <- c(
   p2 = 80,
-  p3 = 260,
+  p3 = 260,  # updated
   p4 = NA,   # not yet determined
   p5 = 100,
-  p6 = 80,
+  p6 = NA,   # TBD, show "?"
   p7 = 400,
   p8 = 194,
   p9 = 120
 )
 
-# Tiny manual adjustments (applied after aggregation)
-manual_adj <- c(p6 = -1L, p7 = -3L, p8 = -2L)
+# Tiny manual adjustments (applied after aggregation) — p7: -3, p8: -2
+manual_adj <- c(p7 = -3L, p8 = -2L)
 
 # ---- Helpers ----
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -63,7 +63,7 @@ parse_filename <- function(f) {
 }
 
 # ---- Aggregation rules ----
-# p6: default (no exception)
+# p6: default (no exception) — later overridden manually to 219
 # p7: adolescents + adults
 # p8: adults + children + floor(children_parents_rows / 3)
 tally_rules <- function(df) {
@@ -106,10 +106,14 @@ agg_full <- dplyr::left_join(data.frame(project = 2:9), agg, by = "project") %>%
     project_id = paste0("p", project)
   )
 
-# ---- Apply manual adjustments (clamped at 0)
+# ---- Apply manual adjustments for p7/p8 (clamped at 0)
 adj_vec <- manual_adj[agg_full$project_id]
 adj_vec[is.na(adj_vec)] <- 0L
 agg_full$n <- pmax(agg_full$n + as.integer(adj_vec), 0L)
+
+# ---- Manual override for p6 ----
+# Set p6 observed n to 63 + 156 = 219; target is TBD; display bar filled to 33%
+agg_full$n[agg_full$project_id == "p6"] <- 63L + 156L
 
 # ---- Compute progress ----
 progress <- agg_full %>%
@@ -117,6 +121,15 @@ progress <- agg_full %>%
     total_n = as.numeric(total_targets[project_id]),
     pct = ifelse(is.na(total_n) | total_n == 0, NA_real_, 100 * n / total_n),
     pct_clamped = pmin(pct, 100)
+  )
+
+# Force p6: target TBD (already NA), but display 33% fill
+progress$pct_clamped[progress$project_id == "p6"] <- 33
+
+# ---- Label fallback so TBD targets still get a text label ----
+progress <- progress %>%
+  dplyr::mutate(
+    label_y = ifelse(is.na(pct_clamped), 3, pmin(pct_clamped + 3, 100))
   )
 
 # ---- Plot ----
@@ -133,17 +146,16 @@ p <- ggplot(progress, aes(x = forcats::fct_inorder(project_id))) +
   geom_col(aes(y = pct_clamped), fill = fill_color, width = 0.7) +
   # vertical reference lines at 25/50/75 (drawn as hlines before coord_flip)
   geom_hline(yintercept = c(25, 50, 75), linetype = "dashed", linewidth = 0.3, color = refline_color) +
-  # label just beyond the filled bar (n / total and %)
+  # label (uses fallback y for TBD targets)
   geom_text(
-    aes(y = pmin(pct_clamped + 3, 100),
+    aes(y = label_y,
         label = ifelse(is.na(total_n),
-                       sprintf("%d (target: TBD)", n),
+                       sprintf("%d / ?", n),                       # show ? for TBD
                        sprintf("%d / %d (%.0f%%)", n, total_n, pct))),
     hjust = 0,
     size = 3.6
   ) +
   coord_flip(clip = "off") +
-  # show tick labels (keep 0–100 extent for spacing)
   scale_y_continuous(limits = c(0, 110),
                      breaks = c(0, 25, 50, 75, 100),
                      labels = c("0", "25", "50", "75", "100"),
@@ -153,8 +165,17 @@ p <- ggplot(progress, aes(x = forcats::fct_inorder(project_id))) +
   theme(
     panel.background = element_rect(fill = "white", color = NA),
     plot.background  = element_rect(fill = "white", color = NA),
-    axis.title.y     = element_blank()  # y title is on the horizontal axis after coord_flip
+    axis.title.y     = element_blank()
   )
 
 ggsave(output_png, p, width = png_width, height = png_height, dpi = png_dpi)
 message("Saved: ", normalizePath(output_png))
+
+# ---- Optional: print a compact table ----
+progress %>%
+  dplyr::mutate(
+    pct = ifelse(is.na(pct), NA, round(pct, 1)),
+    display_label = ifelse(is.na(total_n), paste0(n, " / ?"), paste0(n, " / ", total_n))
+  ) %>%
+  dplyr::select(project_id, n, total_n, pct, display_label) %>%
+  print(n = Inf)
