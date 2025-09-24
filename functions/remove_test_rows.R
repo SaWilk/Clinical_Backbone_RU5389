@@ -1,46 +1,10 @@
-# -------------------------------------------------------------------------
-# remove_test_rows()
-#
-# Purpose:
-#   Removes non-main data collection rows and known "test" participant IDs
-#   from a dataset.
-#
-# Behavior:
-#   - If the column `Datenerhebung...Data.collection.` exists, only rows
-#     with the value `"HaupterhebungMain data collection"` are kept.
-#   - Identifies the participant ID column to use in a hierarchical order:
-#       • vpid
-#       • Versuchspersonennummer.
-#       • Versuchspersonen.ID...Participant.ID
-#       • id
-#       • vpid_1
-#   - Using the first available column from that list, the function removes:
-#       • Rows with IDs consisting of only 9’s (≥3 digits).
-#       • Rows with IDs consisting of only 1’s (≥3 digits).
-#       • Rows where the ID matches one of the explicit "bad IDs" defined
-#         at the top of the function (e.g., 123456, 99998, 79999).
-#   - If no participant ID column is found, no rows are removed and a warning
-#     is issued.
-#
-# Input:
-#   df   : data frame to clean.
-#   name : string, name of the dataset (used in messages).
-#
-# Output:
-#   - Returns the input data frame with test/non-main rows removed.
-#   - Prints a message with the number of rows removed.
-#
-# Example:
-#   dat_adults <- remove_test_rows(dat_adults, "adults")
-#
-# -------------------------------------------------------------------------
-
 remove_test_rows <- function(df, name, dat_general = NULL) {
   # List of explicit test IDs to remove
   bad_ids <- c("123456", "99998", "79999")
   
   before <- nrow(df)
   removed_dat_general <- 0L
+  removed_date <- 0L
   
   # helper: detect IDs that are all the same digit (≥3 digits)
   all_same_digit <- function(x, digit) {
@@ -128,7 +92,40 @@ remove_test_rows <- function(df, name, dat_general = NULL) {
     warning(name, ": No matching participant ID column found. No rows removed for test IDs.")
   }
   
+  # --- NEW: Remove rows with start date before 2024-08-01 ---
+  date_candidates <- c("startdate", "TIME_start")
+  date_col <- intersect(date_candidates, names(df))[1]
+  cutoff <- as.POSIXct("2024-08-01 00:00:00", tz = "UTC")
+  
+  if (!is.na(date_col)) {
+    # parse helper supporting:
+    #  - "YYYY-MM-DD HH:MM:SS"
+    #  - "YYYY-MM-DD-HH-MM"  -> convert to "YYYY-MM-DD HH:MM"
+    raw <- trimws(as.character(df[[date_col]]))
+    
+    # try ymd_hms first
+    parsed <- suppressWarnings(lubridate::ymd_hms(raw, quiet = TRUE, tz = "UTC"))
+    
+    # where NA, try the "YYYY-MM-DD-HH-MM" pattern
+    need_alt <- is.na(parsed) & grepl("^\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}$", raw)
+    if (any(need_alt)) {
+      alt <- sub("^(\\d{4}-\\d{2}-\\d{2})-(\\d{2})-(\\d{2})$", "\\1 \\2:\\3", raw[need_alt])
+      parsed[need_alt] <- suppressWarnings(lubridate::ymd_hm(alt, quiet = TRUE, tz = "UTC"))
+    }
+    
+    # Keep rows with NA dates (can't judge) or >= cutoff
+    before_date <- nrow(df)
+    df <- df[ is.na(parsed) | parsed >= cutoff, , drop = FALSE ]
+    removed_date <- before_date - nrow(df)
+    if (removed_date > 0) {
+      message(name, ": Removed ", removed_date, " observation(s) with start date before 2024-08-01 (using column '", date_col, "').")
+    }
+  } else {
+    warning("\u26A0\uFE0F ", name, ": No 'startdate' or 'TIME_start' column found. Skipping date-based removal.")
+  }
+  # --- END date filter ---
+  
   after <- nrow(df)
-  message(name, ": Removed ", before - after, " observation(s) in total (dat_general tests + ID-based tests).")
+  message(name, ": Removed ", before - after, " observation(s) in total (dat_general tests + ID-based tests + date filter).")
   return(df)
 }

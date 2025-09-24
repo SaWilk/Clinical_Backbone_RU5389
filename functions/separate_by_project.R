@@ -81,24 +81,7 @@ separate_by_project <- function(df, out_path = NULL, sample = NULL, export_csv =
     proj_col <- names(df)[match(tolower(proj_cols[match_idx]), lower_names)]
   }
   message("separate_by_project: using column '", proj_col, "'")
-  
-  # ------------- remove test participants (VP number 99999) -------------
-  if ("Versuchspersonennummer." %in% names(df)) {
-    before_n <- nrow(df)
-    df <- df[!(as.character(df$Versuchspersonennummer.) == "99999"), , drop = FALSE]
-    after_n <- nrow(df)
-    if (after_n < before_n) {
-      message("Removed ", before_n - after_n, " test observation(s) with Versuchspersonennummer. == 99999.")
-    }
-  } else {
-    # Only warn if user likely expects it
-    message("Column 'Versuchspersonennummer.' not found; no test IDs removed.")
-  }
-  
-  # ------------- normalize + drop explicit empty/testing labels -------------
-  df[[proj_col]] <- trimws(as.character(df[[proj_col]]))
-  df <- df[!(df[[proj_col]] %in% c("", "Testing mode(No actual data collection)")), , drop = FALSE]
-  
+
   # ------------- robust SAMPLE detection -------------
   normalize_sample <- function(x) {
     x <- tolower(x)

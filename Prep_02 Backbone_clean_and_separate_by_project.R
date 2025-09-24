@@ -68,6 +68,7 @@ source(file.path(function_path, "correct_child_vpids.R"))
 source(file.path(function_path, "check_vpid_forms.R"))
 source(file.path(function_path, "find_pilot_ids.R"))
 source(file.path(function_path, "compare_vpcodes.R"))
+source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -133,6 +134,7 @@ last_page <- "lastpage"
 link_col <- "comp"
 id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in the 
 # questionnaire data this is an unqiue incrementing numbercoutning the datasets
+submit_col = "submitdate";
 
 
 # Fix issues with project assignment -------------------------------------------
@@ -265,6 +267,76 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001;
 dat_children_parents <- correct_child_vpids(dat_children_parents);
 
 
+# Gather Pilot Participant IDs -------------------------------------------------
+
+pilots_ad_auto = find_pilot_ids(dat_general, dat_adults)
+pilots_asc_auto = find_pilot_ids(dat_general, dat_adolescents)
+pilots_ch_auto = find_pilot_ids(dat_general, dat_children_parents)
+
+
+pilot_ad_2 = c(20004);
+pilot_ad_9 = c();
+pilot_ad_8 = c(80350)
+
+pilot_asc_7 = c();
+
+pilot_ch_6 = c(62973,
+               62980, 
+               62998,
+               62992,
+               62987,
+               62989,
+               62994,
+               62970
+)
+
+pilot_ad_all = c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto);
+pilot_asc_all = c(pilots_asc_auto);
+pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
+
+# Move to separate file and from original dataset
+
+dat_adults <- extract_pilot_by_vpid(
+  dat_adults,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilot_ad_all,
+  sample = "adults",
+  vpid_col = "vpid"
+);
+dat_adolescents <- extract_pilot_by_vpid(
+  dat_adolescents,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilot_asc_all,
+  sample = "adolescents",
+  vpid_col = "vpid"
+);
+dat_children_parents <- extract_pilot_by_vpid(
+  dat_children_parents,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "children_parents",
+  vpid_col = "vpid"
+);
+dat_children_p6 <- extract_pilot_by_vpid(
+  dat_children_p6,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "children_p6",
+  vpid_col = "VPCode"
+);
+dat_parents_p6 <- extract_pilot_by_vpid(
+  dat_parents_p6,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "parents_p6",
+  vpid_col = "VPCode"
+);
+
 # Handle duplicate IDs ---------------------------------------------------------
 
 # list of duplicates
@@ -273,11 +345,6 @@ dat_children_parents <- correct_child_vpids(dat_children_parents);
 # sort(unique(dat_children_parents[[vp_col]][duplicated(dat_children_parents[[vp_col]])]))
 
 # Delete not needed, incomplete or faulty datasets 
-
-# Project 8
-del_vpid_ad = 80350 # Johannes said they can be deleted as they are pilots
-dat_children_parents <- dat_children_parents %>%
-  dplyr::filter(!vpid %in% del_vpid_ad);
 
 # Project 3
 # using list of "ids" that can be deleted
@@ -289,7 +356,7 @@ dat_adults <- dat_adults %>%
 
 
 # Adults
-res_adults <- resolve_duplicates(dat_adults, vp_col, dataset_name = "adults");
+res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults");
 dat_adults <- res_adults$cleaned;
 trash_adults <- res_adults$trash_bin;
 
@@ -298,7 +365,7 @@ trash_adults <- res_adults$trash_bin;
 # Leo fragen, waiting for response...
 
 # Adolescents
-res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, dataset_name = "adolescents");
+res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col, dataset_name = "adolescents");
 dat_adolescents <- res_adolescents$cleaned;
 trash_adolescents <- res_adolescents$trash_bin;
 
@@ -308,7 +375,7 @@ trash_adolescents <- res_adolescents$trash_bin;
 # Waiting for resonse from Ibrahim.... 
 
 # Children/Parents
-res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, dataset_name = "children_parents");
+res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col, dataset_name = "children_parents");
 dat_children_parents <- res_children_parents$cleaned;
 trash_children_parents <- res_children_parents$trash_bin;
 
@@ -352,84 +419,6 @@ write_xlsx(all_trash_adults,      file.path(out_path, sprintf("deleted-rows_%s_a
 write_xlsx(all_trash_children,    file.path(out_path, sprintf("deleted-rows_%s_children.xlsx", today)))
 write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_adolescents.xlsx", today)))
 
-
-# Gather Pilot Participant IDs -------------------------------------------------
-
-pilots_ad_auto = find_pilot_ids(dat_general, dat_adults)
-pilots_asc_auto = find_pilot_ids(dat_general, dat_adolescents)
-pilots_ch_auto = find_pilot_ids(dat_general, dat_children_parents)
-
-
-pilot_ad_2 = c(20004);
-pilot_ad_9 = c();
-pilot_ad_8 = c(80350)
-
-pilot_asc_7 = c();
-
-pilot_ch_6 = c(62973,
-               62980, 
-               62998,
-               62992,
-               62987,
-               62989,
-               62994,
-               62970
-)
-
-pilot_ad_all = c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto);
-pilot_asc_all = c(pilots_asc_auto);
-pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
-
-# Move to separate file and from original dataset
-
-dat_adults <- extract_pilot_by_vpid(
-  dat_adults,
-  out_path = out_path,
-  export_csv = FALSE,
-  pilot_ids = pilot_ad_all,
-  sample = "adults",
-  vpid_col = "vpid"
-);
-psytool_info_adults <- extract_pilot_by_vpid(
-  psytool_info_adults,
-  out_path = cogtest_out_path,
-  export_csv = FALSE,
-  pilot_ids = pilot_ad_all,
-  sample = "adults",
-  vpid_col = "id"
-);
-dat_adolescents <- extract_pilot_by_vpid(
-  dat_adolescents,
-  out_path = out_path,
-  export_csv = FALSE,
-  pilot_ids = pilot_asc_all,
-  sample = "adolescents",
-  vpid_col = "vpid"
-);
-dat_children_parents <- extract_pilot_by_vpid(
-  dat_children_parents,
-  out_path = out_path,
-  export_csv = FALSE,
-  pilot_ids = pilots_ch_all,
-  sample = "children_parents",
-  vpid_col = "vpid"
-);
-dat_children_p6 <- extract_pilot_by_vpid(
-  dat_children_p6,
-  out_path = out_path,
-  export_csv = FALSE,
-  pilot_ids = pilots_ch_all,
-  sample = "children_p6",
-  vpid_col = "VPCode"
-);
-dat_parents_p6 <- extract_pilot_by_vpid(
-  dat_parents_p6,
-  out_path = out_path,
-  export_csv = FALSE,
-  pilot_ids = pilots_ch_all,
-  sample = "parents_p6",
-  vpid_col = "VPCode"
-);
 
 
 # Do Children and Parent Questionnaires Match in VP ID?
@@ -482,20 +471,23 @@ separate_by_project(dat_parents_p6, out_path, "parents_p6")
 
 # Set column name variables ----------------------------------------------------
 
-vp_col <- "id"
-project_col <- "p"
-# last_page <- "lastpage"
-link_col <- "comp"
-id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in the 
-# questionnaire data this is an unqiue incrementing numbercoutning the datasets
+vp_col <- "id";
+project_col <- "p";
+# last_page <- "lastpage";
+link_col <- "comp";
+id_col = NA; # careful - in psytoolkit information sheets, this is the vpid, in the 
+# questionnaire data this is an unqiue incrementing numbercoutning the datasets. 
+# deleting it here to avoid confusion - there is also no equivalent in the psytoolkit 
+# output
+submit_col = "TIME_end";
 
 # Fix issues with project assignment -------------------------------------------
 
-psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 2048)]
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 2048)];
 # assuming this is project 2 since project 1 does not collect data and the id starts with a 2
 psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 2048)] = 2;
 
-psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)]
+psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)];
 # assuming this is project 9 since project 1 does not collect data and the id 
 # starts with a 9. also project 9 IDs are actually consecutive and 17 is missing. 
 psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)] = 9;
@@ -503,61 +495,22 @@ psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)
 
 # Remove empty Rows --------------------------------------------------------
 
-LAST_P_EMPTY = 6;
-# empty entries did not get pat page LAST_P_EMPTY. I assume this is a technical issue usually 
-# and I remove it. I also remove when only cognitive tests were performed sicne thre is no quest data. 
-# I do not remove incomplete entries in this step
 
-# Project 3
-PROJECT = 3;
-# adult
-sum((psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY) 
-    & psytool_info_children[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ch_3 = psytool_info_children[which(
-  (psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY) 
-  & psytool_info_children[[project_col]] == PROJECT), vp_col]
-# 30017
-psytool_info_children <- psytool_info_children[!(psytool_info_children[[project_col]] == PROJECT & 
-                                                 (psytool_info_children[[link_col]] == "cogn" | psytool_info_children[[last_page]] < LAST_P_EMPTY)), ];
-# child
-sum(psytool_info_adults$last_page < LAST_P_EMPTY & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_3 = psytool_info_adults[which(psytool_info_adults[[last_page]] < LAST_P_EMPTY & psytool_info_adults[[project_col]] == PROJECT), vp_col]
-psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & psytool_info_adults[[last_page]] < LAST_P_EMPTY), ];
+list_output <- remove_empty_obs_psytoolkit(psytool_info_adults)
+psytool_info_adults = list_output$kept;    # cleaned dataframe
+no_id_ad = list_output$no_id;       # id missing
+empty_rows_ad = list_output$empty; # rows that were dropped
+# TODO: need to understand how it is possible to generate entries without ID - and possibly reconstruct?
 
-# Project 7
-PROJECT = 7;
-# adult
-sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_7 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
-#  79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
-psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & 
-                             (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
-# adolescent
-sum((psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY) & psytool_info_adolescents[[project_col]] == PROJECT, na.rm = TRUE)
-empty_adlsc_7 = psytool_info_adolescents[which((psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY) & psytool_info_adolescents[[project_col]] == PROJECT), vp_col]
-#  79019  77001  77001  77001  78050  70002  70008  70002  70016  70015  70017  70023  70027  70026  70034  70039  70038  70033
-#  70031  70042  70044  70045  70037  70032  70036  70047  70046  70048  70043  70050  70051  70052  70050  70063  70053  70068
-#  70066  70057  70069  70075  70064  70065  70022  70077  70076  70058  70073  70078  70070  70056  70074  70072  70071  70084
-#  70062  70088  70085  70090  70086  70089  70093  70092  70100  70098  70099
-psytool_info_adolescents <- psytool_info_adolescents[!(psytool_info_adolescents[[project_col]] == PROJECT & 
-                                       (psytool_info_adolescents[[link_col]] == "cogn" | psytool_info_adolescents[[last_page]] < LAST_P_EMPTY)), ];
+list_output <- remove_empty_obs_psytoolkit(psytool_info_adolescents)
+psytool_info_adolescents = list_output$kept;    # cleaned dataframe
+no_id_adlsc = list_output$no_id;       # id missing
+empty_rows_adlsc = list_output$empty; # rows that were dropped
 
-# Project 8
-# PROJECT = 8;
-# adult
-sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_8 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
-# 79016 70003 70005 70010 keine VP Nummer 70023 70029 70025 70013 70040 70044 70049 70054 70060 70067 70059 70096 70097
-psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT &
-                             (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
-
-
-# Project 9
-PROJECT = 9;
-sum((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT, na.rm = TRUE)
-empty_ad_9 = psytool_info_adults[which((psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY) & psytool_info_adults[[project_col]] == PROJECT), vp_col]
-#  99003 99020 99009 99021 99027 99023 99006 99010 99025 99025 99007 99024 99018 99012 99037 99034 99036
-psytool_info_adults <- psytool_info_adults[!(psytool_info_adults[[project_col]] == PROJECT & (psytool_info_adults[[link_col]] == "cogn" | psytool_info_adults[[last_page]] < LAST_P_EMPTY)), ];
+list_output <- remove_empty_obs_psytoolkit(psytool_info_children)
+psytool_info_children = list_output$kept;    # cleaned dataframe
+no_id_ch = list_output$no_id;       # id missing
+empty_rows_ch = list_output$empty; # rows that were dropped
 
 
 # Fix ID naming issues --------------------------------------------------------
@@ -598,22 +551,95 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psy
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 227 & psytool_info_adults[[project_col]] == PROJECT)] = 30047;
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 316 & psytool_info_adults[[project_col]] == PROJECT)] = 30057;
 
+# Project 8
+PROJECT = 8;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] = 30002;
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 800028 & psytool_info_adults[[project_col]] == PROJECT)] = 80028;
+
+
 # Project 9
 # assuming a 0 (or many) 0s are missing
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9901)] = 99001
 
 
+# Gather Pilot Participant IDs -------------------------------------------------
+
+pilots_ad_auto = find_pilot_ids(dat_general, psytool_info_adults, vpid_col_df2 = vp_col)
+pilots_asc_auto = find_pilot_ids(dat_general, psytool_info_adolescents, vpid_col_df2 = vp_col)
+pilots_ch_auto = find_pilot_ids(dat_general, psytool_info_children, vpid_col_df2 = vp_col)
+
+
+pilot_ad_2 = c(20004);
+pilot_ad_9 = c();
+pilot_ad_8 = c(80350)
+
+pilot_asc_7 = c();
+
+pilot_ch_6 = c(62973,
+               62980, 
+               62998,
+               62992,
+               62987,
+               62989,
+               62994,
+               62970
+)
+
+pilot_ad_all = c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto);
+pilot_asc_all = c(pilots_asc_auto);
+pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
+
+# Move to separate file and from original dataset
+
+psytool_info_adults <- extract_pilot_by_vpid(
+  psytool_info_adults,
+  out_path = cogtest_out_path,
+  export_csv = FALSE,
+  pilot_ids = pilot_ad_all,
+  sample = "psytool_adults",
+  vpid_col = vp_col
+);
+psytool_info_adolescents <- extract_pilot_by_vpid(
+  psytool_info_adolescents,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilot_asc_all,
+  sample = "psytool_adolescents",
+  vpid_col = vp_col
+);
+psytool_info_children <- extract_pilot_by_vpid(
+  psytool_info_children,
+  out_path = out_path,
+  export_csv = FALSE,
+  pilot_ids = pilots_ch_all,
+  sample = "psytool_children",
+  vpid_col = vp_col
+);
+
+
 # Handle duplicate IDs ---------------------------------------------------------
 
-id_col = "id";
+# Adults
+res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col, dataset_name = "adults");
+psytool_info_adults <- res_adults$cleaned;
+trash_adults <- res_adults$trash_bin;
+# ⚠️ [adults] Multiple complete datasets for id=30009 — please resolve manually.
+# ⚠️ [adults] Multiple complete datasets for id=30099 — please resolve manually.
+# ⚠️ [adults] Multiple complete datasets for id=30048 — please resolve manually.
+# ⚠️ [adults] Multiple complete datasets for id=30058 — please resolve manually.
 
-# list of duplicates
-sort(unique(psytool_info_adults[[vp_col]][duplicated(psytool_info_adults[[vp_col]])]))
-sort(unique(psytool_info_adults[["id"]][duplicated(psytool_info_adults[["id"]])]))
+# Adolescents
+res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adults");
+psytool_info_adolescents <- res_adolescents$cleaned;
+trash_adolescents <- res_adolescents$trash_bin;
 
+# Children
+res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col, dataset_name = "adults");
+psytool_info_children <- res_children$cleaned;
+trash_children <- res_children$trash_bin;
 
-sort(unique(psytool_info_adolescents[[vp_col]][duplicated(psytool_info_adolescents[[vp_col]])]))
-sort(unique(psytool_info_children[[vp_col]][duplicated(psytool_info_children[[vp_col]])]))
+names(psytool_info_children)
+sum(length(psytool_info_children$p == 6))
 
 # Delete not needed, incomplete or faulty datasets ------------------------------------------
 # using list of "ids" that can be deleted
