@@ -54,12 +54,17 @@ survey_out_path = file.path(out_path, "survey_data");
 function_path = file.path("functions");
 psytool_path = file.path("raw_data", "psytoolkit");
 cogtest_out_path = file.path(out_path, "experiment_data");
+# Specify the folder path
+discarded_path <- file.path(out_path, "discarded")
 
+# Check if the folder exists
+if (!dir.exists(discarded_path)) {
+  dir.create(discarded_path, recursive = TRUE)
+}
 
 ## Source required functions --------------------
 
 source(file.path(function_path, "separate_by_project.R"))
-# source(file.path(function_path, "separate_by_project_cog.R"))
 source(file.path(function_path, "remove_test_rows.R"))
 source(file.path(function_path, "copy_psytool_files.R"))
 source(file.path(function_path, "extract_pilot_by_vpid.R"))
@@ -73,7 +78,6 @@ source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
 
 ## Backbone surveys ------------------------------------------------------------
 
-#file_adults <-"results_adults_07042025.csv" # SW: not sure why this ID, the survey has a different ID
 file_adults <- "results-survey564757_remids_translated.csv";
 file_adolescents <- "results-survey585676.csv";
 file_children_parents <- "results-survey798916_remids_translated.csv";
@@ -133,7 +137,7 @@ project_col <- "project"
 last_page <- "lastpage"
 link_col <- "comp"
 id_col = "id" # careful - in psytoolkit information sheets, this is the vpid, in the 
-# questionnaire data this is an unqiue incrementing numbercoutning the datasets
+# questionnaire data this is an unqiue incrementing number counting the datasets
 submit_col = "submitdate";
 
 
@@ -214,6 +218,7 @@ all_empty_ad <- if (length(ads_non_empty) > 0) {
   data.frame()  # return empty df if all were empty
 }
 
+# saving it so I can write to disk later on in the script
 all_empty_ad$.__reason__. = "empty";
 empty_ch_8$.__reason__. = "empty";
 empty_adlsc_7$.__reason__. = "empty";
@@ -264,7 +269,8 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] = 99001;
 
 # Special Case Project 8: Remap VPIDs so children and adults have unqiue IDs -------------
 
-dat_children_parents <- correct_child_vpids(dat_children_parents);
+dat_children_parents <- correct_child_vpids(dat_children_parents, 
+                                            mapping_file =file.path("information", "2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx"));
 
 
 # Gather Pilot Participant IDs -------------------------------------------------
@@ -298,7 +304,7 @@ pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
 
 dat_adults <- extract_pilot_by_vpid(
   dat_adults,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilot_ad_all,
   sample = "adults",
@@ -306,7 +312,7 @@ dat_adults <- extract_pilot_by_vpid(
 );
 dat_adolescents <- extract_pilot_by_vpid(
   dat_adolescents,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilot_asc_all,
   sample = "adolescents",
@@ -314,7 +320,7 @@ dat_adolescents <- extract_pilot_by_vpid(
 );
 dat_children_parents <- extract_pilot_by_vpid(
   dat_children_parents,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilots_ch_all,
   sample = "children_parents",
@@ -322,7 +328,7 @@ dat_children_parents <- extract_pilot_by_vpid(
 );
 dat_children_p6 <- extract_pilot_by_vpid(
   dat_children_p6,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilots_ch_all,
   sample = "children_p6",
@@ -330,7 +336,7 @@ dat_children_p6 <- extract_pilot_by_vpid(
 );
 dat_parents_p6 <- extract_pilot_by_vpid(
   dat_parents_p6,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilots_ch_all,
   sample = "parents_p6",
@@ -382,7 +388,8 @@ trash_children_parents <- res_children_parents$trash_bin;
 # [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
 # TODO: Harry fragen
 # [children_parents] Multiple complete datasets for vpid=80505, form=P — please resolve manually.
-# TODO: Johannes fragen
+# Waiting for response from Johannes
+# TODO: remove the newer 80505
 
 # Project 6 children parents
 vp_col = "VPCode";
@@ -415,54 +422,19 @@ all_trash_adolescents  <- rbind(empty_adlsc_7, trash_adolescents)
 
 
 # write each one to disk
-write_xlsx(all_trash_adults,      file.path(out_path, sprintf("deleted-rows_%s_adults.xlsx", today)))
-write_xlsx(all_trash_children,    file.path(out_path, sprintf("deleted-rows_%s_children.xlsx", today)))
-write_xlsx(all_trash_adolescents, file.path(out_path, sprintf("deleted-rows_%s_adolescents.xlsx", today)))
+write_xlsx(all_trash_adults,      file.path(out_path, "discarded", sprintf("deleted-rows_%s_adults.xlsx", today)))
+write_xlsx(all_trash_children,    file.path(out_path, "discarded", sprintf("deleted-rows_%s_children.xlsx", today)))
+write_xlsx(all_trash_adolescents, file.path(out_path, "discarded", sprintf("deleted-rows_%s_adolescents.xlsx", today)))
 
-
-
-# Do Children and Parent Questionnaires Match in VP ID?
-
-res3 <- compare_vpcodes_three(
-  dat_children_p6,
-  dat_parents_p6,
-  dat_children_parents,     # will be filtered to project == 6
-  id_col_12   = "VPCode",
-  wcst_id_col   = "vpid",
-  wcst_project_col = "project",
-  project_value = 6
-)
-
-
-# Build a wide table: one row per unique ID, columns = categories
-all_ids <- sort(unique(unlist(res3$ids)))
-cats <- names(res3$ids)
-
-wide_ids <- data.frame(vpid = all_ids, stringsAsFactors = FALSE)
-for (nm in cats) {
-  present <- all_ids %in% res3$ids[[nm]]
-  wide_ids[[nm]] <- ifelse(present, all_ids, NA)
-}
-
-# Write Excel: counts + wide IDs
-wb <- createWorkbook()
-addWorksheet(wb, "Counts")
-writeData(wb, "Counts", res3$counts)
-
-addWorksheet(wb, "IDs_wide")
-writeData(wb, "IDs_wide", wide_ids)
-
-saveWorkbook(wb, "VPCode_comparison_wide.xlsx", overwrite = TRUE)
 
 # Separate the data by project and store on disk ------------------------------
 
 # Questionnaires
-separate_by_project(dat_adults, out_path, "adults")
-separate_by_project(dat_adolescents, out_path, "adolescents")
-separate_by_project(dat_children_parents, out_path, "children")
-separate_by_project(dat_children_p6, out_path, "children_p6")
-separate_by_project(dat_parents_p6, out_path, "parents_p6")
-
+separate_by_project(dat_adults, out_path, "adults", data_type = "questionnaires")
+separate_by_project(dat_adolescents, out_path, "adolescents", data_type = "questionnaires")
+separate_by_project(dat_children_parents, out_path, "children", data_type = "questionnaires")
+separate_by_project(dat_children_p6, out_path, "children_p6", data_type = "questionnaires")
+separate_by_project(dat_parents_p6, out_path, "parents_p6", data_type = "questionnaires")
 
 
 ##########################################################################
@@ -593,7 +565,7 @@ pilots_ch_all = c(pilots_ch_auto, pilot_ch_6);
 
 psytool_info_adults <- extract_pilot_by_vpid(
   psytool_info_adults,
-  out_path = cogtest_out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilot_ad_all,
   sample = "psytool_adults",
@@ -601,7 +573,7 @@ psytool_info_adults <- extract_pilot_by_vpid(
 );
 psytool_info_adolescents <- extract_pilot_by_vpid(
   psytool_info_adolescents,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilot_asc_all,
   sample = "psytool_adolescents",
@@ -609,7 +581,7 @@ psytool_info_adolescents <- extract_pilot_by_vpid(
 );
 psytool_info_children <- extract_pilot_by_vpid(
   psytool_info_children,
-  out_path = out_path,
+  out_path = file.path(out_path, "pilots"),
   export_csv = FALSE,
   pilot_ids = pilots_ch_all,
   sample = "psytool_children",
@@ -688,19 +660,15 @@ no_test_ids # <- also these - they seem to have no cognitive test data
 # [43] "30087"  "{vpid}" "62044"  "62124"  "78050"  "70001"  "70001"  "70087"  "70087" 
 
 
-
 # Separate the data by project and store on disk ------------------------------
 
 # Cognitive Tests  
-separate_by_project(psytool_info_adults, cogtest_out_path)
-# separate_by_project(psytool_info_adults_remote, cogtest_out_path)
-separate_by_project(psytool_info_children, cogtest_out_path)
-separate_by_project(psytool_info_adolescents, cogtest_out_path)
+separate_by_project(psytool_info_adults, cogtest_out_path, "adults", data_type = "experiment_data")
+separate_by_project(psytool_info_children, cogtest_out_path, "children_parents", data_type = "experiment_data")
+separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", data_type = "experiment_data")
 
 
 ## Get the Experimental Data Sets Associated with the project ------------------
 
-
-copy_psytool_files()
-
+copy_psytool_files(cogtest_out_path = out_path)
 

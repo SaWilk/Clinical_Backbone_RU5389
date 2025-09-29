@@ -1,0 +1,16 @@
+Column 1 - &p - Project ID as indicated in Backbone starting page
+Column 2 - &id - Participant ID as indicated in Backbone starting page
+Column 3 - @1 - Card shown (mapping of number & actual card unknown)
+Column 4 - @2 - Correct response (which card - from 1 (left) to 4 (right) if sorting according to SHAPE/FORM (block 2 & 5)
+Column 5 - @3 - Correct response (which card - from 1 (left) to 4 (right) if sorting according to NUMBER (block 3 & 6)
+Column 6 - @4 - Correct response (which card - from 1 (left) to 4 (right) if sorting according to COLOR (block 1 & 4)
+Column 7 - RT - Reaction Time (in ms)
+Column 8 - STATUS - Whether answer was correct (=1), wrong (=2) or too slow (=3)
+Column 9 - $a - Which card was selected - from 1 (left) to 4 (right)
+Column 10 - $anyerror - Whether there was an error made (1) or not (0)
+Column 11 - $perseverationerror - Whether there was a perseveration error made (1) or not (0): means that the card which would have been correct in previous block/learning rule was selected (card number from column 6 in blocks 2 & 5, from column 4 in blocks 3 & 6, from column 5 in block 4 - no perseveration error possible in block 1)
+Column 12 - $nonperseverationerror - Whether there was a non-perseveration error made (1) or not (0): mean that a card was selected that is unrelated to previous learning rule but not correct
+Column 13 - &correct_count - How many correct trials in a row: if this number rises to 10, the next block/learning rule is initiated
+Column 14 - &block_count - Current block number (1-6)
+Column 15 - &trial_count - Current trial number (1-64)
+Column 16 - $time_trialstart - Time since start of experiment at which trial started (in ms)
