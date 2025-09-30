@@ -74,6 +74,7 @@ source(file.path(function_path, "check_vpid_forms.R"))
 source(file.path(function_path, "find_pilot_ids.R"))
 source(file.path(function_path, "compare_vpcodes.R"))
 source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
+source(file.path(function_path, "check_meta_match.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -88,11 +89,19 @@ file_children_p6 <- "results-survey518972.csv";
 ## Load data -------------------------------------------------------------------
 
 # Questionnaires
-dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";")
-dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";")
-dat_children_parents <- read.csv(file.path(name,in_path, file_children_parents), sep = ";")
-dat_parents_p6 <- read.csv(file.path(name,in_path, file_parents_p6), sep = ";")
-dat_children_p6 <- read.csv(file.path(name,in_path, file_children_p6), sep = ";")
+dat_adults <- read.csv(file.path(name,in_path, file_adults), sep = ";");
+dat_adolescents <- read.csv(file.path(name,in_path, file_adolescents), sep = ";");
+dat_children_parents <- read.csv(file.path(name,in_path, file_children_parents), sep = ";");
+dat_parents_p6 <- read.csv(file.path(name,in_path, file_parents_p6), sep = ";");
+dat_children_p6 <- read.csv(file.path(name,in_path, file_children_p6), sep = ";");
+
+# get metadata
+quest_info <- file.info(file.path(name,in_path, file_adults));
+quest_info$sample = "adults";
+quest_info[2, ] <- c(file.info(file.path(name,in_path, file_adolescents)), "adolescents");
+quest_info[3, ] <- c(file.info(file.path(name,in_path, file_children_parents)), "children_parents");
+quest_info[4, ] <- c(file.info(file.path(name,in_path, file_parents_p6)), "parents_p6");
+quest_info[5, ] <- c(file.info(file.path(name,in_path, file_children_p6)), "children_p6");
 
 
 # Data Overview
@@ -110,8 +119,14 @@ psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file
 psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
 
 
-# remove Test Datasets from all Project data -----------------------------------
+# get metadata
+cogtest_info <- file.info(file.path(name, psytool_path, "adults", file_psytool_info));
+cogtest_info$sample = "adults";
+cogtest_info[2, ] <- c(file.info(file.path(name, psytool_path, "adolescents", file_psytool_info)), "adolescents");
+cogtest_info[3, ] <- c(file.info(file.path(name, psytool_path, "children", file_psytool_info)), "children_parents");
 
+
+# remove Test Datasets from all Project data -----------------------------------
 
 dat_adults <- remove_test_rows(dat_adults, "Adults", dat_general)
 dat_adolescents <- remove_test_rows(dat_adolescents, "Adolescents", dat_general)
@@ -123,7 +138,6 @@ dat_children_p6 <- remove_test_rows(dat_children_p6, "Children", dat_general)
 psytool_info_adults <- remove_test_rows(psytool_info_adults, "Adults", dat_general)
 psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents", dat_general)
 psytool_info_children <- remove_test_rows(psytool_info_children, "Children", dat_general)
-
 
 
 ##########################################################################
@@ -430,11 +444,11 @@ write_xlsx(all_trash_adolescents, file.path(out_path, "discarded", sprintf("dele
 # Separate the data by project and store on disk ------------------------------
 
 # Questionnaires
-separate_by_project(dat_adults, out_path, "adults", data_type = "questionnaires")
-separate_by_project(dat_adolescents, out_path, "adolescents", data_type = "questionnaires")
-separate_by_project(dat_children_parents, out_path, "children", data_type = "questionnaires")
-separate_by_project(dat_children_p6, out_path, "children_p6", data_type = "questionnaires")
-separate_by_project(dat_parents_p6, out_path, "parents_p6", data_type = "questionnaires")
+separate_by_project(dat_adults, out_path, "adults", data_type = "questionnaires", metadata_info = quest_info)
+separate_by_project(dat_adolescents, out_path, "adolescents", data_type = "questionnaires", metadata_info = quest_info)
+separate_by_project(dat_children_parents, out_path, "children", data_type = "questionnaires", metadata_info = quest_info)
+separate_by_project(dat_children_p6, out_path, "children_p6", data_type = "questionnaires", metadata_info = quest_info)
+separate_by_project(dat_parents_p6, out_path, "parents_p6", data_type = "questionnaires", metadata_info = quest_info)
 
 
 ##########################################################################
@@ -663,12 +677,20 @@ no_test_ids # <- also these - they seem to have no cognitive test data
 # Separate the data by project and store on disk ------------------------------
 
 # Cognitive Tests  
-separate_by_project(psytool_info_adults, cogtest_out_path, "adults", data_type = "experiment_data")
-separate_by_project(psytool_info_children, cogtest_out_path, "children_parents", data_type = "experiment_data")
-separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", data_type = "experiment_data")
+separate_by_project(psytool_info_adults, cogtest_out_path, "adults", data_type = "experiment_data", metadata_info = cogtest_info)
+separate_by_project(psytool_info_children, cogtest_out_path, "children_parents", data_type = "experiment_data", metadata_info = cogtest_info)
+separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", data_type = "experiment_data", metadata_info = cogtest_info)
 
 
 ## Get the Experimental Data Sets Associated with the project ------------------
 
-copy_psytool_files(cogtest_out_path = out_path)
+copy_psytool_files(cogtest_out_path = out_path, meta_env_name = "cogtest_info")
+
+check_meta_match("adults", "cogtest_info")
+check_meta_match("adolescents", "cogtest_info")
+check_meta_match("children_parents", "cogtest_info")
+
+exists("cogtest_info", inherits = TRUE)
+str(cogtest_info[, c("sample","ctime")])
+unique(cogtest_info$sample)
 

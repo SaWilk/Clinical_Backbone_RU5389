@@ -3,10 +3,11 @@ separate_by_project <- function(df,
                                 sample = NULL,
                                 export_csv = FALSE,
                                 data_type = c("questionnaires", "experiment_data"),
+                                metadata_info = NULL,   # optional
                                 dry_run = FALSE,
                                 verbose = TRUE) {
   data_type  <- match.arg(data_type)
-  export_csv <- isTRUE(export_csv)  # ensure logical
+  export_csv <- isTRUE(export_csv)
   
   # ----- resolve base directory -----
   detect_script_dir <- function() {
@@ -32,7 +33,6 @@ separate_by_project <- function(df,
     tail <- tolower(basename(p2))
     if (tail %in% c("experiment_data", "questionnaires")) dirname(p2) else p2
   }
-  
   base_dir <- sanitize_base(out_path)
   if (is.null(base_dir) || !nzchar(base_dir)) {
     base_dir <- detect_script_dir()
@@ -53,8 +53,7 @@ separate_by_project <- function(df,
   lower_names <- tolower(names(df))
   match_idx <- which(tolower(proj_cols) %in% lower_names)[1]
   if (is.na(match_idx)) {
-    warning("Could not find a project column. Assigning all rows to default project '6'. ",
-            "Tried: ", paste(proj_cols, collapse = ", "), ".")
+    warning("No project column found. Assigning all rows to default project '6'.")
     proj_col <- "Projekt."
     df[[proj_col]] <- "6"
   } else {
@@ -69,10 +68,10 @@ separate_by_project <- function(df,
     keep[is.na(keep)] <- TRUE
     df <- df[keep, , drop = FALSE]
     n1 <- nrow(df)
-    if (n1 < n0 && verbose) message("Removed ", n0 - n1, " test observation(s) with Versuchspersonennummer. == 99999.")
+    if (n1 < n0 && verbose) message("Removed ", n0 - n1, " test rows.")
   }
   
-  # ----- clean labels -----
+  # ----- normalize labels -----
   df[[proj_col]] <- trimws(as.character(df[[proj_col]]))
   df <- df[!(df[[proj_col]] %in% c("", "Testing mode(No actual data collection)")), , drop = FALSE]
   
@@ -103,74 +102,94 @@ separate_by_project <- function(df,
     "unknown"
   }
   sample_name <- if (!is.null(sample)) normalize_sample(sample) else infer_sample_from_call()
-  if (sample_name == "unknown" && verbose) {
-    warning("Could not infer sample. Consider passing sample = 'adults'/'adolescents'/'children_parents'/'parents_p6'/'children_p6'.")
-  }
-  if (verbose) message("Sample: '", sample_name, "'")
+  if (verbose) message("Sample: ", sample_name)
   
-  # choose suffixes
-  file_suffix <- if (data_type == "experiment_data") "cogtests" else "questionnaire"  # for filenames
-  env_suffix  <- if (data_type == "experiment_data") "cogtest"  else "questionnaire"  # for env vars
+  # ----- metadata (optional) -----
+  date_str <- "unknown_date"
+  
+  if (is.null(metadata_info)) {
+    warning("No 'metadata_info' provided; using 'unknown_date' in filenames.")
+  } else {
+    load_metadata <- function(meta) {
+      if (is.data.frame(meta)) return(meta)
+      if (is.character(meta) && length(meta) == 1L && nzchar(meta)) {
+        ext <- tolower(tools::file_ext(meta))
+        if (ext == "csv") {
+          return(utils::read.csv(meta, stringsAsFactors = FALSE))
+        } else if (ext %in% c("xlsx", "xls")) {
+          if (!requireNamespace("readxl", quietly = TRUE)) {
+            stop("To read '", ext, "' metadata files, install.packages('readxl').")
+          }
+          return(as.data.frame(readxl::read_excel(meta)))
+        } else stop("Unsupported metadata file extension: .", ext)
+      }
+      stop("metadata_info must be a data.frame or a path to a .csv/.xlsx file.")
+    }
+    
+    ok <- TRUE
+    meta_df <- tryCatch(load_metadata(metadata_info), error = function(e) { warning(conditionMessage(e)); return(NULL) })
+    if (is.null(meta_df)) {
+      ok <- FALSE; warning("Could not load metadata; using 'unknown_date'.")
+    } else if (!all(c("sample", "ctime") %in% names(meta_df))) {
+      ok <- FALSE; warning("Metadata missing 'sample'/'ctime'; using 'unknown_date'.")
+    }
+    
+    if (ok) {
+      ms  <- tolower(as.character(meta_df$sample))
+      idx <- which(ms == tolower(sample_name))
+      if (length(idx) == 0) {
+        warning("No metadata match for sample='", sample_name, "'; using 'unknown_date'.")
+      } else {
+        ctimes <- meta_df$ctime[idx]
+        first_non_na <- which(!is.na(ctimes))[1]
+        if (!is.na(first_non_na)) {
+          parsed_date <- tryCatch(as.Date(ctimes[first_non_na]), error = function(e) NA)
+          if (!is.na(parsed_date)) {
+            date_str <- format(parsed_date, "%Y-%m-%d")
+            if (verbose) message("Using ctime from metadata: ", date_str)
+          } else {
+            warning("Could not parse ctime for sample='", sample_name, "'; using 'unknown_date'.")
+          }
+        } else {
+          warning("All ctime NA for sample='", sample_name, "'; using 'unknown_date'.")
+        }
+      }
+    }
+  }
+  
+  # ----- suffixes -----
+  file_suffix <- if (data_type == "experiment_data") "cogtests" else "questionnaire"
+  env_suffix  <- if (data_type == "experiment_data") "cogtest"  else "questionnaire"
   subfolder   <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
-  if (verbose) message("Saving under subfolder: ", subfolder, " | file suffix: ", file_suffix, " | env suffix: ", env_suffix)
   
   # ----- project parsing -----
   parse_project <- function(lbl) {
-    if (is.na(lbl)) return(list(type = "other", pid = NA_character_))
     s <- trimws(as.character(lbl))
-    m1 <- regexec("(?i)^\\s*P\\s*(\\d+)", s, perl = TRUE)
-    r1 <- regmatches(s, m1)[[1]]
-    if (length(r1) >= 2 && nzchar(r1[2])) return(list(type = "general_info", pid = r1[2]))
-    m2 <- regexec("^\\s*(\\d+)\\s*$", s, perl = TRUE)
-    r2 <- regmatches(s, m2)[[1]]
-    if (length(r2) >= 2 && nzchar(r2[2])) return(list(type = "number", pid = r2[2]))
     digits <- gsub("\\D+", "", s)
-    if (nzchar(digits)) return(list(type = "number", pid = digits))
-    list(type = "other", pid = NA_character_)
+    list(pid = ifelse(nzchar(digits), digits, "unknown"))
   }
-  
-  # helpers
   is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
   ensure_dir  <- function(path) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  date_str    <- format(Sys.Date(), "%Y-%m-%d")
   
-  # split
+  # ----- split & write -----
   parts <- split(df, df[[proj_col]], drop = TRUE)
-  
   for (lbl in names(parts)) {
     d <- parts[[lbl]]
-    parsed <- parse_project(lbl)
-    pid <- parsed$pid
-    kind <- parsed$type
+    pid_clean <- parse_project(lbl)$pid
     
-    pid_clean <- if (!is.na(pid) && nzchar(pid)) pid else "unknown"
+    varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
+    assign(varname, d, envir = .GlobalEnv)
+    
+    if (pid_clean %in% c("0", "99") || is_empty_df(d)) next
+    
     pid_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean), subfolder)
     ensure_dir(pid_dir)
     
-    # ----- environment variable names now include data-type suffix -----
-    if (kind == "general_info") {
-      varname <- sprintf("data_general_info_%s_%s", sample_name, env_suffix)
-    } else {
-      varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
-    }
-    assign(varname, d, envir = .GlobalEnv)
-    
-    # ----- skip saves for test or empty -----
-    if (pid_clean %in% c("0", "99")) { if (verbose) message("Skipping save for test project ", pid_clean, " (env: ", varname, ")"); next }
-    if (is_empty_df(d))            { if (verbose) message("Skipping save for empty project ", pid_clean, " (env: ", varname, ")");   next }
-    
-    # filenames keep sample tag + dataset file suffix
-    if (kind == "general_info") {
-      base <- sprintf("general_info_%s_%s_%s", date_str, sample_name, file_suffix)
-    } else {
-      base <- sprintf("%s_%s_%s_%s", pid_clean, date_str, sample_name, file_suffix)
-    }
-    
+    base <- sprintf("%s_%s_%s_%s", pid_clean, date_str, sample_name, file_suffix)
     if (!dry_run) {
       if (export_csv) utils::write.csv(d, file.path(pid_dir, paste0(base, ".csv")), row.names = FALSE, na = "")
       writexl::write_xlsx(d, file.path(pid_dir, paste0(base, ".xlsx")))
     }
-    
     if (verbose) message("Saved: ", file.path(pid_dir, paste0(base, ".xlsx")), " | env: ", varname)
   }
   

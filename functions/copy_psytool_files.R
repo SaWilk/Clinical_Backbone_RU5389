@@ -1,55 +1,8 @@
-# -------------------------------------------------------------------------
-# copy_psytool_files_verbose()
-#
-# Purpose:
-#   Collects cognitive test data files (WCST_1, LNS_1, BACS_1) referenced in
-#   psytoolkit environment data frames and copies them into a standardized
-#   folder structure grouped by project and sample. In addition, for each
-#   project–sample combination, writes a human-readable info file and a CSV
-#   log alongside the copied data.
-#
-# Behavior:
-#   - Looks for environment objects named like (NEW):
-#       data_<sampleTag>_p_<project>_cogtest
-#     where <sampleTag> contains one of:
-#       • adults • adolescents • children • adults_remote
-#   - Parses the project number (1–9 only; 0/99 are skipped).
-#   - Resolves relative paths in columns WCST_1, LNS_1, BACS_1 against the
-#     sample’s raw data folder, e.g.:
-#       <working_dir>/raw_data/psytoolkit/<sample>/experiment_data
-#   - Copies each referenced file into (created if missing):
-#       <out_root>/<project>_backbone/experiment_data/
-#         <project>_<YYYY-MM-DD>_<sample>_cogtest_data/
-#   - Skips files that are missing or already exist at the destination.
-#   - For each project–sample:
-#       • Creates a text info file named:
-#           <project>_<YYYY-MM-DD>_<sample>
-#       • Creates a detailed CSV log:
-#           <project>_<YYYY-MM-DD>_<sample>_log.csv
-#     (both written into the experiment_data folder).
-#
-# Input:
-#   env_objects      : character vector of environment object names to process;
-#                      if NULL, scans all objects in .GlobalEnv.
-#   cogtest_out_path : base output folder (points to 01_project_data).
-#
-# Output:
-#   - Returns invisibly a data frame of log entries.
-#   - Copies test data files into standardized locations (creating folders).
-#   - Writes per-project/sample info + CSV log files under experiment_data.
-#   - Prints a summary of statuses and paths.
-#
-# Example:
-#   copy_psytool_files_verbose(
-#     cogtest_out_path = file.path(getwd(), "01_project_data")
-#   )
-#
-# -------------------------------------------------------------------------
 copy_psytool_files <- function(env_objects = NULL,
-                                       cogtest_out_path = NULL) {
+                               cogtest_out_path = NULL,
+                               meta_env_name = "cogtest_info") {
   base_dir <- normalizePath(getwd(), winslash = "\\", mustWork = TRUE)
   
-  # Base output path (should be .../01_project_data)
   if (is.null(cogtest_out_path) || !nzchar(cogtest_out_path)) {
     cogtest_out_path <- file.path(base_dir, "01_project_data")
   }
@@ -57,8 +10,61 @@ copy_psytool_files <- function(env_objects = NULL,
     dir.create(cogtest_out_path, recursive = TRUE, showWarnings = FALSE)
   }
   
-  valid_samples <- c("adults", "adolescents", "children", "adults_remote")
+  # Added "children_parents"
+  valid_samples <- c("adults", "adolescents", "children", "children_parents", "adults_remote")
   sample_root <- function(sample) file.path(base_dir, "raw_data", "psytoolkit", sample, "experiment_data")
+  
+  # -------- metadata helpers (more robust matching) --------------------------
+  meta_df <- NULL
+  if (!is.null(meta_env_name) && nzchar(meta_env_name) &&
+      exists(meta_env_name, envir = .GlobalEnv, inherits = FALSE)) {
+    maybe_df <- get(meta_env_name, envir = .GlobalEnv)
+    if (is.data.frame(maybe_df)) meta_df <- maybe_df
+  }
+  
+  # Normalize tokens: lowercase, trim, remove separators so "children-parents"
+  # equals "children_parents" equals "children parents"
+  norm_tok <- function(x) tolower(gsub("[^a-z0-9]+", "", trimws(as.character(x))))
+  
+  extract_ymd <- function(x) {
+    if (is.null(x) || length(x) == 0 || all(is.na(x))) return(NA_character_)
+    x_chr <- as.character(x[1])
+    m <- regexpr("\\d{4}-\\d{2}-\\d{2}", x_chr)
+    if (m[1] != -1) return(substr(x_chr, m[1], m[1] + attr(m, "match.length") - 1))
+    suppressWarnings({
+      ts <- try(as.POSIXct(x_chr, tz = "UTC"), silent = TRUE)
+      if (!inherits(ts, "try-error") && !is.na(ts)) return(format(ts, "%Y-%m-%d"))
+      d  <- try(as.Date(x_chr), silent = TRUE)
+      if (!inherits(d, "try-error") && !is.na(d)) return(format(d, "%Y-%m-%d"))
+    })
+    NA_character_
+  }
+  
+  date_for_sample <- function(sample_name) {
+    if (is.null(meta_df)) return("unknown_date")
+    needed_cols <- c("sample", "ctime")
+    if (!all(needed_cols %in% names(meta_df))) return("unknown_date")
+    
+    # Normalize both sides
+    meta_sample_norm <- norm_tok(meta_df$sample)
+    needle <- norm_tok(sample_name)
+    
+    rows <- which(meta_sample_norm == needle)
+    
+    # If no exact normalized match, try partial match (e.g., "adults" within "adultsremote")
+    if (length(rows) == 0) {
+      rows <- which(grepl(needle, meta_sample_norm, fixed = TRUE))
+    }
+    if (length(rows) == 0) return("unknown_date")
+    
+    ctimes <- meta_df$ctime[rows]
+    for (ct in ctimes) {
+      ymd <- extract_ymd(ct)
+      if (!is.na(ymd) && nzchar(ymd)) return(ymd)
+    }
+    "unknown_date"
+  }
+  # --------------------------------------------------------------------------
   
   test_cols <- c("WCST_1", "LNS_1", "BACS_1")
   pick_id_col <- function(df) {
@@ -72,12 +78,10 @@ copy_psytool_files <- function(env_objects = NULL,
   env_objects <- as.character(env_objects)
   
   log_rows <- list()
-  today <- format(Sys.Date(), "%Y-%m-%d")
   
   for (obj in env_objects) {
     if (!exists(obj, envir = .GlobalEnv, inherits = FALSE)) next
     
-    # NEW NAME PATTERN: data_<sampleTag>_p_<project>_cogtest
     m <- regexec("^data_(.+)_p_([0-9]+)_cogtest$", obj)
     parts <- regmatches(obj, m)[[1]]
     if (length(parts) < 3) next
@@ -85,7 +89,7 @@ copy_psytool_files <- function(env_objects = NULL,
     sample_tag <- parts[2]
     project    <- parts[3]
     
-    # identify sample
+    # Identify sample from tag
     sample <- NA_character_
     for (s in valid_samples) {
       if (grepl(paste0("(^|_)", s, "(_|$)"), sample_tag, ignore.case = TRUE)) { sample <- s; break }
@@ -99,12 +103,13 @@ copy_psytool_files <- function(env_objects = NULL,
     df <- get(obj, envir = .GlobalEnv)
     if (!is.data.frame(df)) next
     
-    # Paths under out_root
+    # Use metadata-derived date (or "unknown_date")
+    date_tag <- date_for_sample(sample)
+    
     project_block  <- sprintf("%s_backbone", project)
     experiment_dir <- file.path(cogtest_out_path, project_block, "experiment_data")
     
-    # Dated destination folder (create if missing)
-    dated_folder_name <- sprintf("%s_%s_%s_cogtest_data", project, today, sample)
+    dated_folder_name <- sprintf("%s_%s_%s_cogtest_data", project, date_tag, sample)
     dest_dir <- file.path(experiment_dir, dated_folder_name)
     if (!dir.exists(dest_dir)) {
       dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
@@ -155,50 +160,13 @@ copy_psytool_files <- function(env_objects = NULL,
       }
     }
     
-    # Ensure experiment_data exists (for info/log files)
     if (!dir.exists(experiment_dir)) {
       dir.create(experiment_dir, recursive = TRUE, showWarnings = FALSE)
     }
   }
   
-  # Combine log and write per-project/sample info+csv into experiment_data
   log_df <- if (length(log_rows)) do.call(rbind, log_rows) else data.frame()
-  
-  if (nrow(log_df)) {
-    combo <- unique(log_df[c("project","sample","dest_dir_used")])
-    
-    for (k in seq_len(nrow(combo))) {
-      pj <- combo$project[k]
-      sm <- combo$sample[k]
-      dest_dir <- combo$dest_dir_used[k]
-      exp_dir <- dirname(dest_dir)  # experiment_data
-      
-      stem <- sprintf("%s_%s_%s", pj, today, sm)
-      info_path <- file.path(exp_dir, stem)
-      csv_path  <- file.path(exp_dir, paste0(stem, "_log.csv"))
-      
-      sub <- subset(log_df, project == pj & sample == sm)
-      counts <- sort(table(sub$status), decreasing = TRUE)
-      counts_line <- if (length(counts)) paste(sprintf("%s=%d", names(counts), as.integer(counts)), collapse = " | ") else "none"
-      
-      info_lines <- c(
-        paste0("project: ", pj),
-        paste0("sample: ", sm),
-        paste0("date: ", today),
-        paste0("dest_dir: ", dest_dir),
-        paste0("total_rows: ", nrow(sub)),
-        paste0("status_counts: ", counts_line)
-      )
-      writeLines(info_lines, con = info_path, useBytes = TRUE)
-      utils::write.csv(sub, csv_path, row.names = FALSE, na = "")
-      
-      message("Wrote info file: ", info_path)
-      message("Wrote log file : ", csv_path)
-      message("Data folder   : ", dest_dir)
-    }
-  } else {
-    message("No files processed — check env_objects and source data.")
-  }
-  
+  if (!nrow(log_df)) message("No files processed — check env_objects and source data.")
   invisible(log_df)
+
 }

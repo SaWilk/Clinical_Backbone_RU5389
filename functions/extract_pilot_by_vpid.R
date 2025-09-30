@@ -79,7 +79,7 @@ extract_pilot_by_vpid <- function(
   normalize_sample <- function(x) {
     x <- tolower(x)
     if (grepl("children_parents", x)) return("children_parents")
-    if (grepl("children", x)) return("children_parents")  # legacy -> new
+    if (grepl("children", x)) return("children_p6")  
     if (grepl("adolescents", x)) return("adolescents")
     if (grepl("adults", x)) return("adults")
     "unknown"
