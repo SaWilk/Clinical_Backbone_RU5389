@@ -33,7 +33,7 @@ script_dir <- tryCatch(dirname(rstudioapi::getSourceEditorContext()$path),
                        error = function(e) getwd())
 
 in_path      <- file.path(script_dir, "raw_data")
-info_path    <- file.path(script_dir, "information")
+info_path    <- file.path(script_dir, "private_information")
 
 # optional log dir for Project 8 special-case notes
 log_dir <- file.path(script_dir, "01_project_data", "logs")

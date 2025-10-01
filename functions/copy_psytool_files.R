@@ -10,11 +10,10 @@ copy_psytool_files <- function(env_objects = NULL,
     dir.create(cogtest_out_path, recursive = TRUE, showWarnings = FALSE)
   }
   
-  # Added "children_parents"
   valid_samples <- c("adults", "adolescents", "children", "children_parents", "adults_remote")
   sample_root <- function(sample) file.path(base_dir, "raw_data", "psytoolkit", sample, "experiment_data")
   
-  # -------- metadata helpers (more robust matching) --------------------------
+  # -------- metadata helpers --------------------------
   meta_df <- NULL
   if (!is.null(meta_env_name) && nzchar(meta_env_name) &&
       exists(meta_env_name, envir = .GlobalEnv, inherits = FALSE)) {
@@ -22,46 +21,124 @@ copy_psytool_files <- function(env_objects = NULL,
     if (is.data.frame(maybe_df)) meta_df <- maybe_df
   }
   
-  # Normalize tokens: lowercase, trim, remove separators so "children-parents"
-  # equals "children_parents" equals "children parents"
   norm_tok <- function(x) tolower(gsub("[^a-z0-9]+", "", trimws(as.character(x))))
   
+  # Robustly normalize anything resembling a date to "YYYY-MM-DD"
   extract_ymd <- function(x) {
     if (is.null(x) || length(x) == 0 || all(is.na(x))) return(NA_character_)
-    x_chr <- as.character(x[1])
-    m <- regexpr("\\d{4}-\\d{2}-\\d{2}", x_chr)
-    if (m[1] != -1) return(substr(x_chr, m[1], m[1] + attr(m, "match.length") - 1))
-    suppressWarnings({
-      ts <- try(as.POSIXct(x_chr, tz = "UTC"), silent = TRUE)
-      if (!inherits(ts, "try-error") && !is.na(ts)) return(format(ts, "%Y-%m-%d"))
-      d  <- try(as.Date(x_chr), silent = TRUE)
-      if (!inherits(d, "try-error") && !is.na(d)) return(format(d, "%Y-%m-%d"))
-    })
+    v <- x[[1L]]
+    
+    # If it's already a Date
+    if (inherits(v, "Date")) return(format(v, "%Y-%m-%d"))
+    
+    # If it's POSIXt (POSIXct / POSIXlt)
+    if (inherits(v, "POSIXt")) return(format(as.POSIXct(v, tz = "UTC"), "%Y-%m-%d"))
+    
+    # If it's numeric: try Unix epoch (sec or ms)
+    if (is.numeric(v) && is.finite(v)) {
+      num <- as.numeric(v)
+      # Heuristic: ms if very large; convert to seconds
+      if (num > 1e12) num <- num / 1000
+      if (num > 6e8 && num < 4e9) { # ~1989–2096 in seconds
+        ts <- as.POSIXct(num, origin = "1970-01-01", tz = "UTC")
+        if (!is.na(ts)) return(format(ts, "%Y-%m-%d"))
+      }
+    }
+    
+    # Character parsing
+    s <- trimws(as.character(v))
+    if (!nzchar(s)) return(NA_character_)
+    
+    # 1) Fast path: already contains an ISO-like date (keeps YYYY-MM-DD)
+    m <- regexpr("\\b\\d{4}-\\d{2}-\\d{2}\\b", s)
+    if (m[1] != -1) return(substr(s, m[1], m[1] + attr(m, "match.length") - 1))
+    
+    # 2) Flexible capture: YYYY[-./]M[-./]D → normalize with zero-padding
+    flex <- regexec("\\b(\\d{4})[-./](\\d{1,2})[-./](\\d{1,2})\\b", s)
+    parts <- regmatches(s, flex)[[1]]
+    if (length(parts) == 4) {
+      yyyy <- as.integer(parts[2]); mm <- as.integer(parts[3]); dd <- as.integer(parts[4])
+      if (is.finite(yyyy) && is.finite(mm) && is.finite(dd)) {
+        # validate by constructing a Date
+        suppressWarnings({
+          dt <- try(as.Date(sprintf("%04d-%02d-%02d", yyyy, mm, dd)), silent = TRUE)
+        })
+        if (!inherits(dt, "try-error") && !is.na(dt)) return(format(dt, "%Y-%m-%d"))
+      }
+    }
+    
+    # 3) Try common timestamp formats (ISO with space/T, with or w/o seconds)
+    fmts <- c(
+      "%Y-%m-%d %H:%M:%OS",
+      "%Y-%m-%dT%H:%M:%OS",
+      "%Y/%m/%d %H:%M:%OS",
+      "%Y.%m.%d %H:%M:%OS",
+      "%Y-%m-%d",
+      "%Y/%m/%d",
+      "%Y.%m.%d"
+    )
+    for (f in fmts) {
+      suppressWarnings({
+        ts <- try(as.POSIXct(s, format = f, tz = "UTC"), silent = TRUE)
+        if (!inherits(ts, "try-error") && !is.na(ts)) return(format(ts, "%Y-%m-%d"))
+        dt <- try(as.Date(s, format = f), silent = TRUE)
+        if (!inherits(dt, "try-error") && !is.na(dt)) return(format(dt, "%Y-%m-%d"))
+      })
+    }
+    
+    # nothing worked
     NA_character_
   }
   
+  
+  # 🔧 Enhanced version with warnings:
   date_for_sample <- function(sample_name) {
-    if (is.null(meta_df)) return("unknown_date")
-    needed_cols <- c("sample", "ctime")
-    if (!all(needed_cols %in% names(meta_df))) return("unknown_date")
+    # case 1: metadata not available
+    if (is.null(meta_df)) {
+      warning(sprintf(
+        "No metadata dataframe found for sample '%s' — using 'unknown_date'. Check that '%s' exists and is a data.frame.",
+        sample_name, meta_env_name
+      ))
+      return("unknown_date")
+    }
     
-    # Normalize both sides
+    needed_cols <- c("sample", "ctime")
+    # case 2: missing required columns
+    if (!all(needed_cols %in% names(meta_df))) {
+      warning(sprintf(
+        "Metadata dataframe for '%s' is missing required columns (%s) — using 'unknown_date'.",
+        sample_name, paste(setdiff(needed_cols, names(meta_df)), collapse = ", ")
+      ))
+      return("unknown_date")
+    }
+    
     meta_sample_norm <- norm_tok(meta_df$sample)
     needle <- norm_tok(sample_name)
-    
     rows <- which(meta_sample_norm == needle)
     
-    # If no exact normalized match, try partial match (e.g., "adults" within "adultsremote")
+    # case 3: no match at all
     if (length(rows) == 0) {
       rows <- which(grepl(needle, meta_sample_norm, fixed = TRUE))
+      if (length(rows) == 0) {
+        warning(sprintf(
+          "No matching rows found in metadata for sample '%s' — using 'unknown_date'.",
+          sample_name
+        ))
+        return("unknown_date")
+      }
     }
-    if (length(rows) == 0) return("unknown_date")
     
     ctimes <- meta_df$ctime[rows]
     for (ct in ctimes) {
       ymd <- extract_ymd(ct)
       if (!is.na(ymd) && nzchar(ymd)) return(ymd)
     }
+    
+    # case 4: rows found but no parsable date
+    warning(sprintf(
+      "Metadata found for sample '%s' but could not extract a valid date from column 'ctime' — using 'unknown_date'.",
+      sample_name
+    ))
     "unknown_date"
   }
   # --------------------------------------------------------------------------
@@ -89,7 +166,6 @@ copy_psytool_files <- function(env_objects = NULL,
     sample_tag <- parts[2]
     project    <- parts[3]
     
-    # Identify sample from tag
     sample <- NA_character_
     for (s in valid_samples) {
       if (grepl(paste0("(^|_)", s, "(_|$)"), sample_tag, ignore.case = TRUE)) { sample <- s; break }
@@ -103,7 +179,7 @@ copy_psytool_files <- function(env_objects = NULL,
     df <- get(obj, envir = .GlobalEnv)
     if (!is.data.frame(df)) next
     
-    # Use metadata-derived date (or "unknown_date")
+    # 🔧 this may now trigger a warning if unknown_date used
     date_tag <- date_for_sample(sample)
     
     project_block  <- sprintf("%s_backbone", project)
@@ -168,5 +244,4 @@ copy_psytool_files <- function(env_objects = NULL,
   log_df <- if (length(log_rows)) do.call(rbind, log_rows) else data.frame()
   if (!nrow(log_df)) message("No files processed — check env_objects and source data.")
   invisible(log_df)
-
 }

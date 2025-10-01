@@ -374,6 +374,31 @@ del_id_ad = c(59, 80) # Hendrik said they can be deleted as they are incomplete
 dat_adults <- dat_adults %>%
   dplyr::filter(!id %in% del_id_ad);
 
+# Project 6
+# removing all the datasets that were not recorded on teh same day as the test data for 62128. 
+keep_row_id <- dat_children_parents %>%
+  mutate(start_dt = as.POSIXct(startdate),
+         .row = row_number()) %>%
+  filter(vpid == 62128, form == "C") %>%
+  arrange(start_dt, .row) %>%
+  slice_head(n = 1) %>%
+  pull(.row)
+
+dat_children_parents <- dat_children_parents %>%
+  mutate(.row = row_number()) %>%
+  filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
+  select(-.row)
+
+
+# Project 8
+# removing the newer 80505 P questionnaire, following Johannes' suggestion
+dat_children_parents <- dat_children_parents %>%
+  mutate(startdate = as.Date(startdate)) %>%
+  group_by(vpid, form) %>%
+  filter(!(vpid == 80505 & form == "P" & startdate == max(startdate))) %>%
+  ungroup()
+
+# auto-remove and check for remaining duplicates 
 
 # Adults
 res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults");
@@ -399,11 +424,6 @@ res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_
 dat_children_parents <- res_children_parents$cleaned;
 trash_children_parents <- res_children_parents$trash_bin;
 
-# [children_parents] Multiple incomplete datasets for vpid=62128, form=C — please resolve manually.
-# TODO: Harry fragen
-# [children_parents] Multiple complete datasets for vpid=80505, form=P — please resolve manually.
-# Waiting for response from Johannes
-# TODO: remove the newer 80505
 
 # Project 6 children parents
 vp_col = "VPCode";
@@ -613,6 +633,7 @@ trash_adults <- res_adults$trash_bin;
 # ⚠️ [adults] Multiple complete datasets for id=30099 — please resolve manually.
 # ⚠️ [adults] Multiple complete datasets for id=30048 — please resolve manually.
 # ⚠️ [adults] Multiple complete datasets for id=30058 — please resolve manually.
+# TODO: resolve just like in questionnaire part. 
 
 # Adolescents
 res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adults");
