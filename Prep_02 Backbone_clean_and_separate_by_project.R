@@ -31,8 +31,7 @@ options(scipen = 999)  # disable scientific notation globally
 
 # Get Today ----------------------------------------------------------------
 
-
-today <- format(Sys.Date(), "%Y-%m-%d")  # "2025-08-28"
+today <- format(Sys.Date(), "%Y-%m-%d")
 
 ## Set working directory -------------------------------------------------------
 
@@ -74,7 +73,7 @@ source(file.path(function_path, "check_vpid_forms.R"))
 source(file.path(function_path, "find_pilot_ids.R"))
 source(file.path(function_path, "compare_vpcodes.R"))
 source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
-source(file.path(function_path, "check_meta_match.R"))
+source(file.path(function_path, "collect_ids_to_excel.R"))
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -389,7 +388,6 @@ dat_children_parents <- dat_children_parents %>%
   filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
   select(-.row)
 
-
 # Project 8
 # removing the newer 80505 P questionnaire, following Johannes' suggestion
 dat_children_parents <- dat_children_parents %>%
@@ -401,7 +399,7 @@ dat_children_parents <- dat_children_parents %>%
 # auto-remove and check for remaining duplicates 
 
 # Adults
-res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults");
+res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults", project_col);
 dat_adults <- res_adults$cleaned;
 trash_adults <- res_adults$trash_bin;
 
@@ -410,7 +408,7 @@ trash_adults <- res_adults$trash_bin;
 # Leo fragen, waiting for response...
 
 # Adolescents
-res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col, dataset_name = "adolescents");
+res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col, dataset_name = "adolescents", project_col);
 dat_adolescents <- res_adolescents$cleaned;
 trash_adolescents <- res_adolescents$trash_bin;
 
@@ -420,31 +418,22 @@ trash_adolescents <- res_adolescents$trash_bin;
 # Waiting for resonse from Ibrahim.... 
 
 # Children/Parents
-res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col, dataset_name = "children_parents");
+res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col, dataset_name = "children_parents", project_col);
 dat_children_parents <- res_children_parents$cleaned;
 trash_children_parents <- res_children_parents$trash_bin;
 
-
 # Project 6 children parents
 vp_col = "VPCode";
-res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, dataset_name = "children_p6");
+res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, submit_col, dataset_name = "children_p6", project_col, 13);
 dat_children_p6 <- res_children_p6$cleaned;
 trash_children_p6 <- res_children_p6$trash_bin
-res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, dataset_name = "children_p6");
+res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, submit_col, dataset_name = "parents_p6", project_col, 13);
 dat_parents_p6 <- res_parents_p6$cleaned;
 trash_parents_p6 <- res_parents_p6$trash_bin
 
 # Special Case Project 8: Check if all children_parents questionnaire sets have C, P and A entries ----
 
 check_vpid_forms(dat_children_parents)
-
-# ⚠️ vpid 80350:
-#   - Missing forms: A - PILOT
-# ⚠️ vpid 80505:
-#   - Duplicate forms: P
-# ⚠️ vpid 80516:
-#   - Missing forms: A
-# might simply not yet have been recorded. 
 
 
 # Save the Trash just to be safe ------------------------------------
@@ -486,6 +475,7 @@ id_col = NA; # careful - in psytoolkit information sheets, this is the vpid, in 
 # deleting it here to avoid confusion - there is also no equivalent in the psytoolkit 
 # output
 submit_col = "TIME_end";
+start_col = "TIME_start";
 
 # Fix issues with project assignment -------------------------------------------
 
@@ -554,8 +544,18 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psy
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] = 30019;
 
 # falsely named datasets
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 227 & psytool_info_adults[[project_col]] == PROJECT)] = 30047;
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 316 & psytool_info_adults[[project_col]] == PROJECT)] = 30057;
+psytool_info_adults <- psytool_info_adults %>%
+  group_by(id) %>%
+  mutate(
+    id = case_when(
+      id == "30048" & p == 3 & TIME_start == max(TIME_start) ~ "30047",
+      id == "30058" & p == 3 & TIME_start == max(TIME_start) ~ "30057",
+      TRUE ~ id
+    )
+  ) %>%
+  ungroup()
+
+
 
 # Project 8
 PROJECT = 8;
@@ -625,74 +625,39 @@ psytool_info_children <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 
+
+# Delete not needed, incomplete or faulty datasets ------------------------------------------
+
+# Project 3
+# Hendrik said they can be deleted 
+psytool_info_adults <- psytool_info_adults %>%
+  # Step 1: keep only columns where 'p' has a 3
+  filter(.data[[project_col]] == 3) %>%
+  # Step 2: for id 30009, keep only the latest TIME_start
+  group_by(.data[[vp_col]]) %>%
+  filter(!(.data[[vp_col]] == 30009 & .data[[start_col]] != max(.data[[start_col]]))) %>%
+  ungroup()
+
+
 # Adults
-res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col, dataset_name = "adults");
+res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col, dataset_name = "adults", project_col);
 psytool_info_adults <- res_adults$cleaned;
 trash_adults <- res_adults$trash_bin;
-# ⚠️ [adults] Multiple complete datasets for id=30009 — please resolve manually.
 # ⚠️ [adults] Multiple complete datasets for id=30099 — please resolve manually.
-# ⚠️ [adults] Multiple complete datasets for id=30048 — please resolve manually.
-# ⚠️ [adults] Multiple complete datasets for id=30058 — please resolve manually.
-# TODO: resolve just like in questionnaire part. 
+
 
 # Adolescents
-res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adults");
+res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adolescents", project_col);
 psytool_info_adolescents <- res_adolescents$cleaned;
 trash_adolescents <- res_adolescents$trash_bin;
 
 # Children
-res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col, dataset_name = "adults");
+res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col, dataset_name = "children", project_col);
 psytool_info_children <- res_children$cleaned;
 trash_children <- res_children$trash_bin;
 
 names(psytool_info_children)
 sum(length(psytool_info_children$p == 6))
-
-# Delete not needed, incomplete or faulty datasets ------------------------------------------
-# using list of "ids" that can be deleted
-# these are the entries in the output file, not the vp identifiers. 
-
-del_id_ad = c(59, 80) # Hendrik Heinbockel said they can be deleted as they are incomplete
-psytool_info_adults <- psytool_info_adults %>%
-  dplyr::filter(!id %in% del_id_ad)
-
-
-# Check if the VP IDs in Psytool (cognitive tests) align with the IDs of the questionnaire data (questionnaires) ------------
-
-all_sub_quest = c(psytool_info_adults$vpid, 
-                  psytool_info_children$vpid,
-                  psytool_info_adolescents$vpid);
-
-all_sub_quest <- all_sub_quest[!(is.na(all_sub_quest) | all_sub_quest == "")]
-
-idx_vec = which(!(all_sub_quest %in% dat_general$vpid))
-
-no_general_ids = all_sub_quest[idx_vec]
-# no IDs inconsistent
-
-all_sub_test = c(psytool_info_adults$id, 
-                 psytool_info_children$id,
-                 psytool_info_adolescents$id);
-all_sub_test <- all_sub_test[!(is.na(all_sub_test) | all_sub_test == "")]
-
-idx_vec_test = which(!(all_sub_test %in% all_sub_quest))
-no_quest_ids = all_sub_test[idx_vec_test]
-
-
-no_quest_ids # <- these have to be fixed - they seem to have no questionnaire data.
-# [1] "8008"     "219"      "30019"    "1001_A"   "1001"     "P7_100"   "30055"    "42"       "P7_14"    "P7_100"   "30080"   
-# [12] "1001"     "P7"       "42"       "P7_001_A" "1001"     "p8_1001"  "62102"    "62989"    "62006"    "62110"    "62020"   
-# [23] "62009"    "62023"    "62998"    "62012"    "62103"    "62003"    "62102"    "62992"    "79999"     
-
-
-idx_vec_quest = which(!(all_sub_quest %in% all_sub_test ))
-no_test_ids = all_sub_quest[idx_vec_quest]
-
-no_test_ids # <- also these - they seem to have no cognitive test data
-# [1] "79001"  "79002"  "79003"  "79004"  "79005"  "79006"  "79007"  "79008"  "79009"  "79010"  "79011"  "79012"  "79013"  "79014" 
-# [15] "79015"  "50201"  "50001"  "50002"  "50003"  "50004"  "50005"  "50006"  "50007"  "50008"  "50009"  "50010"  "50011"  "50012" 
-# [29] "50013"  "50014"  "50015"  "9901"   "99017"  "50202"  "50204"  "70101"  "70101"  "70101"  "2051"   "30086"  "30085"  "{vpid}"
-# [43] "30087"  "{vpid}" "62044"  "62124"  "78050"  "70001"  "70001"  "70087"  "70087" 
 
 
 # Separate the data by project and store on disk ------------------------------
@@ -707,11 +672,40 @@ separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", d
 
 copy_psytool_files(cogtest_out_path = out_path, meta_env_name = "cogtest_info")
 
-check_meta_match("adults", "cogtest_info")
-check_meta_match("adolescents", "cogtest_info")
-check_meta_match("children_parents", "cogtest_info")
 
-exists("cogtest_info", inherits = TRUE)
-str(cogtest_info[, c("sample","ctime")])
-unique(cogtest_info$sample)
+## Print the final list of IDs to Disk
+
+
+collect_ids_to_excel(
+  meta_data = quest_info,
+  dat_adults,
+  dat_adolescents,
+  dat_children_parents,
+  dat_children_p6,
+  dat_parents_p6,
+  id_col = "vpid",
+  project_col = "project",
+  data_type = "questionnaire"
+)
+# TODO: why is there a project 3 observation in children_parents?
+
+collect_ids_to_excel(
+  meta_data = quest_info,
+  dat_children_p6,
+  dat_parents_p6,
+  id_col = "VPCode",
+  project_col = NULL,
+  data_type = "questionnaire_p6"
+)
+
+collect_ids_to_excel(
+  meta_data = cogtest_info,
+  psytool_info_adults,
+  psytool_info_adolescents,
+  psytool_info_children,
+  id_col = "id",
+  project_col = "p",
+  data_type = "cogtest"
+)
+# TODO: find out why so many adults are missing from the cognitive tests
 

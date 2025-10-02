@@ -64,37 +64,41 @@
 #   trash_adults <- res$trash_bin
 #
 # -------------------------------------------------------------------------
-
 resolve_duplicates <- function(df,
                                vp_col,
                                submit_col = "submitdate",
                                dataset_name = "dataset",
-                               lastpage_threshold = 17) {
-  # required columns
+                               lastpage_threshold = 17,
+                               project_col = "project") {
+  # --- Required columns check ---
   if (!all(c(vp_col, submit_col) %in% names(df))) {
     stop(sprintf("[%s] Missing required columns. Need at least: %s, %s",
                  dataset_name, vp_col, submit_col))
   }
+  
   has_lastpage <- "lastpage" %in% names(df)
+  has_project <- !is.null(project_col) && (project_col %in% names(df))
+  has_form <- "form" %in% names(df)
   
-  if (dataset_name == "children_parents" && !"project" %in% names(df)) {
-    stop("[children_parents] Missing required column: project")
-  }
-  if (dataset_name == "children_parents" && !"form" %in% names(df)) {
-    stop("[children_parents] Missing required column: form")
+  # --- children_parents special rules ---
+  if (dataset_name == "children_parents") {
+    if (!has_form) {
+      stop("[children_parents] Missing required column: form")
+    }
+    # ✅ no longer require project column — just warn if missing
+    if (!has_project) {
+      warning("[children_parents] No project column found — skipping project-based disambiguation.")
+    }
   }
   
-  # helper flags
+  # --- Helper flags ---
   has_submit <- function(x) !is.na(x) & trimws(as.character(x)) != ""
   df$.__has_submit__. <- has_submit(df[[submit_col]])
-  if (has_lastpage) {
-    df$.__lp_num__. <- suppressWarnings(as.numeric(df$lastpage))
-  } else {
-    df$.__lp_num__. <- NA_real_
-  }
+  df$.__lp_num__. <- if (has_lastpage) suppressWarnings(as.numeric(df$lastpage)) else NA_real_
+  
   id_chr <- trimws(as.character(df[[vp_col]]))
   
-  # ignore rows with missing/empty ID AND incomplete
+  # --- Ignore empty IDs with incomplete data ---
   ignore_idx <- which(
     (is.na(id_chr) | id_chr == "") &
       !df$.__has_submit__. &
@@ -103,13 +107,18 @@ resolve_duplicates <- function(df,
   keep_flag <- rep(TRUE, nrow(df))
   keep_flag[ignore_idx] <- FALSE
   
-  # grouping key
+  # --- Build grouping key ---
   key <- id_chr
-  need_form_disambig <- (dataset_name == "children_parents") & !is.na(df$project) & df$project == 8
-  if (any(need_form_disambig)) {
-    form_chr <- if ("form" %in% names(df)) trimws(as.character(df$form)) else NA_character_
-    key_cp8 <- paste(id_chr, form_chr, sep = "||")
-    key[need_form_disambig] <- key_cp8[need_form_disambig]
+  
+  # children_parents: disambiguate by form if project == 8
+  if (dataset_name == "children_parents" && has_project) {
+    proj_num <- suppressWarnings(as.numeric(df[[project_col]]))
+    need_form_disambig <- !is.na(proj_num) & proj_num == 8
+    if (any(need_form_disambig)) {
+      form_chr <- trimws(as.character(df$form))
+      key_cp8 <- paste(id_chr, form_chr, sep = "||")
+      key[need_form_disambig] <- key_cp8[need_form_disambig]
+    }
   }
   
   nonempty_key <- !(is.na(id_chr) | id_chr == "")
@@ -118,18 +127,17 @@ resolve_duplicates <- function(df,
   trash_bin <- df[0, , drop = FALSE]
   trash_bin$.__reason__. <- character(0)
   
+  # --- Main duplicate resolution loop ---
   for (k in dup_keys) {
     idx <- which(key == k)
-    
     id_vals <- unique(id_chr[idx])
     id_lab <- if (length(id_vals) == 1) id_vals else paste(id_vals, collapse = ",")
-    form_vals <- if ("form" %in% names(df)) unique(trimws(as.character(df$form[idx]))) else NA_character_
+    form_vals <- if (has_form) unique(trimws(as.character(df$form[idx]))) else NA_character_
     form_lab <- if (!all(is.na(form_vals)) && length(form_vals) == 1) form_vals else NA
-    
     n_submit <- sum(df$.__has_submit__.[idx], na.rm = TRUE)
     
     if (n_submit == 1) {
-      # keep the one complete, remove the rest
+      # Keep the complete row, drop others
       keeper <- idx[df$.__has_submit__.[idx]]
       losers <- setdiff(idx, keeper)
       if (length(losers) > 0) {
@@ -145,7 +153,7 @@ resolve_duplicates <- function(df,
       }
       
     } else if (n_submit > 1) {
-      # remove all incomplete rows, keep all complete ones
+      # Keep all complete, drop all incomplete
       incompletes <- idx[!df$.__has_submit__.[idx]]
       if (length(incompletes) > 0) {
         keep_flag[incompletes] <- FALSE
@@ -167,7 +175,7 @@ resolve_duplicates <- function(df,
       }
       
     } else {
-      # no submit_col
+      # No submits: use lastpage if available
       if (has_lastpage) {
         high_lp <- idx[which(df$.__lp_num__.[idx] > lastpage_threshold)]
         if (length(high_lp) == 1) {
@@ -184,36 +192,25 @@ resolve_duplicates <- function(df,
             tb$.__reason__. <- msg
             trash_bin <- rbind(trash_bin, tb)
           }
-        } else if (length(high_lp) > 1) {
-          if (!is.na(form_lab)) {
-            message(sprintf("⚠️ [%s] Multiple incomplete datasets with lastpage > %s for %s=%s, form=%s — please resolve manually.",
-                            dataset_name, lastpage_threshold, vp_col, id_lab, form_lab))
-          } else {
-            message(sprintf("⚠️ [%s] Multiple incomplete datasets with lastpage > %s for %s=%s — please resolve manually.",
-                            dataset_name, lastpage_threshold, vp_col, id_lab))
-          }
         } else {
-          if (!is.na(form_lab)) {
-            message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s, form=%s — please resolve manually.",
-                            dataset_name, vp_col, id_lab, form_lab))
-          } else {
-            message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s — please resolve manually.",
-                            dataset_name, vp_col, id_lab))
-          }
+          # Multiple or none: warn
+          msg_base <- sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s",
+                              dataset_name, vp_col, id_lab)
+          msg_form <- if (!is.na(form_lab)) paste0(msg_base, ", form=", form_lab) else msg_base
+          msg_lp <- if (length(high_lp) > 1) paste0(msg_form, " with lastpage > threshold") else msg_form
+          message(msg_lp, " — please resolve manually.")
         }
       } else {
-        # no lastpage column at all
-        if (!is.na(form_lab)) {
-          message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s, form=%s (no lastpage column) — please resolve manually.",
-                          dataset_name, vp_col, id_lab, form_lab))
-        } else {
-          message(sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s (no lastpage column) — please resolve manually.",
-                          dataset_name, vp_col, id_lab))
-        }
+        # No lastpage column
+        msg_base <- sprintf("⚠️ [%s] Multiple incomplete datasets for %s=%s (no lastpage column)",
+                            dataset_name, vp_col, id_lab)
+        msg_form <- if (!is.na(form_lab)) paste0(msg_base, ", form=", form_lab) else msg_base
+        message(msg_form, " — please resolve manually.")
       }
     }
   }
   
+  # --- Cleanup ---
   cleaned <- df[keep_flag, , drop = FALSE]
   cleaned$.__has_submit__. <- NULL
   cleaned$.__lp_num__. <- NULL
