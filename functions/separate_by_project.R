@@ -1,12 +1,14 @@
-separate_by_project <- function(df,
-                                out_path = NULL,
-                                sample = NULL,
-                                export_csv = FALSE,
-                                data_type = c("questionnaires", "experiment_data"),
-                                metadata_info = NULL,   # optional
-                                dry_run = FALSE,
-                                verbose = TRUE) {
-  data_type  <- match.arg(data_type)
+separate_by_project <- function(
+    df,
+    out_path = NULL,
+    sample = NULL,
+    export_csv = FALSE,
+    data_type = c("questionnaires", "experiment_data"),
+    metadata_info = NULL, # optional
+    dry_run = FALSE,
+    verbose = TRUE
+) {
+  data_type <- match.arg(data_type)
   export_csv <- isTRUE(export_csv)
   
   # ----- resolve base directory -----
@@ -106,7 +108,6 @@ separate_by_project <- function(df,
   
   # ----- metadata (optional) -----
   date_str <- "unknown_date"
-  
   if (is.null(metadata_info)) {
     warning("No 'metadata_info' provided; using 'unknown_date' in filenames.")
   } else {
@@ -125,7 +126,6 @@ separate_by_project <- function(df,
       }
       stop("metadata_info must be a data.frame or a path to a .csv/.xlsx file.")
     }
-    
     ok <- TRUE
     meta_df <- tryCatch(load_metadata(metadata_info), error = function(e) { warning(conditionMessage(e)); return(NULL) })
     if (is.null(meta_df)) {
@@ -133,9 +133,8 @@ separate_by_project <- function(df,
     } else if (!all(c("sample", "ctime") %in% names(meta_df))) {
       ok <- FALSE; warning("Metadata missing 'sample'/'ctime'; using 'unknown_date'.")
     }
-    
     if (ok) {
-      ms  <- tolower(as.character(meta_df$sample))
+      ms <- tolower(as.character(meta_df$sample))
       idx <- which(ms == tolower(sample_name))
       if (length(idx) == 0) {
         warning("No metadata match for sample='", sample_name, "'; using 'unknown_date'.")
@@ -159,24 +158,26 @@ separate_by_project <- function(df,
   
   # ----- suffixes -----
   file_suffix <- if (data_type == "experiment_data") "cogtests" else "questionnaire"
-  env_suffix  <- if (data_type == "experiment_data") "cogtest"  else "questionnaire"
+  env_suffix  <- if (data_type == "experiment_data") "cogtest" else "questionnaire"
   subfolder   <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
   
-  # ----- project parsing -----
+  # ----- project parsing/helpers -----
   parse_project <- function(lbl) {
     s <- trimws(as.character(lbl))
     digits <- gsub("\\D+", "", s)
     list(pid = ifelse(nzchar(digits), digits, "unknown"))
   }
   is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
-  ensure_dir  <- function(path) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  ensure_dir <- function(path) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  
+  # ====== NEW: collect output directories ======
+  collected_dirs <- character(0)
   
   # ----- split & write -----
   parts <- split(df, df[[proj_col]], drop = TRUE)
   for (lbl in names(parts)) {
     d <- parts[[lbl]]
     pid_clean <- parse_project(lbl)$pid
-    
     varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
     assign(varname, d, envir = .GlobalEnv)
     
@@ -184,14 +185,21 @@ separate_by_project <- function(df,
     
     pid_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean), subfolder)
     ensure_dir(pid_dir)
-    
     base <- sprintf("%s_%s_%s_%s", pid_clean, date_str, sample_name, file_suffix)
+    
     if (!dry_run) {
       if (export_csv) utils::write.csv(d, file.path(pid_dir, paste0(base, ".csv")), row.names = FALSE, na = "")
       writexl::write_xlsx(d, file.path(pid_dir, paste0(base, ".xlsx")))
     }
     if (verbose) message("Saved: ", file.path(pid_dir, paste0(base, ".xlsx")), " | env: ", varname)
+    
+    # ====== NEW: record the directory ======
+    collected_dirs <- c(collected_dirs, pid_dir)
   }
   
-  invisible(TRUE)
+  # Return unique paths as a character vector (named by project id for convenience)
+  collected_dirs <- unique(collected_dirs)
+  names(collected_dirs) <- basename(dirname(collected_dirs)) # e.g., "123_backbone"
+  
+  return(collected_dirs)
 }

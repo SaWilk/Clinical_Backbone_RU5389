@@ -21,7 +21,7 @@ cat("\014")
 # install packages
 if(!require("dplyr")){install.packages("dplyr")};library(dplyr)
 if(!require("tidyr")){install.packages("tidyr")};library(tidyr)
-if(!require("writexl")){install.packages("writexl")};library(tidyr)
+if(!require("writexl")){install.packages("writexl")};library(writexl)
 if(!require("openxlsx")){install.packages("openxlsx")};library(openxlsx)
 
 
@@ -61,7 +61,81 @@ if (!dir.exists(discarded_path)) {
   dir.create(discarded_path, recursive = TRUE)
 }
 
-## Source required functions --------------------
+
+## Setup Logging ---------------------------------------------------------------
+
+create_logger <- function(log_path,
+                          append = TRUE,
+                          with_timestamp = TRUE,
+                          enforce_code = TRUE) {
+  dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
+  con <- file(log_path, open = if (append) "a" else "w", blocking = TRUE)
+  
+  write_line <- function(text) {
+    if (enforce_code && !grepl("\\b\\d{5}\\b", text)) {
+      stop("Each log line must contain a 5-digit code (e.g., 01234). Found: ", text)
+    }
+    ts <- if (with_timestamp) paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ") else ""
+    line <- paste0(ts, text)
+    writeLines(line, con = con)
+    flush(con)
+    invisible(line)
+  }
+  
+  split_into_sublogs <- function(dest_map,
+                                 pattern = "\\b\\d{5}\\b",
+                                 file_namer = function(d) sprintf("sublog_%s.log", d),
+                                 overwrite = TRUE) {
+    if (is.null(names(dest_map)) || any(!names(dest_map) %in% as.character(0:9))) {
+      stop("dest_map must be a named vector/list with names '0'..'9'")
+    }
+    if (!file.exists(log_path)) stop("Log file not found: ", log_path)
+    
+    lines <- readLines(log_path, warn = FALSE)
+    buckets <- setNames(vector("list", 10), as.character(0:9))
+    
+    for (ln in lines) {
+      m <- regexpr(pattern, ln)
+      if (m[1] > 0) {
+        code <- substr(ln, m[1], m[1] + attr(m, "match.length") - 1)
+        first_digit <- substr(code, 1, 1)
+        if (!is.null(dest_map[[first_digit]])) {
+          buckets[[first_digit]] <- c(buckets[[first_digit]], ln)
+        }
+      }
+    }
+    
+    out_paths <- list()
+    for (d in names(dest_map)) {
+      shard_lines <- buckets[[d]]
+      if (length(shard_lines)) {
+        dir.create(dest_map[[d]], recursive = TRUE, showWarnings = FALSE)
+        out_file <- file.path(dest_map[[d]], file_namer(d))
+        if (file.exists(out_file) && !overwrite) stop("File exists: ", out_file)
+        writeLines(shard_lines, out_file)
+        out_paths[[d]] <- out_file
+      }
+    }
+    invisible(out_paths)
+  }
+  
+  close_logger <- function() close(con)
+  
+  list(
+    path = normalizePath(log_path, mustWork = FALSE),
+    write = write_line,
+    split = split_into_sublogs,
+    close = close_logger
+  )
+}
+
+
+
+# 1️⃣ Create logger
+logger <- create_logger("logs/all_action_points.log")
+
+
+## Source required functions ---------------------------------------------------
 
 source(file.path(function_path, "separate_by_project.R"))
 source(file.path(function_path, "remove_test_rows.R"))
@@ -74,6 +148,12 @@ source(file.path(function_path, "find_pilot_ids.R"))
 source(file.path(function_path, "compare_vpcodes.R"))
 source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
 source(file.path(function_path, "collect_ids_to_excel.R"))
+source(file.path(function_path, "move_old_backbones.R"))
+
+
+## Move old Data ---------------------------------------------------------------
+
+move_old_backbones(out_path, dry_run = FALSE)  
 
 
 ## Backbone surveys ------------------------------------------------------------
@@ -139,9 +219,9 @@ psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolesce
 psytool_info_children <- remove_test_rows(psytool_info_children, "Children", dat_general)
 
 
-##########################################################################
-## Data Cleaning for Questionnaire Data ----------------------------------
-##########################################################################
+################################################################################
+## Data Cleaning for Questionnaire Data ----------------------------------------
+################################################################################
 
 # Set column name variables ----------------------------------------------------
 
@@ -399,7 +479,7 @@ dat_children_parents <- dat_children_parents %>%
 # auto-remove and check for remaining duplicates 
 
 # Adults
-res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults", project_col);
+res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col, dataset_name = "adults", data_type = "questionnaire", project_col, logger = logger);
 dat_adults <- res_adults$cleaned;
 trash_adults <- res_adults$trash_bin;
 
@@ -408,7 +488,7 @@ trash_adults <- res_adults$trash_bin;
 # Leo fragen, waiting for response...
 
 # Adolescents
-res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col, dataset_name = "adolescents", project_col);
+res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col, dataset_name = "adolescents", data_type = "questionnaire", project_col, logger = logger);
 dat_adolescents <- res_adolescents$cleaned;
 trash_adolescents <- res_adolescents$trash_bin;
 
@@ -418,16 +498,16 @@ trash_adolescents <- res_adolescents$trash_bin;
 # Waiting for resonse from Ibrahim.... 
 
 # Children/Parents
-res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col, dataset_name = "children_parents", project_col);
+res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col, dataset_name = "children_parents", data_type = "questionnaire", project_col, logger = logger);
 dat_children_parents <- res_children_parents$cleaned;
 trash_children_parents <- res_children_parents$trash_bin;
 
 # Project 6 children parents
 vp_col = "VPCode";
-res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, submit_col, dataset_name = "children_p6", project_col, 13);
+res_children_p6 <- resolve_duplicates(dat_children_p6, vp_col, submit_col, dataset_name = "children_p6", data_type = "questionnaire", project_col, 13, logger = logger);
 dat_children_p6 <- res_children_p6$cleaned;
 trash_children_p6 <- res_children_p6$trash_bin
-res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, submit_col, dataset_name = "parents_p6", project_col, 13);
+res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, submit_col, dataset_name = "parents_p6", data_type = "questionnaire", project_col, 13, logger = logger);
 dat_parents_p6 <- res_parents_p6$cleaned;
 trash_parents_p6 <- res_parents_p6$trash_bin
 
@@ -436,7 +516,7 @@ trash_parents_p6 <- res_parents_p6$trash_bin
 check_vpid_forms(dat_children_parents)
 
 
-# Save the Trash just to be safe ------------------------------------
+# Save the Trash just to be safe -----------------------------------------------
 
 # build combined dfs
 all_trash_adults       <- rbind(all_empty_ad, trash_adults)
@@ -489,7 +569,7 @@ psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)
 psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)] = 9;
 
 
-# Remove empty Rows --------------------------------------------------------
+# Remove empty Rows ------------------------------------------------------------
 
 
 list_output <- remove_empty_obs_psytoolkit(psytool_info_adults)
@@ -509,7 +589,7 @@ no_id_ch = list_output$no_id;       # id missing
 empty_rows_ch = list_output$empty; # rows that were dropped
 
 
-# Fix ID naming issues --------------------------------------------------------
+# Fix ID naming issues ---------------------------------------------------------
 
 # Project 2
 PROJECT = 2;
@@ -625,14 +705,11 @@ psytool_info_children <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 
-
-# Delete not needed, incomplete or faulty datasets ------------------------------------------
+# Delete not needed, incomplete or faulty datasets -----------------------------
 
 # Project 3
 # Hendrik said they can be deleted 
 psytool_info_adults <- psytool_info_adults %>%
-  # Step 1: keep only columns where 'p' has a 3
-  filter(.data[[project_col]] == 3) %>%
   # Step 2: for id 30009, keep only the latest TIME_start
   group_by(.data[[vp_col]]) %>%
   filter(!(.data[[vp_col]] == 30009 & .data[[start_col]] != max(.data[[start_col]]))) %>%
@@ -640,32 +717,80 @@ psytool_info_adults <- psytool_info_adults %>%
 
 
 # Adults
-res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col, dataset_name = "adults", project_col);
+res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col, dataset_name = "adults", data_type = "experiment_data", project_col, logger = logger);
 psytool_info_adults <- res_adults$cleaned;
 trash_adults <- res_adults$trash_bin;
 # ⚠️ [adults] Multiple complete datasets for id=30099 — please resolve manually.
 
 
 # Adolescents
-res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adolescents", project_col);
+res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col, dataset_name = "adolescents", data_type = "experiment_data", project_col, logger = logger);
 psytool_info_adolescents <- res_adolescents$cleaned;
 trash_adolescents <- res_adolescents$trash_bin;
 
 # Children
-res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col, dataset_name = "children", project_col);
+res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col, dataset_name = "children", data_type = "experiment_data", project_col, logger = logger);
 psytool_info_children <- res_children$cleaned;
 trash_children <- res_children$trash_bin;
 
-names(psytool_info_children)
-sum(length(psytool_info_children$p == 6))
 
-
-# Separate the data by project and store on disk ------------------------------
+# Separate the data by project and store on disk -------------------------------
 
 # Cognitive Tests  
-separate_by_project(psytool_info_adults, cogtest_out_path, "adults", data_type = "experiment_data", metadata_info = cogtest_info)
-separate_by_project(psytool_info_children, cogtest_out_path, "children_parents", data_type = "experiment_data", metadata_info = cogtest_info)
-separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", data_type = "experiment_data", metadata_info = cogtest_info)
+adult_paths = separate_by_project(psytool_info_adults, cogtest_out_path, "adults", data_type = "experiment_data", metadata_info = cogtest_info)
+children_paths = separate_by_project(psytool_info_children, cogtest_out_path, "children_parents", data_type = "experiment_data", metadata_info = cogtest_info)
+adolescents_paths = separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", data_type = "experiment_data", metadata_info = cogtest_info)
+# TODO: cogtest_out_path isn't used for anything, right?
+
+path_components = unlist(strsplit(adult_paths[1], .Platform$file.sep))
+path_length = length(path_components);
+all_path_components = unlist(strsplit(adult_paths, .Platform$file.sep))
+
+# given: all_path_components (character vector), path_length (integer)
+
+n <- floor(length(all_path_components) / path_length)
+stopifnot(n > 0)
+
+# reshape components into rows of length `path_length`
+m <- matrix(all_path_components[seq_len(n * path_length)],
+            nrow = n, byrow = TRUE)
+
+# everything except the last element of each row
+proj_folders <- m[, 1:(path_length - 1), drop = FALSE]
+
+# first character of the (path_length-1)-th element in each row
+proj_numbers <- substr(m[, path_length - 1], 1, 1)
+
+# 1) Collapse each row of components into a full folder path
+project_folder <- apply(
+  proj_folders, 1,
+  function(parts) do.call(file.path, as.list(parts))
+)
+
+# 2) Make sure the first-digit keys are character
+proj_keys <- as.character(proj_numbers)
+
+# 3) Build the named character vector for logger$split()
+dest_dirs <- stats::setNames(project_folder, proj_keys)
+
+# Step 4: remove existing .log files if they exist
+for (dir in dest_dirs) {
+  if (dir.exists(dir)) {
+    # find all files ending with .log
+    log_files <- list.files(dir, pattern = "\\.log$", full.names = TRUE)
+    if (length(log_files) > 0) {
+      message("Removing existing log files in: ", dir)
+      file.remove(log_files)
+    }
+  }
+}
+
+# 5) Your existing write and split calls
+writexl::write_xlsx(psytool_info_adults, file.path(getwd(), paste0("test", ".xlsx")))
+logger$split(dest_dirs)
+
+# 4️⃣ Close when done
+logger$close()
 
 
 ## Get the Experimental Data Sets Associated with the project ------------------
@@ -673,8 +798,7 @@ separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents", d
 copy_psytool_files(cogtest_out_path = out_path, meta_env_name = "cogtest_info")
 
 
-## Print the final list of IDs to Disk
-
+## Print the final list of IDs to Disk -----------------------------------------
 
 collect_ids_to_excel(
   meta_data = quest_info,
