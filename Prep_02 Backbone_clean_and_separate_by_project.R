@@ -65,7 +65,7 @@ if (!dir.exists(discarded_path)) {
 ## Setup Logging ---------------------------------------------------------------
 
 create_logger <- function(log_path,
-                          append = TRUE,
+                          append = FALSE,
                           with_timestamp = TRUE,
                           enforce_code = TRUE) {
   dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
@@ -130,7 +130,6 @@ create_logger <- function(log_path,
 }
 
 
-
 # 1️⃣ Create logger
 logger <- create_logger("logs/all_action_points.log")
 
@@ -182,11 +181,9 @@ quest_info[3, ] <- c(file.info(file.path(name,in_path, file_children_parents)), 
 quest_info[4, ] <- c(file.info(file.path(name,in_path, file_parents_p6)), "parents_p6");
 quest_info[5, ] <- c(file.info(file.path(name,in_path, file_children_p6)), "children_p6");
 
-
 # Data Overview
 file_general <- "results-survey415148.csv"
 dat_general <- read.csv(file.path(name,in_path, file_general), sep = ";")
-
 
 # Psytoolkit Tests
 file_psytool_info = "data.csv";
@@ -196,7 +193,6 @@ psytool_info_children <- read.csv(file.path(name, psytool_path, "children", file
 #psytool_info_adults_remote <- read.csv(file.path(name, psytool_path, "adults_remote", file_psytool_info))
 # seems unimportant, only test data. 
 psytool_info_adolescents <- read.csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
-
 
 # get metadata
 cogtest_info <- file.info(file.path(name, psytool_path, "adults", file_psytool_info));
@@ -258,20 +254,23 @@ PROJECT = 3;
 # adult
 empty_ad_3 = dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ];
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ];
+# children
+empty_ch_3 = dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ];
+dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ];
 
 # Project 6
 # these are different questionnaires
-LAST_P_EMPTY = 3;
+LAST_P_EMPTY = 3; # different questionnaire
 # children
 empty_ch_6 = dat_children_p6[which(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
 dat_children_p6 <- dat_children_p6[!(dat_children_p6[[last_page]] < LAST_P_EMPTY), ];
-LAST_P_EMPTY = 3;
 # parents
 empty_p_6 = dat_parents_p6[which(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
 dat_parents_p6 <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ];
 
 # Project 7
 PROJECT = 7;
+LAST_P_EMPTY = 6; # back to original questionnaire
 # adult
 empty_ad_7 = dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ];
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
@@ -300,9 +299,11 @@ dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT & (dat_adults[[l
 
 # put them into a list
 ads <- list(empty_ad_3, empty_ad_7, empty_ad_8, empty_ad_9);
+ch = list(empty_ch_3, empty_ch_8)
 
 # keep only the non-empty ones
 ads_non_empty <- ads[lengths(ads) > 0];
+chs_non_empty <- ch[lengths(ch) > 0];
 
 # bind them together (if any left)
 all_empty_ad <- if (length(ads_non_empty) > 0) {
@@ -311,9 +312,15 @@ all_empty_ad <- if (length(ads_non_empty) > 0) {
   data.frame()  # return empty df if all were empty
 }
 
+all_empty_ch = if (length(chs_non_empty) > 0) {
+  do.call(rbind, chs_non_empty);
+} else {
+  data.frame()  # return empty df if all were empty
+}
+
 # saving it so I can write to disk later on in the script
 all_empty_ad$.__reason__. = "empty";
-empty_ch_8$.__reason__. = "empty";
+all_empty_ch$.__reason__. = "empty";
 empty_adlsc_7$.__reason__. = "empty";
 
 
@@ -336,6 +343,7 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2046 & dat_adults[[project_co
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2048 & dat_adults[[project_col]] == PROJECT)] = 20048;
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2051 & dat_adults[[project_col]] == PROJECT)] = 20051;
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2052 & dat_adults[[project_col]] == PROJECT)] = 20052;
+
 # Project 3
 PROJECT = 3;
 # assuming a 0 (or many) 0s are missing
@@ -371,7 +379,6 @@ dat_children_parents <- correct_child_vpids(dat_children_parents,
 pilots_ad_auto = find_pilot_ids(dat_general, dat_adults)
 pilots_asc_auto = find_pilot_ids(dat_general, dat_adolescents)
 pilots_ch_auto = find_pilot_ids(dat_general, dat_children_parents)
-
 
 pilot_ad_2 = c(20004);
 pilot_ad_9 = c();
@@ -520,7 +527,7 @@ check_vpid_forms(dat_children_parents)
 
 # build combined dfs
 all_trash_adults       <- rbind(all_empty_ad, trash_adults)
-all_trash_children     <- rbind(empty_ch_8, trash_children_parents)
+all_trash_children     <- rbind(all_empty_ch, trash_children_parents)
 all_trash_adolescents  <- rbind(empty_adlsc_7, trash_adolescents)
 
 
@@ -570,7 +577,6 @@ psytool_info_adults[[project_col]][which(psytool_info_adults[[vp_col]] == 99017)
 
 
 # Remove empty Rows ------------------------------------------------------------
-
 
 list_output <- remove_empty_obs_psytoolkit(psytool_info_adults)
 psytool_info_adults = list_output$kept;    # cleaned dataframe
@@ -635,13 +641,10 @@ psytool_info_adults <- psytool_info_adults %>%
   ) %>%
   ungroup()
 
-
-
 # Project 8
 PROJECT = 8;
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] = 30002;
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 800028 & psytool_info_adults[[project_col]] == PROJECT)] = 80028;
-
 
 # Project 9
 # assuming a 0 (or many) 0s are missing
@@ -784,6 +787,7 @@ for (dir in dest_dirs) {
     }
   }
 }
+# TODO: find a way to truly empty the log files
 
 # 5) Your existing write and split calls
 writexl::write_xlsx(psytool_info_adults, file.path(getwd(), paste0("test", ".xlsx")))
@@ -831,5 +835,3 @@ collect_ids_to_excel(
   project_col = "p",
   data_type = "cogtest"
 )
-# TODO: find out why so many adults are missing from the cognitive tests
-

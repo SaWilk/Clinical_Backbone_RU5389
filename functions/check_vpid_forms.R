@@ -26,27 +26,54 @@ library(dplyr)
 #   check_vpid_forms(dat_children_parents)
 #
 # -------------------------------------------------------------------------
-check_vpid_forms <- function(dat_children_parents) {
+check_vpid_forms <- function(dat_children_parents,
+                             logger = NULL,
+                             dataset_name = "dat_children_parents",
+                             data_type = "forms") {
   required_forms <- c("A", "C", "P")
   
-  dat_children_parents %>%
-    filter(project == 8) %>%
-    group_by(vpid) %>%
-    summarise(forms = list(form), .groups = "drop") %>%
-    rowwise() %>%
-    mutate(
-      counts = list(table(forms)),
-      missing = list(setdiff(required_forms, names(counts))),
+  problems <- dat_children_parents %>%
+    dplyr::filter(project == 8) %>%
+    dplyr::group_by(vpid) %>%
+    dplyr::summarise(forms = list(form), .groups = "drop") %>%
+    dplyr::rowwise() %>%
+    dplyr::mutate(
+      counts    = list(table(unlist(forms))),
+      missing   = list(setdiff(required_forms, names(counts))),
       duplicate = list(names(counts[counts > 1]))
     ) %>%
-    filter(length(missing) > 0 | length(duplicate) > 0) %>%
-    mutate(
-      report = paste0(
-        "⚠️ vpid ", vpid, ":\n",
-        if (length(missing) > 0) paste0("   - Missing forms: ", paste(missing, collapse = ", "), "\n") else "",
-        if (length(duplicate) > 0) paste0("   - Duplicate forms: ", paste(duplicate, collapse = ", "), "\n") else ""
+    dplyr::ungroup() %>%
+    dplyr::filter(lengths(missing) > 0 | lengths(duplicate) > 0) %>%
+    dplyr::mutate(
+      vpid_str = ifelse(is.na(vpid) | vpid == "", "unknown", as.character(vpid)),
+      details = paste(
+        c(
+          if (lengths(missing) > 0) paste0("Missing forms: ", paste(unlist(missing), collapse = ", ")),
+          if (lengths(duplicate) > 0) paste0("Duplicate forms: ", paste(unlist(duplicate), collapse = ", "))
+        ),
+        collapse = "; "
+      ),
+      console_msg = paste0(
+        "⚠️ vpid ", vpid_str, ":\n",
+        paste0("   - ", gsub("; ", "\n   - ", details))
+      ),
+      log_line = paste0(
+        "⚠️ [", dataset_name, " | ", data_type, "] vpid ", vpid_str,
+        " — ", details, " — please resolve manually."
       )
-    ) %>%
-    pull(report) %>%
-    cat(sep = "")
+    )
+  
+  # --- Print to console ---
+  if (nrow(problems)) {
+    cat(paste0(problems$console_msg, collapse = "\n"))
+    
+    # --- Write to logger ---
+    if (!is.null(logger) && !is.null(logger$write)) {
+      for (ln in problems$log_line) {
+        try(logger$write(ln), silent = TRUE)
+      }
+    }
+  }
+  
+  invisible(NULL)
 }
