@@ -62,78 +62,6 @@ if (!dir.exists(discarded_path)) {
 }
 
 
-## Setup Logging ---------------------------------------------------------------
-
-create_logger <- function(log_path,
-                          append = FALSE,
-                          with_timestamp = TRUE,
-                          enforce_code = TRUE) {
-  dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
-  con <- file(log_path, open = if (append) "a" else "w", blocking = TRUE)
-  
-  write_line <- function(text) {
-    if (enforce_code && !grepl("\\b\\d{5}\\b", text)) {
-      stop("Each log line must contain a 5-digit code (e.g., 01234). Found: ", text)
-    }
-    ts <- if (with_timestamp) paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ") else ""
-    line <- paste0(ts, text)
-    writeLines(line, con = con)
-    flush(con)
-    invisible(line)
-  }
-  
-  split_into_sublogs <- function(dest_map,
-                                 pattern = "\\b\\d{5}\\b",
-                                 file_namer = function(d) sprintf("sublog_%s.log", d),
-                                 overwrite = TRUE) {
-    if (is.null(names(dest_map)) || any(!names(dest_map) %in% as.character(0:9))) {
-      stop("dest_map must be a named vector/list with names '0'..'9'")
-    }
-    if (!file.exists(log_path)) stop("Log file not found: ", log_path)
-    
-    lines <- readLines(log_path, warn = FALSE)
-    buckets <- setNames(vector("list", 10), as.character(0:9))
-    
-    for (ln in lines) {
-      m <- regexpr(pattern, ln)
-      if (m[1] > 0) {
-        code <- substr(ln, m[1], m[1] + attr(m, "match.length") - 1)
-        first_digit <- substr(code, 1, 1)
-        if (!is.null(dest_map[[first_digit]])) {
-          buckets[[first_digit]] <- c(buckets[[first_digit]], ln)
-        }
-      }
-    }
-    
-    out_paths <- list()
-    for (d in names(dest_map)) {
-      shard_lines <- buckets[[d]]
-      if (length(shard_lines)) {
-        dir.create(dest_map[[d]], recursive = TRUE, showWarnings = FALSE)
-        out_file <- file.path(dest_map[[d]], file_namer(d))
-        if (file.exists(out_file) && !overwrite) stop("File exists: ", out_file)
-        writeLines(shard_lines, out_file)
-        out_paths[[d]] <- out_file
-      }
-    }
-    invisible(out_paths)
-  }
-  
-  close_logger <- function() close(con)
-  
-  list(
-    path = normalizePath(log_path, mustWork = FALSE),
-    write = write_line,
-    split = split_into_sublogs,
-    close = close_logger
-  )
-}
-
-
-# 1️⃣ Create logger
-logger <- create_logger("logs/all_action_points.log")
-
-
 ## Source required functions ---------------------------------------------------
 
 source(file.path(function_path, "separate_by_project.R"))
@@ -148,11 +76,17 @@ source(file.path(function_path, "compare_vpcodes.R"))
 source(file.path(function_path, "remove_empty_obs_psytoolkit.R"))
 source(file.path(function_path, "collect_ids_to_excel.R"))
 source(file.path(function_path, "move_old_backbones.R"))
+source(file.path(function_path, "setup_logging.R"))
 
 
 ## Move old Data ---------------------------------------------------------------
 
 move_old_backbones(out_path, dry_run = FALSE)  
+
+
+## Setup Logging ---------------------------------------------------------------
+
+logger <- setup_logging("logs/all_action_points.log")
 
 
 ## Backbone surveys ------------------------------------------------------------
