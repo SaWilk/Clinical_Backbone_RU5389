@@ -1,5 +1,49 @@
-# stand-alone probe (no dependencies on the main function)
-check_meta_match <- function(sample_name, meta_env_name = "cogtest_info") {
+# -------------------------------------------------------------------------
+#   check_meta_match()
+# Purpose:
+#   Look up metadata for a given sample_name in a metadata table and
+# extract a YYYY-MM-DD "date tag" from its time column.
+# Behavior:
+#   - Tries to load the metadata table (a data.frame) via, in order:
+#   1) An object of name meta_env_name in any parent environment.
+# 2) A file path equal to meta_env_name (CSV/TSV/TXT or RDS).
+# 3) An OS environment variable named meta_env_name that points to a
+# CSV/TSV/TXT or RDS file.
+# - Requires metadata columns sample and ctime; otherwise returns
+# a status explaining the issue.
+# - Normalizes tokens by lowercasing and removing non-alphanumeric chars.
+# - Finds rows where sample matches sample_name exactly (normalized);
+# if none, falls back to substring match.
+# - From the matched rows, extracts the first parseable date in ctime,
+# preferring a literal YYYY-MM-DD substring; if absent, tries to parse
+# as POSIXct or Date.
+# Input:
+#   sample_name : character; the sample to look up (e.g., "adults").
+# meta_env_name : character; one of:
+#   - object name present in an ancestor environment,
+# - a direct file path,
+# - an OS env var that resolves to a file path.
+# Output:
+#   A list with fields:
+#   - status : "ok", "no_metadata", "missing_columns",
+# "no_match", or "no_parseable_date".
+# - date_tag : character YYYY-MM-DD or "unknown_date".
+# - rows_matched : integer vector of row indices (possibly length 0).
+# Example:
+#   # Object in memory:
+#   cogtest_info <- data.frame(
+#     sample = c("Adults", "Children P6"),
+#     ctime = c("2025-05-10 10:22:00", "Run 2025-04-03")
+#   )
+# check_meta_match("adults", "cogtest_info")
+# # File path:
+# check_meta_match("children_p6", "path/to/cogtest_info.csv")
+# # From OS env var:
+# # Sys.setenv(COGTEST_INFO="/abs/path/cogtest_info.rds")
+# check_meta_match("adolescents", "COGTEST_INFO")
+# -------------------------------------------------------------------------
+  
+  check_meta_match <- function(sample_name, meta_env_name = "cogtest_info") {
   load_meta <- function(name) {
     # 1) R object in any parent env
     if (!is.null(name) && nzchar(name) && exists(name, inherits = TRUE)) {

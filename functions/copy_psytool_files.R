@@ -1,6 +1,91 @@
-copy_psytool_files <- function(env_objects = NULL,
-                               cogtest_out_path = NULL,
-                               meta_env_name = "cogtest_info") {
+# -------------------------------------------------------------------------
+# copy_psytool_files()
+#
+# Purpose:
+#   Collects and copies raw PsyToolkit experiment files for specific
+#   samples/projects from standardized paths into a dated, project-scoped
+#   output tree. Also builds a per-file log (returned invisibly).
+#
+# Behavior:
+#   - Establishes a base directory as the current working directory.
+#   - Determines the output root:
+#       • If `cogtest_out_path` is empty: "<base>/01_project_data".
+#       • Ensures the directory exists (recursive).
+#   - Discovers candidate data frames in the global environment whose names
+#     match:  data_<sample_tag>_p_<project>_cogtest
+#       • <project> must be in `allowed_projects` (default digits "1"–"9").
+#       • <sample_tag> is matched to a known sample.
+#   - Resolves the sample from <sample_tag> against:
+#       • "adults", "adolescents", "children", "children_parents", "adults_remote".
+#   - Computes the source root for each sample:
+#       • "<base>/raw_data/psytoolkit/<sample>/experiment_data"
+#   - Derives a date tag for folder naming via `meta_env_name` (default "cogtest_info"):
+#       • Expects a data.frame with columns: sample, ctime.
+#       • Extracts/normalizes a date from `ctime` (Date, POSIXt, numeric epoch,
+#         or common string formats) to "YYYY-MM-DD".
+#       • Falls back to "unknown_date" with a warning if unavailable.
+#   - Builds the destination folder:
+#       • "<out>/<project>_backbone/experiment_data/<project>_<YYYY-MM-DD>_<sample>_cogtest_data"
+#       • Ensures it exists (recursive).
+#   - For each row in each candidate data frame:
+#       • Chooses a participant ID column for logging only (first present among
+#         "Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "id", "vpid_1").
+#       • For each test in `test_cols` (default c("WCST_1","LNS_1","BACS_1")):
+#           – If the path cell is empty -> log "empty_path".
+#           – If the source file is missing -> log "missing_source".
+#           – Otherwise copy the file to the destination:
+#               · overwrite = FALSE, preserve timestamps (copy.date = TRUE).
+#               · Log status "copied", "exists", or "copy_failed".
+#   - Aggregates a row-wise log across all processed objects and returns it
+#     (invisibly). Prints a message if no files were processed.
+#
+# Input:
+#   env_objects      : character vector of object names to consider (default: all
+#                      objects in the global environment).
+#   cogtest_out_path : output directory for copied files; created if missing.
+#   meta_env_name    : name of a data.frame in the global env providing metadata
+#                      with columns `sample` and `ctime` (default "cogtest_info").
+#   test_cols        : character vector of test/path column names to check
+#                      (default c("WCST_1","LNS_1","BACS_1")).   [Fix 3]
+#   allowed_projects : character vector of allowed project tags (default
+#                      as.character(1:9)).                        [Fix 3]
+#
+# Output:
+#   - Returns (invisibly) a data.frame log with columns including:
+#       env_object, project, sample, dest_dir_used, participant_id, test,
+#       source, destination, status.
+#   - Copies files into the dated destination tree as described above.
+#   - Issues warnings when metadata is missing/invalid; otherwise runs quietly.
+#
+# Notes:
+#   - [Fix 1] Removed a redundant `dir.create(experiment_dir)` — the tree is
+#     already created when `dest_dir` is ensured.
+#   - [Fix 2] Logging for `missing_source` now uses `basename(src)` for the
+#     `destination` field, consistent with the copy branch.
+#   - [Fix 3] `test_cols` and `allowed_projects` are now parameters.
+#   - [Fix 4 — docs only] The ID column selection order is fixed in code:
+#     "Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "id", "vpid_1".
+#     If your data vary, consider exposing a `preferred_id_cols` parameter.
+#   - [Fix 6 — docs only] The function returns the log **invisibly**. Callers
+#     can wrap in `print()` or assign to inspect.
+#
+# Example:
+#   log <- copy_psytool_files(
+#     env_objects      = c("data_adults_p_1_cogtest", "data_children_p_3_cogtest"),
+#     cogtest_out_path = "01_project_data",
+#     meta_env_name    = "cogtest_info",
+#     test_cols        = c("WCST_1","LNS_1","BACS_1"),
+#     allowed_projects = as.character(1:9)
+#   )
+# -------------------------------------------------------------------------
+
+copy_psytool_files <- function(
+    env_objects      = NULL,
+    cogtest_out_path = NULL,
+    meta_env_name    = "cogtest_info",
+    test_cols        = c("WCST_1", "LNS_1", "BACS_1"),          # [Fix 3]
+    allowed_projects = as.character(1:9)                         # [Fix 3]
+) {
   base_dir <- normalizePath(getwd(), winslash = "\\", mustWork = TRUE)
   
   if (is.null(cogtest_out_path) || !nzchar(cogtest_out_path)) {
@@ -21,7 +106,9 @@ copy_psytool_files <- function(env_objects = NULL,
     if (is.data.frame(maybe_df)) meta_df <- maybe_df
   }
   
-  norm_tok <- function(x) tolower(gsub("[^a-z0-9]+", "", trimws(as.character(x))))
+  norm_tok <- function(x) {
+    tolower(gsub("[^a-z0-9]+", "", trimws(as.character(x))))
+  }
   
   # Robustly normalize anything resembling a date to "YYYY-MM-DD"
   extract_ymd <- function(x) {
@@ -49,7 +136,7 @@ copy_psytool_files <- function(env_objects = NULL,
     s <- trimws(as.character(v))
     if (!nzchar(s)) return(NA_character_)
     
-    # 1) Fast path: already contains an ISO-like date (keeps YYYY-MM-DD)
+    # 1) Already ISO-like date (YYYY-MM-DD)
     m <- regexpr("\\b\\d{4}-\\d{2}-\\d{2}\\b", s)
     if (m[1] != -1) return(substr(s, m[1], m[1] + attr(m, "match.length") - 1))
     
@@ -59,7 +146,6 @@ copy_psytool_files <- function(env_objects = NULL,
     if (length(parts) == 4) {
       yyyy <- as.integer(parts[2]); mm <- as.integer(parts[3]); dd <- as.integer(parts[4])
       if (is.finite(yyyy) && is.finite(mm) && is.finite(dd)) {
-        # validate by constructing a Date
         suppressWarnings({
           dt <- try(as.Date(sprintf("%04d-%02d-%02d", yyyy, mm, dd)), silent = TRUE)
         })
@@ -67,15 +153,11 @@ copy_psytool_files <- function(env_objects = NULL,
       }
     }
     
-    # 3) Try common timestamp formats (ISO with space/T, with or w/o seconds)
+    # 3) Try common timestamp formats
     fmts <- c(
-      "%Y-%m-%d %H:%M:%OS",
-      "%Y-%m-%dT%H:%M:%OS",
-      "%Y/%m/%d %H:%M:%OS",
-      "%Y.%m.%d %H:%M:%OS",
-      "%Y-%m-%d",
-      "%Y/%m/%d",
-      "%Y.%m.%d"
+      "%Y-%m-%d %H:%M:%OS", "%Y-%m-%dT%H:%M:%OS",
+      "%Y/%m/%d %H:%M:%OS", "%Y.%m.%d %H:%M:%OS",
+      "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"
     )
     for (f in fmts) {
       suppressWarnings({
@@ -86,12 +168,10 @@ copy_psytool_files <- function(env_objects = NULL,
       })
     }
     
-    # nothing worked
     NA_character_
   }
   
-  
-  # 🔧 Enhanced version with warnings:
+  # Enhanced version with warnings:
   date_for_sample <- function(sample_name) {
     # case 1: metadata not available
     if (is.null(meta_df)) {
@@ -143,7 +223,6 @@ copy_psytool_files <- function(env_objects = NULL,
   }
   # --------------------------------------------------------------------------
   
-  test_cols <- c("WCST_1", "LNS_1", "BACS_1")
   pick_id_col <- function(df) {
     for (nm in c("Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "id", "vpid_1")) {
       if (nm %in% names(df)) return(nm)
@@ -168,10 +247,13 @@ copy_psytool_files <- function(env_objects = NULL,
     
     sample <- NA_character_
     for (s in valid_samples) {
-      if (grepl(paste0("(^|_)", s, "(_|$)"), sample_tag, ignore.case = TRUE)) { sample <- s; break }
+      if (grepl(paste0("(^|_)", s, "(_|$)"), sample_tag, ignore.case = TRUE)) {
+        sample <- s
+        break
+      }
     }
     if (is.na(sample)) next
-    if (!(project %in% as.character(1:9))) next
+    if (!(project %in% allowed_projects)) next  # [Fix 3]
     
     src_root <- sample_root(sample)
     if (!dir.exists(src_root)) next
@@ -179,7 +261,6 @@ copy_psytool_files <- function(env_objects = NULL,
     df <- get(obj, envir = .GlobalEnv)
     if (!is.data.frame(df)) next
     
-    # 🔧 this may now trigger a warning if unknown_date used
     date_tag <- date_for_sample(sample)
     
     project_block  <- sprintf("%s_backbone", project)
@@ -196,7 +277,7 @@ copy_psytool_files <- function(env_objects = NULL,
     for (i in seq_len(nrow(df))) {
       pid <- if (!is.na(id_col)) df[[id_col]][i] else NA
       
-      for (test in test_cols) {
+      for (test in test_cols) {  # [Fix 3]
         if (!test %in% names(df)) next
         rel <- df[[test]][i]
         
@@ -204,7 +285,8 @@ copy_psytool_files <- function(env_objects = NULL,
           log_rows[[length(log_rows) + 1]] <- data.frame(
             env_object = obj, project = project, sample = sample, dest_dir_used = dest_dir,
             participant_id = pid, test = test,
-            source = NA_character_, destination = NA_character_,
+            source = NA_character_,
+            destination = file.path(dest_dir, NA_character_),
             status = "empty_path", stringsAsFactors = FALSE
           )
           next
@@ -217,7 +299,8 @@ copy_psytool_files <- function(env_objects = NULL,
           log_rows[[length(log_rows) + 1]] <- data.frame(
             env_object = obj, project = project, sample = sample, dest_dir_used = dest_dir,
             participant_id = pid, test = test,
-            source = src, destination = file.path(dest_dir, basename(rel_chr)),
+            source = src,
+            destination = file.path(dest_dir, basename(src)),  # [Fix 2] consistent basename
             status = "missing_source", stringsAsFactors = FALSE
           )
           next
@@ -236,12 +319,10 @@ copy_psytool_files <- function(env_objects = NULL,
       }
     }
     
-    if (!dir.exists(experiment_dir)) {
-      dir.create(experiment_dir, recursive = TRUE, showWarnings = FALSE)
-    }
+    # [Fix 1] Removed redundant dir.create(experiment_dir) here — already ensured via dest_dir
   }
   
   log_df <- if (length(log_rows)) do.call(rbind, log_rows) else data.frame()
   if (!nrow(log_df)) message("No files processed — check env_objects and source data.")
-  invisible(log_df)
+  invisible(log_df)  # [Fix 6 — docs clarify invisibility]
 }
