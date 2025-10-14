@@ -13,15 +13,18 @@
 #   - Resolution rules:
 #       1) Exactly one row with non-empty `submit_col` → keep it, remove others.
 #       2) >1 rows with `submit_col` → remove all incomplete rows; warn (⚠️).
+#          If multiple complete rows remain, they are **not** auto-resolved and
+#          require manual review.
 #       3) No `submit_col`:
-#            • If `lastpage` exists: pick unique max (> threshold) if exactly one;
-#              else warn (⚠️).
+#            • If `lastpage` exists: pick the unique maximum (> threshold) if
+#              exactly one such maximum exists; else warn (⚠️).
 #            • If no `lastpage`: warn (⚠️).
 #   - Special handling:
 #       • Rows with empty/missing ID and also incomplete (no submit and, if
 #         present, lastpage ≤ threshold) are ignored (not kept, not trashed).
 #   - All removed rows go to `trash_bin` with a `.__reason__`.
 #   - ⚠️ warnings are printed AND (optionally) written to `logger$write(...)`.
+#     (The ⚠️ symbol is gated by the R option `utf8_symbols`; see below.)
 #
 # Input:
 #   df                 : data frame; must contain:
@@ -35,6 +38,8 @@
 #   vp_col             : string, the ID column name in `df`.
 #   submit_col         : string, the submit/completion column name in `df`.
 #   dataset_name       : string, used in messages (e.g. "adults", "children_parents").
+#   data_type          : string label used in warning/log tags (e.g., "data",
+#                        "survey", "log") to disambiguate lanes within a dataset.
 #   lastpage_threshold : numeric, cutoff for "almost complete" (default: 17).
 #   project_col        : string, name of project column (default "project"); if
 #                        missing, project-based behavior is skipped with a warning.
@@ -44,13 +49,18 @@
 #   Returns a list with:
 #     $cleaned    : data frame after resolution/removal.
 #     $trash_bin  : removed rows with `.__reason__`.
-#     $warnings   : character vector of all ⚠️ warning messages emitted.
+#     $warnings   : character vector of all warning messages emitted.
+#
+# Notes:
+#   - Unicode warning prefix is gated by the R option `utf8_symbols` (default TRUE).
+#     Set `options(utf8_symbols = FALSE)` to get ASCII "WARNING: " prefixes instead.
 #
 # Example:
 #   res <- resolve_duplicates(dat_adults,
 #                             vp_col = "vp_id",
 #                             submit_col = "submitdate",
 #                             dataset_name = "adults",
+#                             data_type = "survey",
 #                             logger = logger)
 #   dat_adults <- res$cleaned
 #   trash_adults <- res$trash_bin
@@ -77,20 +87,36 @@ resolve_duplicates <- function(df,
   
   if (dataset_name == "children_parents") {
     if (!has_form) stop("[children_parents] Missing required column: form")
-    if (!has_project) warning("[children_parents] No project column found — skipping project-based disambiguation.")
+    if (!has_project) {
+      # (3) route through emit_warn to capture in $warnings
+      # message text mirrors original semantics without extra tags
+      # (emit_warn adds the standardized tag)
+      # NOTE: keep text identical except for removal of hard-coded dataset tag
+      #       to avoid duplicated tags in output.
+      #       "—" retained from original.
+      #       This is intentionally not using base warning().
+      #       See emit_warn definition below.
+      # placeholder: actual emit occurs after emit_warn is defined
+    }
   }
   
   # --- Helper: emit warning to console + logger ---
   out_warnings <- character(0)
   emit_warn <- function(text) {
+    # (7) Gate Unicode symbol via option
+    prefix <- if (isTRUE(getOption("utf8_symbols", TRUE))) "⚠️ " else "WARNING: "
     tag <- sprintf("[%s | %s]", dataset_name, data_type)
-    msg <- paste0("⚠️ ", tag, " ", text, " — please resolve manually.")
+    msg <- paste0(prefix, tag, " ", text, " — please resolve manually.")
     message(msg)
     if (!is.null(logger) && !is.null(logger$write)) {
       safe_line <- paste0("Warning: ", tag, " ", text)
       try(logger$write(safe_line), silent = TRUE)
     }
     out_warnings <<- c(out_warnings, msg)
+  }
+  # Emit the deferred no-project warning (3)
+  if (dataset_name == "children_parents" && !has_project) {
+    emit_warn("No project column found — skipping project-based disambiguation.")
   }
   
   # --- Helper flags ---
@@ -170,9 +196,21 @@ resolve_duplicates <- function(df,
       # 3. no submit: check lastpage
     } else {
       if (has_lastpage) {
-        high_lp <- idx[df$.__lp_num__.[idx] > lastpage_threshold]
-        if (length(high_lp) == 1) {
-          keeper <- high_lp
+        # (1) implement unique max(lastpage) > threshold selection
+        lp_vals <- df$.__lp_num__.[idx]
+        above_mask <- lp_vals > lastpage_threshold
+        above_idx_local <- which(above_mask)
+        keeper <- integer(0)
+        if (length(above_idx_local) == 1) {
+          keeper <- idx[above_idx_local]
+        } else if (length(above_idx_local) > 1) {
+          max_val <- suppressWarnings(max(lp_vals[above_idx_local], na.rm = TRUE))
+          max_local <- which(lp_vals == max_val)
+          if (length(max_local) == 1 && max_val > lastpage_threshold) {
+            keeper <- idx[max_local]
+          }
+        }
+        if (length(keeper) == 1) {
           losers <- setdiff(idx, keeper)
           if (length(losers) > 0) {
             keep_flag[losers] <- FALSE

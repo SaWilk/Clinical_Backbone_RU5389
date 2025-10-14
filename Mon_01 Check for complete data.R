@@ -1,17 +1,12 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# FOR: Backbone Separate Data by Project 
+# FOR: Monitoring - Check for complete Data
 # Author: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com)
-# 2025-10-02 (Date initially edited by SW)
+# Creation Date: 2025-10-02 (Date initially edited by SW)
 #
+# Description: -- WIP -- will extract xlsx sheet with vpids with complete 
+# questionnaire and cogtest data
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-# This script 
-# (1) reads questionnaire data exported from LimeSurvey and PsyToolkit
-
-# (2) Fixes Issues with VP ID assignment
-
-# (3) Creates project-specific data files in the environment as well as on disk
 
 
 

@@ -1,3 +1,116 @@
+#' Separate a dataset into per-project slices and export files
+#'
+#' @description
+#' Splits `df` by a detected **project** column and writes one file per project
+#' into a backbone directory structure. Also assigns each per-project slice into
+#' `.GlobalEnv` (e.g., `data_<sample>_p_<pid>_<env>`) and returns the set of
+#' output directories that were touched.
+#'
+#' @details
+#' **Purpose**
+#' - Create per-project deliverables (`.xlsx` and optionally `.csv`) under
+#'   `"<base>/<PID>_backbone/<subfolder>"`.
+#'
+#' **Behavior**
+#' - **Base directory resolution**
+#'   1. If `out_path` is provided, normalize it; if it ends with
+#'      `"experiment_data"` or `"questionnaires"`, its parent is used as base.
+#'   2. Else try to detect the script dir (command line `--file=`, RStudio
+#'      active document, or `knitr::current_input()`).
+#'   3. Else fall back to `getwd()` (with a warning).
+#'   4. The **subfolder** is `"questionnaires"` or `"experiment_data"` depending
+#'      on `data_type`.
+#'
+#' - **Project column**
+#'   Looks for a column among:
+#'   `c("project","Projekt...Project","Projekt.","Projekt","projekt","p","proj","Proj")`.
+#'   If none is found, creates `"Projekt."` with value `"6"` for all rows and warns.
+#'
+#' - **Pre-filtering**
+#'   * If column `"Versuchspersonennummer."` exists, rows with value `99999`
+#'     (numeric or character) are removed (treated as test data).
+#'   * Project labels are `trimws()`ed; rows with empty project labels or exactly
+#'     `"Testing mode(No actual data collection)"` are dropped.
+#'
+#' - **Sample detection**
+#'   * If `sample` is provided, it is normalized to one of:
+#'     `"adults"`, `"adolescents"`, `"children_parents"`, `"parents_p6"`, `"children_p6"`.
+#'   * Otherwise, attempts to infer a sample name from the call/site (argument
+#'     symbols, parent frame objects). If unsuccessful, uses `"unknown"`.
+#'
+#' - **Metadata (optional)**
+#'   * If `metadata_info` is a data.frame or a path to `.csv`/`.xlsx`, the code
+#'     tries to match `sample` in column `sample` and extract the first non-`NA`
+#'     `ctime`, which becomes the file date string (`YYYY-MM-DD`). If this fails,
+#'     `"unknown_date"` is used (with a warning).
+#'
+#' - **Export suffixes**
+#'   * `data_type = "questionnaires"` → file suffix `"questionnaire"`,
+#'     env suffix `"questionnaire"`, subfolder `"questionnaires"`.
+#'   * `data_type = "experiment_data"` → `"cogtests"`, `"cogtest"`, `"experiment_data"`.
+#'
+#' - **Splitting and writing**
+#'   * Split `df` by project label (from the detected/created project column).
+#'   * For each split, compute `pid` as the digits from the label; if no digits,
+#'     use `"unknown"`.
+#'   * Assign the split into `.GlobalEnv` as
+#'     `data_<sample>_p_<pid>_<env_suffix>`.
+#'   * Skip `pid %in% c("0","99","unknown")` and empty/all-NA splits.
+#'   * Destination directory: `file.path(base_dir, sprintf("%s_backbone", pid), subfolder)`.
+#'   * File base name: `"<pid>_<date>_<sample>_<suffix>"`.
+#'   * If `dry_run = FALSE`, write an `.xlsx` (via **writexl**) and, if
+#'     `export_csv = TRUE`, also a `.csv`.
+#'   * Collect and return the set of unique project directories touched; the
+#'     returned vector is **named** by `"<pid>_backbone"`.
+#'
+#' - **Messages**
+#'   * Verbose progress (base dir, project column, sample, per-file saves).
+#'   * Warnings when metadata is missing/invalid or base dir cannot be detected.
+#'
+#' **Special handling / caveats**
+#' - Rows assigned to `"unknown"` `pid` (labels with no digits) are **skipped**.
+#' - If multiple candidate project columns exist, the first match in the alias
+#'   list is used.
+#' - Per-project variables are created in `.GlobalEnv` as a side effect.
+#'
+#' @param df data.frame. Must contain a **project** column (or a recognizable
+#'   alias). Optionally a `"Versuchspersonennummer."` column to remove test rows.
+#' @param out_path `NULL` or string. Base path or a subfolder that ends with
+#'   `"questionnaires"`/`"experiment_data"` (its parent becomes the base).
+#' @param sample `NULL` or string. Sample label to embed in filenames and object
+#'   names. If `NULL`, an internal heuristic tries to infer it.
+#' @param export_csv logical. Also write `.csv` next to `.xlsx` (default `FALSE`).
+#' @param data_type character. One of `"questionnaires"` (default) or
+#'   `"experiment_data"`. Controls subfolder and filename suffixes.
+#' @param metadata_info Optional. A data.frame or path to `.csv`/`.xlsx`
+#'   containing columns `sample` and `ctime` (used to set the date in filenames).
+#' @param dry_run logical. If `TRUE`, do not create directories or write files;
+#'   still performs splitting, variable assignment, and messages.
+#' @param verbose logical. Print progress messages (default `TRUE`).
+#'
+#' @returns
+#' A **named character vector** of unique output directories that were targeted.
+#' Names are `"<pid>_backbone"`, values are full paths like
+#' `"<base>/<pid>_backbone/<subfolder>"`.
+#'
+#' @section Side effects:
+#' - Creates directories on disk (unless `dry_run = TRUE`).
+#' - Writes `.xlsx` (and optionally `.csv`) files.
+#' - Assigns per-project data.frames into `.GlobalEnv`.
+#'
+#' @examples
+#' \dontrun{
+#' dirs <- separate_by_project(
+#'   df = survey_df,
+#'   out_path = "D:/exports/questionnaires",
+#'   sample = "adults",
+#'   export_csv = TRUE,
+#'   data_type = "questionnaires",
+#'   metadata_info = "metadata.csv",
+#'   dry_run = FALSE,
+#'   verbose = TRUE
+#' )
+#' }
 separate_by_project <- function(
     df,
     out_path = NULL,
@@ -46,7 +159,7 @@ separate_by_project <- function(
   if (!dir.exists(base_dir) && !dry_run) dir.create(base_dir, recursive = TRUE, showWarnings = FALSE)
   if (verbose) message("Base dir: ", base_dir)
   
-  if (!requireNamespace("writexl", quietly = TRUE)) {
+  if (!dry_run && !requireNamespace("writexl", quietly = TRUE)) {
     stop("Package 'writexl' is required. Install it with install.packages('writexl').")
   }
   
@@ -181,7 +294,7 @@ separate_by_project <- function(
     varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
     assign(varname, d, envir = .GlobalEnv)
     
-    if (pid_clean %in% c("0", "99") || is_empty_df(d)) next
+    if (pid_clean %in% c("0", "99", "unknown") || is_empty_df(d)) next
     
     pid_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean), subfolder)
     ensure_dir(pid_dir)

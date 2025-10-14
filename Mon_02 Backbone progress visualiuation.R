@@ -1,3 +1,16 @@
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# FOR: Monitoring 2 - Visualize Backbone Progress
+# Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com)
+# First edited: 2025-09-23 (SW)
+#
+# Description:
+# Scans per-project Excel files, counts non-empty data rows per file, applies
+# project-specific tally rules (p7/p8 combinations), applies small manual
+# adjustments, overrides p6 to a fixed observed n, and produces:
+#   1) A progress bar plot (PNG)
+#   2) A summary table (printed and saved as XLSX)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 # ---- Setup ----
 auto_install <- FALSE
 pkgs <- c("readxl", "dplyr", "stringr", "tidyr", "ggplot2", "tools", "forcats")

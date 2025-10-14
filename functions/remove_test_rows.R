@@ -1,10 +1,61 @@
+# -------------------------------------------------------------------------
+# remove_test_rows()
+#
+# Purpose:
+#   Remove clear test/invalid rows from a dataset by:
+#     (a) excluding participants flagged as "test" in a cross-dataset map,
+#     (b) dropping records whose ID is all 9s/1s (≥3 digits) or in a fixed
+#         blacklist, and
+#     (c) filtering out rows with a start date older than a cutoff.
+#
+# Behavior:
+#   - Participant ID detection:
+#       • Uses the first matching column among:
+#         {"vpid","Versuchspersonennummer.","Versuchspersonen.ID...Participant.ID","id","vpid_1"}.
+#   - Cross-dataset “test” removal (optional):
+#       • If `dat_general` is provided and has {vpid, project, datacollection},
+#         removes rows whose (vpid, project) pair is marked as "test"
+#         in `dat_general` (case-insensitive).
+#       • If the current data lacks a project column, falls back to vpid-only match
+#         and warns.
+#   - ID heuristics:
+#       • Removes IDs that are all the same digit (1 or 9) with length ≥3.
+#       • Removes explicit test IDs in `bad_ids`.
+#   - Date filter:
+#       • If a date column is found among {"startdate","TIME_start"}, keep rows
+#         where the parsed timestamp is NA (conservative keep) or ≥ cutoff
+#         (default: "2024-08-01 00:00:00" UTC).
+#       • Supports "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DD-HH-MM" formats.
+#       • Warns if no date column is found.
+#   - Messaging:
+#       • Emits `message()` about how many rows were removed per step and in total.
+#       • Emits `warning()` when required columns are missing for cross-checks.
+#
+# Input:
+#   df           : data frame to clean.
+#   name         : string, dataset label used in messages.
+#   dat_general  : optional data frame with at least {vpid, project, datacollection}
+#                  for cross-dataset "test" detection (case-insensitive).
+#
+# Output:
+#   Returns:
+#     data frame after removing rows by the rules above.
+#
+# Notes:
+#   - Candidate project columns in `df` are one of {"project","Project","projekt","Projekt","p"}.
+#   - Date parsing assumes UTC if no timezone present.
+#   - Conservative choice for date parsing: rows with unparseable dates are kept.
+#
+# Example:
+#   dat_clean <- remove_test_rows(df = dat_adults, name = "adults", dat_general = general_map)
+#
+# -------------------------------------------------------------------------
+
 remove_test_rows <- function(df, name, dat_general = NULL) {
   # List of explicit test IDs to remove
   bad_ids <- c("123456", "99998", "79999")
   
   before <- nrow(df)
-  removed_dat_general <- 0L
-  removed_date <- 0L
   
   # helper: detect IDs that are all the same digit (≥3 digits)
   all_same_digit <- function(x, digit) {

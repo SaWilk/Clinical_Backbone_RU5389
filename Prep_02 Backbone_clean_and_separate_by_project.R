@@ -1,6 +1,6 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # FOR: Separate Backbone Data by Project  — Cleaning & Export Pipeline
-# Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de) &
+# Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com) &
 #          Antonia Bott (antonia.bott@uni-hamburg.de)
 # First edited: 2025-08-08 (SW)
 #
