@@ -1,3 +1,40 @@
+# -------------------------------------------------------------------------
+#   move_old_backbones()
+# Purpose:
+#   Consolidate files from top-level numbered folders into an "old_data"
+# area, preserving each folder’s internal directory tree while leaving the
+# original directories in place (only files are moved).
+# Behavior:
+#   - Target selection:
+#   • Scans base_dir (non-recursive) for folders whose names start with a digit.
+# • Skips the "old_data" folder itself if present.
+# - Destination:
+#   • Creates <base_dir>/old_data/<source-folder-name> (if not dry-run).
+# - Move strategy:
+#   • "auto" (default): uses "robocopy" on Windows if available; otherwise falls back to "base".
+# • "robocopy" (Windows): runs robocopy /E /MOV so only files are moved and the directory tree is recreated.
+# • "base" (cross-platform): mirrors the source directory tree, copies files with timestamps, then deletes
+# only the successfully copied files; directories remain intact.
+# - Dry run:
+#   • When dry_run = TRUE, prints planned actions/commands; does not create, copy, or delete anything.
+# - Messaging:
+#   • Prints the selected method, per-folder processing, and summary when done.
+# Inputs:
+#   base_dir : string. Root directory containing the top-level numbered folders.
+# dry_run : logical. If TRUE, simulate without modifying the filesystem. Default TRUE.
+# method : {"auto","robocopy","base"}. Move method (see above). Default "auto".
+# mt : integer. Thread count for robocopy /MT:. Ignored for "base". Default 16.
+# Output:
+#   Returns (invisibly): NULL. Side effects are filesystem changes (unless dry-run).
+# Notes:
+#   - Only files are moved; all source directories remain (possibly empty).
+# - Windows "robocopy" exit codes ≥ 8 are treated as errors.
+# - Hidden files are included. Symlinks/junctions are treated as regular entries by the respective method.
+# - Paths are normalized via normalizePath(); base_dir must exist.
+# Example:
+#   move_old_backbones(base_dir = "D:/projects/mydata", dry_run = FALSE)
+# -------------------------------------------------------------------------
+
 move_old_backbones <- function(base_dir, dry_run = TRUE, method = c("auto","robocopy","base"), mt = 16) {
   method <- match.arg(method)
   base_dir <- normalizePath(base_dir, mustWork = TRUE)

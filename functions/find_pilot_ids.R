@@ -1,3 +1,47 @@
+# -------------------------------------------------------------------------
+# find_pilot_ids()
+#
+# Purpose:
+#   Identify participant IDs (vpid) that belong to "pilot" data collections
+#   in df1 and also appear in df2.
+#
+# Behavior:
+#   - Column usage (configurable via args):
+#       • df1: vpid from `vpid_col_df1`, data collection label from
+#         `datacol_col_df1`.
+#       • df2: vpid from `vpid_col_df2`.
+#   - Pilot detection:
+#       • Selects rows in df1 where `datacol_col_df1` matches "pilot"
+#         (case-insensitive).
+#   - Matching:
+#       • Returns vpids that are present both in the pilot subset of df1 and in df2.
+#
+# Input:
+#   df1             : data frame containing vpids and a data-collection column.
+#   df2             : data frame containing vpids to check against.
+#   vpid_col_df1    : string, vpid column name in df1 (default: "vpid").
+#   datacol_col_df1 : string, data-collection column name in df1 (default: "datacollection").
+#   vpid_col_df2    : string, vpid column name in df2 (default: "vpid").
+#
+# Output:
+#   Character vector of unique vpids that are marked as "pilot" in df1 and
+#   present in df2 (order not guaranteed).
+#
+# Notes:
+#   - The "pilot" test is a simple grepl on the data-collection column.
+#   - For safety, both vpid columns are coerced to character and NAs dropped.
+#   - If required columns are missing, the function stops with an error.
+#
+# Example:
+#   pilot_vpids <- find_pilot_ids(df1 = meta, df2 = main,
+#                                 vpid_col_df1 = "vpid",
+#                                 datacol_col_df1 = "datacollection",
+#                                 vpid_col_df2 = "participant_id")
+#
+# -------------------------------------------------------------------------
+
+
+
 # Function definition
 find_pilot_ids <- function(df1, df2, 
                            vpid_col_df1 = "vpid", 
@@ -22,24 +66,3 @@ find_pilot_ids <- function(df1, df2,
   # Step 3: Return as character vector
   return(as.character(matching_ids))
 }
-
-# --- Example usage ---
-
-# # Example data frames
-# df1 <- data.frame(
-#   alt_id = c(1, 2, 3, 4),
-#   datacollection = c("pilot study", "main study", "pilot test", "validation")
-# )
-# 
-# df2 <- data.frame(
-#   my_id = c(1, 3, 5, 6),
-#   other_info = c("A", "B", "C", "D")
-# )
-# 
-# # Call the function with custom column names
-# result <- find_pilot_ids(df1, df2, 
-#                          vpid_col_df1 = "alt_id", 
-#                          datacol_col_df1 = "datacollection", 
-#                          vpid_col_df2 = "my_id")
-# 
-# print(result)

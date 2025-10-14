@@ -25,6 +25,7 @@
 #       • main_df  : all remaining rows.
 #   - Infers the sample name from the dataset variable name (adults, 
 #     adolescents, children_parents), or accepts an explicit `sample` arg.
+#     When the name contains "children", it is normalized to "children_p6".
 #   - Assigns the pilot rows into the global environment as 
 #     `pilot_<sample>`.
 #   - Writes the pilot rows to disk (xlsx always, csv optional). File naming:
@@ -70,9 +71,9 @@ extract_pilot_by_vpid <- function(
   # ---- setup out_path & dependency ----
   if (is.null(out_path)) out_path <- get0("out_path", inherits = TRUE)
   if (is.null(out_path)) stop("Please define 'out_path' in your environment or pass it as an argument.")
-  if (!dir.exists(out_path)) dir.create(out_path, recursive = TRUE, showWarnings = FALSE)
-  if (!requireNamespace("writexl", quietly = TRUE)) {
-    stop("Package 'writexl' is required. Install it with install.packages('writexl').")
+  if (!dir.exists(out_path)) {
+    ok <- dir.create(out_path, recursive = TRUE, showWarnings = FALSE)
+    if (!ok) stop("Failed to create 'out_path': ", out_path, ". Check permissions.")
   }
   
   # ---- infer sample if not given (from the name used in the call) ----
@@ -93,6 +94,9 @@ extract_pilot_by_vpid <- function(
   
   # ---- choose participant ID column (prefer vpid; 'id' only if PsyToolkit or no vpid) ----
   legacy_cols <- c("Versuchspersonennummer.", "Versuchspersonen.ID...Participant.ID", "vpid_1")
+  if (!is.null(vpid_col) && !(vpid_col %in% names(df))) {
+    stop("Requested vpid_col '", vpid_col, "' was not found in data.")
+  }
   if (!is.null(vpid_col) && vpid_col %in% names(df)) {
     id_col <- vpid_col
     id_src <- sprintf("explicit override '%s'", vpid_col)
@@ -117,7 +121,7 @@ extract_pilot_by_vpid <- function(
   
   # ---- choose pilot matcher ----
   if (!is.null(pilot_ids)) {
-    pilot_mask <- vpid %in% as.character(pilot_ids)
+    pilot_mask <- vpid %in% trimws(as.character(pilot_ids))
     match_src <- sprintf("exact IDs on '%s'", id_col)
   } else if (!is.null(pilot_regex) && nzchar(pilot_regex)) {
     pilot_mask <- grepl(pilot_regex, vpid, perl = TRUE)
@@ -145,6 +149,9 @@ extract_pilot_by_vpid <- function(
   if (nrow(pilot_df) > 0) {
     if (export_csv) {
       utils::write.csv(pilot_df, file.path(out_path, paste0(base, ".csv")), row.names = FALSE, na = "")
+    }
+    if (!requireNamespace("writexl", quietly = TRUE)) {  
+      stop("Package 'writexl' is required. Install it with install.packages('writexl').")
     }
     writexl::write_xlsx(pilot_df, file.path(out_path, paste0(base, ".xlsx")))
   } else {
