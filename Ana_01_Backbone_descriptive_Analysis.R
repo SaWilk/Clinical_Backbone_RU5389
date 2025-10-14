@@ -2,24 +2,18 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 # FOR: Backbone preprocessing 
-# Antonia Bott (antonia.bott@uni-hamburg.de)
-# Version: 0.5
-#
+# Antonia Bott (antonia.bott@uni-hamburg.de) & 
+# Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com)
+# Date first edited by SW: 2025-10-14
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# This script 
-# (1) reads questionnaire data exported from LimeSurvey and calculates sum/mean scores
+#---- WIP! ----
 
-# (2) reads WCST data and calculates outcome variables 
-#     (reversals, trials to first reversal, number of errors, perseveration errors)
-
-# (3) reads BACS data and calculates outcome variables
-#      (number of answered items, number of correct answers, number of errors)
-
-# (4) reads LNS data and calculates outcome variables
-#     (number of correct answers)
-
-
+# Overview:
+# Reads LimeSurvey questionnaires and WCST/BACS/LNS task logs; recodes items; computes
+# scale sums/means (e.g., IDAS, CAPE, AQ, ASRS-5, BIS/BAS, IUS, APS, TICS-9, MAP-SR, CTQ);
+# generates basic descriptives/plots; and merges all task summaries with questionnaire
+# scores into a final dataframe `scores` (expects data_questionnaires/ and data_tasks/ subfolders).
 
 # Note:
 # For the script to run you should have a main folder (set as working directory) 
