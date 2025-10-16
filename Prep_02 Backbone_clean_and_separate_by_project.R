@@ -643,7 +643,6 @@ collect_ids_to_excel(
   project_col = "project",
   data_type = "questionnaire"
 )
-# TODO: why is there a project 3 observation in children_parents?
 
 collect_ids_to_excel(
   meta_data = quest_info,
