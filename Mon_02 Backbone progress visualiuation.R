@@ -7,13 +7,13 @@
 # Scans per-project Excel files, counts non-empty data rows per file, applies
 # project-specific tally rules (p7/p8 combinations), applies small manual
 # adjustments, overrides p6 to a fixed observed n, and produces:
-#   1) A progress bar plot (PNG)
-#   2) A summary table (printed and saved as XLSX)
+# 1) A progress bar plot (PNG)
+# 2) A summary table (printed and saved as XLSX)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ---- Setup ----
 auto_install <- FALSE
-pkgs <- c("readxl", "dplyr", "stringr", "tidyr", "ggplot2", "tools", "forcats")
+pkgs <- c("readxl", "dplyr", "stringr", "tidyr", "ggplot2", "tools", "forcats", "purrr")
 if (auto_install) {
   to_get <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
   if (length(to_get)) install.packages(to_get)
@@ -21,15 +21,15 @@ if (auto_install) {
 lapply(pkgs, require, character.only = TRUE)
 
 # ---- Configurable inputs ----
-data_dir   <- "01_project_data"        # subfolder with .xlsx files
-out_dir    <- "out"                    # subfolder for output
-output_png <- file.path(out_dir, "project_progress.png")
+data_dir <- "01_project_data"   # (kept; unused now)
+out_dir  <- "out"               # subfolder for output
+output_png <- file.path(out_dir, "project_progress.png")  # (will be replaced with datestamp’ed name)
 png_width  <- 10
 png_height <- 5
 png_dpi    <- 300
 
 # Colors and styles
-fill_color    <- "#C8B79E"  # darker beige/bone
+fill_color   <- "#C8B79E"  # (kept, but not used for the new overlays)
 outline_color <- "black"
 refline_color <- "grey60"
 
@@ -48,147 +48,289 @@ total_targets <- c(
   p9 = 120
 )
 
-# Tiny manual adjustments (applied after aggregation) — p7: -3, p8: -2
+# Tiny manual adjustments (legacy; not applied to new completeness bars)
 manual_adj <- c(p7 = -3L, p8 = -2L)
 
-# ---- Helpers ----
-`%||%` <- function(a, b) if (is.null(a)) b else a
+# ---- NEW: Read the ID completeness report (three sheets) ----
+# Locate private_information/<datestamp>_id_completeness_report.xlsx
+priv_dir <- "private_information"
+report_files <- list.files(priv_dir, pattern = "_id_completeness_report\\.xlsx$", full.names = TRUE)
+if (!length(report_files)) stop("No *_id_completeness_report.xlsx found in 'private_information'.")
 
-count_observations <- function(path) {
-  df <- suppressMessages(readxl::read_excel(path))
-  if (!is.data.frame(df) || nrow(df) == 0) return(0L)
-  df_clean <- dplyr::filter(df, !dplyr::if_all(dplyr::everything(), ~ is.na(.x)))
-  nrow(df_clean)
-}
+# Pick the lexicographically latest (assumes YYYY-MM-DD prefix)
+report_path <- sort(report_files, decreasing = TRUE)[1]
+report_base <- basename(report_path)
+datestamp <- sub("_id_completeness_report\\.xlsx$", "", report_base)
 
-parse_filename <- function(f) {
-  base <- tools::file_path_sans_ext(basename(f))
-  parts <- strsplit(base, "_", fixed = TRUE)[[1]]
-  if (length(parts) < 3) {
-    return(data.frame(project=NA_integer_, date=NA_character_, sample=NA_character_))
+# Replace output filename to include the datestamp
+output_png <- file.path(out_dir, sprintf("%s_project_progress.png", datestamp))
+
+# The file has three sheets:
+# 1) complete datasets
+# 2) datasets missing questionnaire data
+# 3) datasets missing cognitive test data
+# All three have columns: sample (string), project (int), participant id (string)
+read_sheet_safe <- function(path, sheet) {
+  df <- suppressMessages(readxl::read_excel(path, sheet = sheet))
+  if (!is.data.frame(df) || !nrow(df)) return(dplyr::tibble())
+  df <- dplyr::rename_with(df, tolower)
+  exp_cols <- c("sample", "project", "participant id")
+  # flexible match for 'participant id'
+  pid_col <- names(df)[stringr::str_detect(names(df), "^participant\\s*id$")]
+  if (!length(pid_col)) {
+    # fallback to any id-like column
+    pid_col <- names(df)[stringr::str_detect(names(df), "id")]
+    pid_col <- pid_col[1] %||% names(df)[ncol(df)]
   }
-  data.frame(
-    project = suppressWarnings(as.integer(parts[1])),
-    date    = parts[2],
-    sample  = tolower(paste(parts[3:length(parts)], collapse = "_")),
-    stringsAsFactors = FALSE
-  )
-}
-
-# ---- Aggregation rules ----
-# p6: default (no exception) — later overridden manually to 219
-# p7: adolescents + adults
-# p8: adults + children + floor(children_parents_rows / 3)
-tally_rules <- function(df) {
-  df$sample <- tolower(df$sample %||% "")
-  df %>%
-    dplyr::group_by(project) %>%
-    dplyr::summarise(
-      n_default    = sum(n, na.rm = TRUE),
-      n_p7_combo   = sum(dplyr::if_else(sample %in% c("adolescents", "adults"), n, 0L), na.rm = TRUE),
-      n_p8_basic   = sum(dplyr::if_else(sample %in% c("children", "adults"), n, 0L), na.rm = TRUE),
-      n_p8_cp_rows = sum(dplyr::if_else(sample == "children_parents", n, 0L), na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
+  df <- df %>%
     dplyr::mutate(
-      n_p8_combo = n_p8_basic + floor(n_p8_cp_rows / 3),
-      n_final = dplyr::case_when(
-        project == 7 ~ n_p7_combo,
-        project == 8 ~ n_p8_combo,
-        TRUE ~ n_default
-      )
+      sample = tolower(.data$sample %||% ""),
+      project = suppressWarnings(as.integer(.data$project))
     ) %>%
-    dplyr::select(project, n = n_final)
+    dplyr::filter(!is.na(project), project >= 2, project <= 9)
+  # Ensure at least these three columns
+  if (!"sample" %in% names(df)) df$sample <- ""
+  if (!"project" %in% names(df)) stop("Sheet missing 'project' column.")
+  df$pid <- df[[pid_col]]
+  dplyr::select(df, project, sample, pid)
 }
 
-# ---- Load & count ----
-files <- list.files(data_dir, pattern = "\\.xlsx$", full.names = TRUE)
+sheet1_complete <- read_sheet_safe(report_path, 1)
+sheet2_miss_q   <- read_sheet_safe(report_path, 2)
+sheet3_miss_cog <- read_sheet_safe(report_path, 3)
 
-meta <- if (length(files)) do.call(rbind, lapply(files, parse_filename)) else
-  data.frame(project=integer(), date=character(), sample=character(), stringsAsFactors=FALSE)
-meta$path <- files
-meta <- dplyr::filter(meta, !is.na(project), project >= 2, project <= 9)
-meta$n <- if (nrow(meta)) vapply(meta$path, count_observations, integer(1)) else integer(0)
+# ---- Detect samples per project from sheet 1 (as requested) ----
+samples_per_project <- sheet1_complete %>%
+  dplyr::distinct(project, sample) %>%
+  dplyr::arrange(project, sample)
 
-agg <- tally_rules(meta)
+# If a project has >1 sample, we will show exactly TWO bars (closest to your spec).
+# If a project lists more than two distinct sample strings, we keep the first two alphabetically.
+samples_limited <- samples_per_project %>%
+  dplyr::group_by(project) %>%
+  dplyr::slice_head(n = 2) %>%
+  dplyr::ungroup()
 
-# Impute zeros for missing projects
-agg_full <- dplyr::left_join(data.frame(project = 2:9), agg, by = "project") %>%
+# Ensure every project p2..p9 appears at least once (with a placeholder sample if needed)
+needed_projects <- tibble::tibble(project = 2:9)
+samples_limited <- needed_projects %>%
+  dplyr::left_join(samples_limited, by = "project") %>%
+  dplyr::group_by(project) %>%
   dplyr::mutate(
-    n = tidyr::replace_na(n, 0L),
-    project_id = paste0("p", project)
+    sample = ifelse(dplyr::row_number() == 1 & is.na(sample), "default", sample)
+  ) %>%
+  dplyr::filter(!is.na(sample)) %>%
+  dplyr::ungroup()
+
+# ---- Count by (project, sample) for the three progress layers ----
+count_by_ps <- function(df) {
+  if (!nrow(df)) return(tibble::tibble(project=integer(), sample=character(), n=integer()))
+  df %>% dplyr::count(project, sample, name = "n")
+}
+
+n_complete   <- count_by_ps(sheet1_complete)
+n_missing_q  <- count_by_ps(sheet2_miss_q)
+n_missing_c  <- count_by_ps(sheet3_miss_cog)
+
+# Merge onto the two-bar-per-project frame
+progress_counts <- samples_limited %>%
+  dplyr::left_join(n_complete,  by = c("project","sample")) %>%
+  dplyr::rename(n_complete = n) %>%
+  dplyr::left_join(n_missing_q, by = c("project","sample")) %>%
+  dplyr::rename(n_miss_q = n) %>%
+  dplyr::left_join(n_missing_c, by = c("project","sample")) %>%
+  dplyr::rename(n_miss_c = n)
+
+progress_counts <- progress_counts %>%
+  dplyr::mutate(
+    n_complete = tidyr::replace_na(n_complete, 0L),
+    n_miss_q   = tidyr::replace_na(n_miss_q, 0L),
+    n_miss_c   = tidyr::replace_na(n_miss_c, 0L),
+    # “Questionnaires progress” and “Cognitive tests progress” are add-ons to complete:
+    n_q_prog   = n_complete + n_miss_q,
+    n_cog_prog = n_complete + n_miss_c
   )
 
-# ---- Apply manual adjustments for p7/p8 (clamped at 0)
-adj_vec <- manual_adj[agg_full$project_id]
-adj_vec[is.na(adj_vec)] <- 0L
-agg_full$n <- pmax(agg_full$n + as.integer(adj_vec), 0L)
+# ---- Targets per (project, sample): percent view (50/50 split when 2 bars) ----
+# Base project target
+progress_counts <- progress_counts %>%
+  dplyr::mutate(project_id = paste0("p", project),
+                proj_target = as.numeric(total_targets[project_id]))
 
-# ---- Manual override for p6 ----
-# Set p6 observed n to 63 + 156 = 219; target is TBD; display bar filled to 33%
-agg_full$n[agg_full$project_id == "p6"] <- 63L + 156L
+# Determine if the project has two bars
+bar_counts <- progress_counts %>% dplyr::count(project, name = "bars_per_project")
 
-# ---- Compute progress ----
-progress <- agg_full %>%
+progress_counts <- progress_counts %>%
+  dplyr::left_join(bar_counts, by = "project") %>%
   dplyr::mutate(
-    total_n = as.numeric(total_targets[project_id]),
-    pct = ifelse(is.na(total_n) | total_n == 0, NA_real_, 100 * n / total_n),
-    pct_clamped = pmin(pct, 100)
+    # Split 50/50 ONLY when 2 bars; otherwise keep full target with single bar
+    sample_target = dplyr::case_when(
+      project == 6 ~ NA_real_,  # will override per special rule below
+      is.na(proj_target) ~ NA_real_,
+      bars_per_project >= 2 ~ proj_target / 2,
+      TRUE ~ proj_target
+    )
   )
 
-# Force p6: target TBD (already NA), but display 33% fill
-progress$pct_clamped[progress$project_id == "p6"] <- 33
+# ---- Special case: Project 6
+# One bar (the one that exists in the ID info sheet) should have target = 80.
+# There is a second bar nevertheless: target = "?" and fixed fill at 33%.
+# If only one sample is present for p6, create a second synthetic sample entry.
+p6_present <- progress_counts %>% dplyr::filter(project == 6)
+if (nrow(p6_present) == 0L) {
+  # No entries for p6 in sheet 1 — create a default bar plus a second synthetic bar.
+  progress_counts <- dplyr::bind_rows(
+    progress_counts,
+    tibble::tibble(
+      project = 6L, sample = "default", project_id = "p6",
+      n_complete = 0L, n_miss_q = 0L, n_miss_c = 0L,
+      n_q_prog = 0L, n_cog_prog = 0L,
+      proj_target = as.numeric(total_targets["p6"]),
+      bars_per_project = 1L, sample_target = NA_real_
+    )
+  )
+  p6_present <- dplyr::filter(progress_counts, project == 6)
+}
+# Ensure two bars for p6
+if (nrow(p6_present) == 1L) {
+  second_label <- ifelse(p6_present$sample[1] == "default", "other", "second")
+  progress_counts <- dplyr::bind_rows(
+    progress_counts,
+    p6_present %>%
+      dplyr::mutate(sample = second_label,
+                    n_complete = 0L, n_miss_q = 0L, n_miss_c = 0L,
+                    n_q_prog = 0L, n_cog_prog = 0L,
+                    sample_target = NA_real_)  # target ?
+  )
+}
 
-# ---- Label fallback so TBD targets still get a text label ----
-progress <- progress %>%
+# Recompute bars_per_project for p6
+progress_counts <- progress_counts %>%
+  dplyr::group_by(project) %>% dplyr::mutate(bars_per_project = dplyr::n()) %>% dplyr::ungroup()
+
+# Apply p6 special target rules:
+progress_counts <- progress_counts %>%
   dplyr::mutate(
-    label_y = ifelse(is.na(pct_clamped), 3, pmin(pct_clamped + 3, 100))
+    sample_target = dplyr::case_when(
+      project == 6 & dplyr::row_number() == 1 ~ 80,   # first p6 bar gets target 80
+      project == 6 & dplyr::row_number() > 1  ~ NA_real_,  # second p6 bar target ?
+      TRUE ~ sample_target
+    )
+  )
+
+# ---- Convert to percent-of-target (with clamping), plus p6’s 33% second bar ----
+pctify <- function(n, target) {
+  ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100 * n / target))
+}
+
+progress_pct <- progress_counts %>%
+  dplyr::mutate(
+    pct_complete = pctify(n_complete, sample_target),
+    pct_q        = pctify(n_q_prog,  sample_target),
+    pct_cog      = pctify(n_cog_prog, sample_target)
+  )
+
+# For p6’s second bar: force fill at 33% for all three overlays (so they align visually)
+progress_pct <- progress_pct %>%
+  dplyr::group_by(project) %>%
+  dplyr::mutate(
+    is_p6_second = project == 6 & dplyr::row_number() == 2,
+    pct_complete = ifelse(is_p6_second, 33, pct_complete),
+    pct_q        = ifelse(is_p6_second, 33, pct_q),
+    pct_cog      = ifelse(is_p6_second, 33, pct_cog)
+  ) %>%
+  dplyr::ungroup()
+
+# ---- Build plotting frame with three transparent overlays per (project, sample) ----
+plot_df <- progress_pct %>%
+  dplyr::mutate(
+    # Nested label for x: project label + sample
+    project_lbl = factor(paste0("p", project), levels = paste0("p", 2:9),
+                         labels = axis_labels[paste0("p", 2:9)]),
+    sample_lbl  = sample
+  ) %>%
+  dplyr::arrange(project, sample_lbl)
+
+# We will create grouped x positions: sample bars close together, bigger gaps between projects.
+# Implement gaps by inserting spacer levels after each project.
+make_x_levels <- function(df) {
+  base <- df %>% dplyr::distinct(project_lbl, project, sample_lbl) %>% dplyr::arrange(project, sample_lbl)
+  pieces <- list()
+  uniq_proj <- unique(base$project)
+  for (p in uniq_proj) {
+    sub <- base %>% dplyr::filter(project == p)
+    x_levels <- paste0(as.character(sub$project_lbl), " • ", sub$sample_lbl)
+    pieces <- append(pieces, list(x_levels, sprintf("gap_after_%s", as.character(unique(sub$project_lbl)))))
+  }
+  # drop last gap
+  lev <- unlist(pieces)
+  if (length(lev) > 0) lev <- lev[-length(lev)]
+  lev
+}
+
+x_levels <- make_x_levels(plot_df)
+plot_long <- plot_df %>%
+  tidyr::pivot_longer(
+    cols = c(pct_cog, pct_q, pct_complete),
+    names_to = "layer",
+    values_to = "pct"
+  ) %>%
+  dplyr::mutate(
+    x = paste0(as.character(project_lbl), " • ", sample_lbl),
+    x = factor(x, levels = x_levels),
+    layer = factor(layer, levels = c("pct_cog", "pct_q", "pct_complete"),
+                   labels = c("cognitive tests only", "questionnaires only", "complete"))
   )
 
 # ---- Plot ----
-progress$project_id <- factor(progress$project_id,
-                              levels = paste0("p", 2:9),
-                              labels = axis_labels[paste0("p", 2:9)])
-
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-p <- ggplot(progress, aes(x = forcats::fct_inorder(project_id))) +
-  # 100% outlines (black)
-  geom_col(aes(y = 100), fill = NA, color = outline_color, linewidth = 0.9, width = 0.7) +
-  # filled progress
-  geom_col(aes(y = pct_clamped), fill = fill_color, width = 0.7) +
-  # vertical reference lines at 25/50/75 (drawn as hlines before coord_flip)
+# Transparent fills for three overlays
+layer_fills <- c(
+  "cognitive tests only" = "#1f77b480",   # 50% alpha-like hex
+  "questionnaires only"  = "#ff7f0e80",
+  "complete"             = "#2ca02c80"
+)
+
+p <- ggplot(plot_long, aes(x = x, y = pct, group = sample_lbl)) +
+  # 100% outlines (per x)
+  geom_col(data = plot_long %>% dplyr::distinct(x),
+           aes(x = x, y = 100), inherit.aes = FALSE,
+           fill = NA, color = outline_color, linewidth = 0.9, width = 0.7) +
+  # three transparent overlays on the same positions
+  geom_col(aes(fill = layer), width = 0.7, position = position_identity()) +
+  # reference lines
   geom_hline(yintercept = c(25, 50, 75), linetype = "dashed", linewidth = 0.3, color = refline_color) +
-  # label (uses fallback y for TBD targets)
-  geom_text(
-    aes(y = label_y,
-        label = ifelse(is.na(total_n),
-                       sprintf("%d / ?", n),                       # show ? for TBD
-                       sprintf("%d / %d (%.0f%%)", n, total_n, pct))),
-    hjust = 0,
-    size = 3.6
-  ) +
   coord_flip(clip = "off") +
+  scale_fill_manual(values = layer_fills, name = NULL) +
   scale_y_continuous(limits = c(0, 110),
                      breaks = c(0, 25, 50, 75, 100),
                      labels = c("0", "25", "50", "75", "100"),
                      expand = expansion(mult = c(0.02, 0.12))) +
+  # Increase space between projects by expanding x scale; spacer levels create visible gaps
+  scale_x_discrete(expand = expansion(add = 0.25)) +
   labs(x = NULL, y = 'Percent of "target sample size"', title = "completed backbone datasets") +
   theme_classic(base_size = 12) +
   theme(
     panel.background = element_rect(fill = "white", color = NA),
     plot.background  = element_rect(fill = "white", color = NA),
-    axis.title.y     = element_blank()
+    axis.title.y     = element_blank(),
+    legend.position  = "bottom"
   )
 
 ggsave(output_png, p, width = png_width, height = png_height, dpi = png_dpi)
 message("Saved: ", normalizePath(output_png))
 
 # ---- Optional: print a compact table ----
-progress %>%
+# Show raw counts and percent per bar (complete / q-only / cog-only)
+summary_tbl <- progress_pct %>%
   dplyr::mutate(
-    pct = ifelse(is.na(pct), NA, round(pct, 1)),
-    display_label = ifelse(is.na(total_n), paste0(n, " / ?"), paste0(n, " / ", total_n))
+    project_id = paste0("p", project),
+    target_display = dplyr::if_else(is.na(sample_target), "?", as.character(sample_target))
   ) %>%
-  dplyr::select(project_id, n, total_n, pct, display_label) %>%
-  print(n = Inf)
+  dplyr::select(
+    project_id, sample, n_complete, n_q_prog, n_cog_prog,
+    sample_target, pct_complete, pct_q, pct_cog, target_display
+  )
+
+print(summary_tbl, n = Inf)
