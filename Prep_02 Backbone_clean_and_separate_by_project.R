@@ -153,7 +153,7 @@ vp_col     <- "vpid"
 project_col<- "project"
 last_page  <- "lastpage"
 link_col   <- "comp"
-id_col     <- "id"         # careful - psytoolkit: this is the vpid; questionnaires: unique counter
+id_col     <- "id"         # careful - psytoolkit: vpid; questionnaires: unique counter
 submit_col <- "submitdate"
 
 # Fix issues with project assignment ------------------------------------------
@@ -173,6 +173,13 @@ dat_adults  <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[l
 # children
 empty_ch_3  <- dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
 dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
+
+# Project 4
+PROJECT <- 4
+# children
+empty_ch_4  <- dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
+dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
+
 
 # Project 6
 LAST_P_EMPTY <- 3 # different questionnaire
@@ -267,13 +274,21 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 40019 & dat_adults[[project_c
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 227 & dat_adults[[project_col]] == PROJECT)] <- 30047
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 316 & dat_adults[[project_col]] == PROJECT)] <- 30057
 
+# Project 4
+PROJECT <- 4
+# assuming a 0 (or many) 0s are missing
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4001 & dat_adults[[project_col]] == PROJECT)] <- 40001
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4002 & dat_adults[[project_col]] == PROJECT)] <- 40002
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT)] <- 40003
+
 # Project 9
+PROJECT <- 3
 # assuming a 0 (or many) 0s are missing
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] <- 99001
 
 # Special Case Project 8: Remap VPIDs so children and adults have unique IDs --
 dat_children_parents <- correct_child_vpids(
-  dat_children_parents,
+  dat_children_parents, vpid_col = "vpid", project_col = "project", startdate_col = "startdate",
   mapping_file = file.path("information", "2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx")
 )
 
@@ -481,12 +496,27 @@ psytool_info_adults <- psytool_info_adults %>%
 
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
 
+# Project 4
+PROJECT <- 4
+# assuming a 0 (or many) 0s are missing
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4001 & psytool_info_adults[[project_col]] == PROJECT)] <- 40001
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4002 & psytool_info_adults[[project_col]] == PROJECT)] <- 40002
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4003 & psytool_info_adults[[project_col]] == PROJECT)] <- 40003
+
 # Project 8
 PROJECT <- 8
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 800028 & psytool_info_adults[[project_col]] == PROJECT)] <- 80028
 
 # Project 9
+PROJECT <- 9
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9901)] <- 99001
+
+# Special Case Project 8: Remap VPIDs so children and adults have unique IDs --
+psytool_info_children <- correct_child_vpids(
+  psytool_info_children, vpid_col = "id", project_col = "p",  startdate_col = "TIME_start",
+  mapping_file = file.path("information", "2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx")
+)
+
 
 # Gather Pilot Participant IDs -------------------------------------------------
 pilots_ad_auto  <- find_pilot_ids(dat_general, psytool_info_adults,      vpid_col_df2 = vp_col)
