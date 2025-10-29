@@ -20,7 +20,7 @@ get_script_dir <- function() {
 }
 
 SCRIPT_DIR <- get_script_dir()
-DATA_DIR   <- file.path(SCRIPT_DIR, "private_information")
+DATA_DIR   <- file.path(SCRIPT_DIR, "private_information", "ids_in_all_projects")
 PROJ_ROOT  <- file.path(SCRIPT_DIR, "01_project_data")
 
 if (!dir.exists(DATA_DIR)) stop("Directory not found: ", DATA_DIR)

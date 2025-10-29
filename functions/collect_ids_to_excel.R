@@ -202,6 +202,14 @@ collect_ids_to_excel <- function(
   }
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   
+  # always write into "ids_in_all_projects" subfolder within private_information
+  out_dir <- file.path(out_dir, "ids_in_all_projects")
+  
+  # create the directory if it doesn't exist
+  if (!dir.exists(out_dir)) {
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  
   file_name <- paste0(date_tag, "_", out_basename, "_", data_type, ".xlsx")
   file_path <- file.path(out_dir, file_name)
   
