@@ -1,12 +1,13 @@
 #!/usr/bin/env Rscript
 
+# Install/load packages --------------------------------------------------------
 suppressPackageStartupMessages({
-  library(readxl)
-  library(openxlsx)   # for writing multi-sheet Excel
-  library(dplyr)
-  library(stringr)
-  library(purrr)
-  library(tidyr)
+  if (!require("dplyr"))     { install.packages("dplyr")      }; library(dplyr)
+  if (!require("tidyr"))     { install.packages("tidyr")      }; library(tidyr)
+  if (!require("readxl"))    { install.packages("readxl")     }; library(readxl)
+  if (!require("openxlsx"))  { install.packages("openxlsx")   }; library(openxlsx)
+  if (!require("purrr"))     { install.packages("purrr")      }; library(purrr)
+  if (!require("stringr"))   { install.packages("stringr")    }; library(openxlsx)
 })
 
 # -------------------- Helpers & Config --------------------

@@ -240,7 +240,7 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   df$remid[can_translate]      <- NA
   df$remidcheck[can_translate] <- NA
   
-  # richer log for 'XXXXX' fallbacks
+  # log for 'XXXXX' fallbacks
   x_rows <- which(xmask & eligible_rows)
   log_df <- NULL
   if (length(x_rows) > 0) {

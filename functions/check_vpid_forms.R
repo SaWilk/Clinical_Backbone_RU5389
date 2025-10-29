@@ -42,14 +42,14 @@ check_vpid_forms <- function(dat_children_parents,
       missing   = list(setdiff(required_forms, names(counts))),
       duplicate = list(names(counts[counts > 1]))
     ) %>%
-    dplyr::ungroup() %>%
-    dplyr::filter(lengths(missing) > 0 | lengths(duplicate) > 0) %>%
+    # stay rowwise for the next steps
+    dplyr::filter(length(unlist(missing)) > 0 | length(unlist(duplicate)) > 0) %>%
     dplyr::mutate(
       vpid_str = ifelse(is.na(vpid) | vpid == "", "unknown", as.character(vpid)),
       details = paste(
         c(
-          if (lengths(missing) > 0) paste0("Missing forms: ", paste(unlist(missing), collapse = ", ")),
-          if (lengths(duplicate) > 0) paste0("Duplicate forms: ", paste(unlist(duplicate), collapse = ", "))
+          if (length(unlist(missing))   > 0) paste0("Missing forms: ",   paste(unlist(missing),   collapse = ", ")),
+          if (length(unlist(duplicate)) > 0) paste0("Duplicate forms: ", paste(unlist(duplicate), collapse = ", "))
         ),
         collapse = "; "
       ),
@@ -61,19 +61,14 @@ check_vpid_forms <- function(dat_children_parents,
         "⚠️ [", dataset_name, " | ", data_type, "] vpid ", vpid_str,
         " — ", details, " — please resolve manually."
       )
-    )
+    ) %>%
+    dplyr::ungroup()   # ungroup only now
   
-  # --- Print to console ---
   if (nrow(problems)) {
     cat(paste0(problems$console_msg, collapse = "\n"))
-    
-    # --- Write to logger ---
     if (!is.null(logger) && !is.null(logger$write)) {
-      for (ln in problems$log_line) {
-        try(logger$write(ln), silent = TRUE)
-      }
+      for (ln in problems$log_line) try(logger$write(ln), silent = TRUE)
     }
   }
-  
   invisible(NULL)
 }

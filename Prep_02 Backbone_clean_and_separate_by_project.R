@@ -398,7 +398,7 @@ dat_parents_p6 <- res_parents_p6$cleaned
 trash_parents_p6 <- res_parents_p6$trash_bin
 
 # Special Case Project 8: Check C, P and A entries -----------------------------
-check_vpid_forms(dat_children_parents)
+check_vpid_forms(dat_children_parents, logger = logger)
 
 # Save the Trash just to be safe -----------------------------------------------
 all_trash_adults      <- rbind(all_empty_ad, trash_adults)
