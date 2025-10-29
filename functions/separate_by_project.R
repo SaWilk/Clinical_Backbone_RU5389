@@ -119,7 +119,8 @@ separate_by_project <- function(
     data_type = c("questionnaires", "experiment_data"),
     metadata_info = NULL, # optional
     dry_run = FALSE,
-    verbose = TRUE
+    verbose = TRUE, 
+    pilot_mode = FALSE
 ) {
   data_type <- match.arg(data_type)
   export_csv <- isTRUE(export_csv)
@@ -270,9 +271,15 @@ separate_by_project <- function(
   }
   
   # ----- suffixes -----
-  file_suffix <- if (data_type == "experiment_data") "cogtests" else "questionnaire"
-  env_suffix  <- if (data_type == "experiment_data") "cogtest" else "questionnaire"
-  subfolder   <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
+  file_suffix   <- if (data_type == "experiment_data") "cogtests"     else "questionnaire"
+  env_suffix    <- if (data_type == "experiment_data") "cogtest"      else "questionnaire"
+  subfolder_main<- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
+  
+  # final subpath under <pid>_backbone/...
+  # normal:  <subfolder_main>
+  # pilot :  pilot_data/<subfolder_main>
+  subpath_parts <- if (pilot_mode) c("pilot_data", subfolder_main) else c(subfolder_main)
+  
   
   # ----- project parsing/helpers -----
   parse_project <- function(lbl) {
@@ -296,9 +303,13 @@ separate_by_project <- function(
     
     if (pid_clean %in% c("0", "99", "unknown") || is_empty_df(d)) next
     
-    pid_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean), subfolder)
+    project_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean))
+    pid_dir     <- do.call(file.path, as.list(c(project_dir, subpath_parts)))
     ensure_dir(pid_dir)
-    base <- sprintf("%s_%s_%s_%s", pid_clean, date_str, sample_name, file_suffix)
+    
+    # build filename parts without accidental double underscores
+    name_parts <- c(pid_clean, date_str, if (pilot_mode) "PILOT" else NULL, sample_name, file_suffix)
+    base       <- paste(name_parts, collapse = "_")
     
     if (!dry_run) {
       if (export_csv) utils::write.csv(d, file.path(pid_dir, paste0(base, ".csv")), row.names = FALSE, na = "")
@@ -312,7 +323,13 @@ separate_by_project <- function(
   
   # Return unique paths as a character vector (named by project id for convenience)
   collected_dirs <- unique(collected_dirs)
-  names(collected_dirs) <- basename(dirname(collected_dirs)) # e.g., "123_backbone"
+  # name entries consistently as "<pid>_backbone" for both normal and pilot paths
+  if (pilot_mode) {
+    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))  # up two levels: .../<pid>_backbone/pilot_data/<...>
+  } else {
+    names(collected_dirs) <- basename(dirname(collected_dirs))           # .../<pid>_backbone/<...>
+  }
+  
   
   return(collected_dirs)
 }

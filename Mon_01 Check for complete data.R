@@ -211,6 +211,9 @@ openxlsx::write.xlsx(
 # -------------------- Write per-project subtables into 01_project_data/<n>_backbone --------------------
 
 write_project_workbook <- function(prj, df_complete, df_miss_q, df_miss_c) {
+  # Skip creating an XLSX for project 1 
+  if (prj == 1) { return(invisible(NULL)) }
+
   sub_complete <- df_complete %>% filter(project == prj)
   sub_miss_q   <- df_miss_q   %>% filter(project == prj)
   sub_miss_c   <- df_miss_c   %>% filter(project == prj)

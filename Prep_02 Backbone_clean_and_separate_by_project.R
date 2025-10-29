@@ -282,7 +282,7 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4002 & dat_adults[[project_co
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT)] <- 40003
 
 # Project 9
-PROJECT <- 3
+PROJECT <- 9
 # assuming a 0 (or many) 0s are missing
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] <- 99001
 
@@ -306,6 +306,9 @@ pilot_ch_6 <- c(62973, 62980, 62998, 62992, 62987, 62989, 62994, 62970)
 pilot_ad_all <- c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto)
 pilot_asc_all <- c(pilots_asc_auto)
 pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6)
+
+# --- SAVE P9 (and all) pilot rows BEFORE extracting them out ------------------
+pilot_quest_adults  <- dplyr::filter(dat_adults, .data[[vp_col]] %in% pilot_ad_all)
 
 # Move to separate file and from original dataset -----------------------------
 dat_adults <- extract_pilot_by_vpid(
@@ -331,6 +334,8 @@ dat_parents_p6 <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 # Delete not needed, incomplete or faulty datasets
+vp_col = "vpid"
+project_col = "project"
 # Project 3
 del_id_ad <- c(59, 80) # Hendrik said they can be deleted as they are incomplete
 dat_adults <- dat_adults %>%
@@ -355,6 +360,11 @@ dat_children_parents <- dat_children_parents %>%
   group_by(vpid, form) %>%
   filter(!(vpid == 80505 & form == "P" & startdate == max(startdate))) %>%
   ungroup()
+
+# Project 9
+PROJECT = 9;
+dat_adults = dat_adults %>%
+  filter(!(vpid == 90002 & lastpage == 11))
 
 # Auto-remove and check for remaining duplicates
 # Adults
@@ -533,6 +543,9 @@ pilot_ad_all  <- c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto)
 pilot_asc_all <- c(pilots_asc_auto)
 pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6)
 
+# --- save P9 (and all) pilot rows before extracting them out ------------------
+pilot_psytool_adults <- dplyr::filter(psytool_info_adults, .data[[vp_col]] %in% pilot_ad_all)
+
 # Move to separate file and from original dataset -----------------------------
 psytool_info_adults <- extract_pilot_by_vpid(
   psytool_info_adults, out_path = file.path(out_path, "pilots"), export_csv = FALSE,
@@ -583,8 +596,42 @@ adult_paths      <- separate_by_project(psytool_info_adults,      cogtest_out_pa
                                         data_type = "experiment_data", metadata_info = cogtest_info)
 children_paths   <- separate_by_project(psytool_info_children,    cogtest_out_path, "children_parents",
                                         data_type = "experiment_data", metadata_info = cogtest_info)
-adolescents_paths<- separate_by_project(psytool_info_adolescents, cogtest_out_path, "adolescents",
-                                        data_type = "experiment_data", metadata_info = cogtest_info)
+
+# ================= Pilot exception for Project 9 ==============================
+# Save pilot rows that belong to project 9 into '<pid>_backbone/pilot_data/'
+# using separate_by_project(..., pilot_mode = TRUE).
+
+write_p9_pilots <- function(df, sample_label, data_type, metadata_info) {
+  if (is.null(df) || !NROW(df)) return(invisible(NULL))
+  # Detect the project column robustly
+  proj_candidates <- c("project", "Projekt...Project", "Projekt.", "Projekt",
+                       "projekt", "p", "proj", "Proj")
+  lower_names <- tolower(names(df))
+  hit <- match(tolower(proj_candidates), lower_names)
+  hit <- hit[!is.na(hit)][1]
+  if (is.na(hit)) return(invisible(NULL))
+  proj_col <- names(df)[hit]
+  sub <- df[trimws(as.character(df[[proj_col]])) %in% c("9","P9","Project 9","9."), , drop = FALSE]
+  if (!NROW(sub)) return(invisible(NULL))
+  
+  separate_by_project(
+    sub,
+    out_path      = out_path,
+    sample        = sample_label,
+    export_csv    = FALSE,
+    data_type     = data_type,
+    metadata_info = metadata_info,
+    pilot_mode    = TRUE,
+    verbose       = TRUE
+  )
+}
+
+# --- Questionnaires (use quest_info) -----------------------------------------
+write_p9_pilots(pilot_quest_adults, "adults", "questionnaires", quest_info)
+
+# --- PsyToolkit (cognitive; use cogtest_info) --------------------------------
+write_p9_pilots(pilot_psytool_adults, "adults", "experiment_data", cogtest_info)
+
 
 path_components     <- unlist(strsplit(adult_paths[1], .Platform$file.sep))
 path_length         <- length(path_components)
@@ -629,7 +676,23 @@ logger$split(dest_dirs)
 logger$close()
 
 ## Get the Experimental Data Sets Associated with the project ------------------
+
 copy_psytool_files(cogtest_out_path = out_path, meta_env_name = "cogtest_info")
+
+# Expose the P9 adults pilot subset under the name copy_psytool_files() expects
+if (exists("pilot_psytool_adults") && NROW(pilot_psytool_adults)) {
+  data_adults_p_9_cogtest <- pilot_psytool_adults
+}
+
+# Copy P9 adults pilot experiment files under 01_project_data/9_backbone/pilot_data/experiment_data/...
+copy_psytool_files(
+  env_objects      = "data_adults_p_9_cogtest",
+  cogtest_out_path = out_path,
+  meta_env_name    = "cogtest_info",
+  allowed_projects = "9",
+  middle_subdir    = "pilot_data"   # <<< puts results under pilot_data/experiment_data
+)
+
 
 ## Print the final list of IDs to Disk -----------------------------------------
 collect_ids_to_excel(

@@ -78,7 +78,9 @@ is_blank <- function(x) {
 # Canonicalize Remote_ID by stripping an optional single leading R/r
 canon_remote <- function(x) {
   y <- toupper(trimws(as.character(x)))
-  sub("^R([0-9]+)$", "\\1", y)
+  # Strip ALL leading R/r characters (one or more)
+  y <- gsub("R+", "", y)
+  y
 }
 
 require_cols <- function(df, cols, nm) {
@@ -170,22 +172,30 @@ dat_adults           <- fix_mistyped_both(dat_adults)
 
 # Identity check before any mapping (except for the "XXXXX" rows) --------------
 flag_and_report_mismatches <- function(df, dataset_name) {
-  remid_chr  <- as.character(df$remid)
-  check_chr  <- as.character(df$remidcheck)
+  remid_chr <- as.character(df$remid)
+  check_chr <- as.character(df$remidcheck)
+  
+  # canonicalize BOTH sides (strip all r/R)
+  remid_can  <- canon_remote(remid_chr)
+  check_can  <- canon_remote(check_chr)
   
   xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
   both_present <- !is_blank(remid_chr) & !is_blank(check_chr)
-  mismatch <- both_present & (trimws(remid_chr) != trimws(check_chr)) & !xmask
+  
+  # mismatch only if canonical values differ (ignores any number of leading/interior 'r's)
+  mismatch <- both_present & (trimws(remid_can) != trimws(check_can)) & !xmask
   
   if (any(mismatch)) {
     idx <- which(mismatch)
     if (interactive()) {
-      cat("\n⚠️ [", dataset_name, "] remid vs remidcheck mismatch rows (", length(idx), "):\n", sep = "")
+      cat("\n⚠️ [", dataset_name, "] canonical remid vs remidcheck mismatches (", length(idx), "):\n", sep = "")
       for (i in idx) {
-        cat("   ⚠️ row ", i, ": remid='", remid_chr[i], "', remidcheck='", check_chr[i], "' -> MANUAL CHECK NEEDED (skipped)\n", sep = "")
+        cat("   ⚠️ row ", i,
+            ": remid='", remid_chr[i], "' (→ ", remid_can[i], ")",
+            ", remidcheck='", check_chr[i], "' (→ ", check_can[i], ") -> MANUAL CHECK NEEDED (skipped)\n", sep = "")
       }
     } else {
-      message(sprintf("[ %s ] remid vs remidcheck mismatches: %s", dataset_name, paste(idx, collapse = ", ")))
+      message(sprintf("[ %s ] canonical mismatches: %s", dataset_name, paste(idx, collapse = ", ")))
     }
   }
   
@@ -193,28 +203,29 @@ flag_and_report_mismatches <- function(df, dataset_name) {
   eligible
 }
 
+
 # Unmapped check (Point 5 + canonical compare) ---------------------------------
 find_unmapped <- function(df, remote_ids_canon, eligible_rows) {
-  remid_chr  <- as.character(df$remid)
-  check_chr  <- as.character(df$remidcheck)
+  remid_chr <- as.character(df$remid)
+  check_chr <- as.character(df$remidcheck)
   
-  xmask      <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
-  key        <- ifelse(xmask & !is_blank(check_chr), check_chr, remid_chr)
+  xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
+  key   <- ifelse(xmask & !is_blank(check_chr), check_chr, remid_chr)
   
   use_mask   <- eligible_rows & !is_blank(key)
   candidates <- trimws(key[use_mask])
   
-  # Accept: digits OR optional leading R/r + digits
-  valid_pat  <- grepl("^[0-9]+$", candidates) | grepl("^[Rr][0-9]+$", candidates)
-  candidates <- candidates[valid_pat]
-  
-  # Compare canonically (strip optional 'R')
+  # validate AFTER stripping all r/R: require digits-only canonical form
   canon <- canon_remote(candidates)
-  unmapped_canon <- setdiff(canon, as.character(remote_ids_canon))
+  keep  <- grepl("^[0-9]+$", canon)
+  candidates <- candidates[keep]
+  canon      <- canon[keep]
   
-  # Return the ORIGINAL candidate strings whose canonical form is unmapped
+  unmapped_canon <- setdiff(canon, as.character(remote_ids_canon))
+  # return ORIGINAL strings whose canonical form is unmapped
   candidates[canon %in% unmapped_canon]
 }
+
 
 # translate + log function (canonical join + richer logs) ----------------------
 translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
@@ -230,7 +241,8 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   df <- df |>
     dplyr::left_join(
       map_tbl |> dplyr::select(Participant_ID, Remote_ID_canon),
-      by = c("key_for_mapping_canon" = "Remote_ID_canon")
+      by = c("key_for_mapping_canon" = "Remote_ID_canon"), 
+      multiple = "all"
     )
   
   can_translate <- eligible_rows & !is_blank(df$key_for_mapping) & !is.na(df$Participant_ID)
