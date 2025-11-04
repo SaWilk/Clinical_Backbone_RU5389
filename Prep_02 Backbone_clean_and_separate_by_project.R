@@ -356,6 +356,8 @@ dat_children_parents <- dat_children_parents %>%
   filter(!(vpid == 80505 & form == "P" & startdate == max(startdate))) %>%
   ungroup()
 
+dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), ]
+
 # Auto-remove and check for remaining duplicates
 # Adults
 res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col,
@@ -554,6 +556,8 @@ psytool_info_adults <- psytool_info_adults %>%
   group_by(.data[[vp_col]]) %>%
   filter(!(.data[[vp_col]] == 30009 & .data[[start_col]] != max(.data[[start_col]]))) %>%
   ungroup()
+
+psytool_info_adults <- psytool_info_adults[!(psytool_info_adults$id == 80009 & psytool_info_adults$p == 8), ]
 
 # Adults
 res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col,
