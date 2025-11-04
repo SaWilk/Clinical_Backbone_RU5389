@@ -83,8 +83,9 @@ copy_psytool_files <- function(
     env_objects      = NULL,
     cogtest_out_path = NULL,
     meta_env_name    = "cogtest_info",
-    test_cols        = c("WCST_1", "LNS_1", "BACS_1"),          # [Fix 3]
-    allowed_projects = as.character(1:9)                         # [Fix 3]
+    test_cols        = c("WCST_1", "LNS_1", "BACS_1"),          
+    allowed_projects = as.character(2:9),
+    middle_subdir    = NULL
 ) {
   base_dir <- normalizePath(getwd(), winslash = "\\", mustWork = TRUE)
   
@@ -264,7 +265,11 @@ copy_psytool_files <- function(
     date_tag <- date_for_sample(sample)
     
     project_block  <- sprintf("%s_backbone", project)
-    experiment_dir <- file.path(cogtest_out_path, project_block, "experiment_data")
+    experiment_dir <- if (is.null(middle_subdir) || !nzchar(middle_subdir)) {
+      file.path(cogtest_out_path, project_block, "experiment_data")
+    } else {
+      file.path(cogtest_out_path, project_block, middle_subdir, "experiment_data")
+    }
     
     dated_folder_name <- sprintf("%s_%s_%s_cogtest_data", project, date_tag, sample)
     dest_dir <- file.path(experiment_dir, dated_folder_name)

@@ -1,12 +1,13 @@
 #!/usr/bin/env Rscript
 
+# Install/load packages --------------------------------------------------------
 suppressPackageStartupMessages({
-  library(readxl)
-  library(openxlsx)   # for writing multi-sheet Excel
-  library(dplyr)
-  library(stringr)
-  library(purrr)
-  library(tidyr)
+  if (!require("dplyr"))     { install.packages("dplyr")      }; library(dplyr)
+  if (!require("tidyr"))     { install.packages("tidyr")      }; library(tidyr)
+  if (!require("readxl"))    { install.packages("readxl")     }; library(readxl)
+  if (!require("openxlsx"))  { install.packages("openxlsx")   }; library(openxlsx)
+  if (!require("purrr"))     { install.packages("purrr")      }; library(purrr)
+  if (!require("stringr"))   { install.packages("stringr")    }; library(openxlsx)
 })
 
 # -------------------- Helpers & Config --------------------
@@ -19,7 +20,7 @@ get_script_dir <- function() {
 }
 
 SCRIPT_DIR <- get_script_dir()
-DATA_DIR   <- file.path(SCRIPT_DIR, "private_information")
+DATA_DIR   <- file.path(SCRIPT_DIR, "private_information", "ids_in_all_projects")
 PROJ_ROOT  <- file.path(SCRIPT_DIR, "01_project_data")
 
 if (!dir.exists(DATA_DIR)) stop("Directory not found: ", DATA_DIR)
@@ -210,6 +211,9 @@ openxlsx::write.xlsx(
 # -------------------- Write per-project subtables into 01_project_data/<n>_backbone --------------------
 
 write_project_workbook <- function(prj, df_complete, df_miss_q, df_miss_c) {
+  # Skip creating an XLSX for project 1 
+  if (prj == 1) { return(invisible(NULL)) }
+
   sub_complete <- df_complete %>% filter(project == prj)
   sub_miss_q   <- df_miss_q   %>% filter(project == prj)
   sub_miss_c   <- df_miss_c   %>% filter(project == prj)

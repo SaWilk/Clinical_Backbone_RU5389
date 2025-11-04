@@ -97,7 +97,7 @@ move_old_backbones <- function(base_dir, dry_run = TRUE, method = c("auto","robo
     dest_dir <- file.path(old_data_dir, basename(src_dir))
     if (!dry_run && !dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE)
     
-    message("\n📂 Processing: ", basename(src_dir))
+    message("\n Processing: ", basename(src_dir))
     
     # Identify special subfolders (immediate children only)
     present_special <- file.path(src_dir, basename(list.dirs(src_dir, full.names = FALSE, recursive = FALSE)))
