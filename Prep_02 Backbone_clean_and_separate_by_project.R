@@ -68,7 +68,7 @@ if (!dir.exists(discarded_path)) {
   dir.create(discarded_path, recursive = TRUE)
 }
 
-# Helper: safe CSV read ----------------------------------------------
+# ---------- shared helpers ----------
 safe_read_csv <- function(path, sep = NULL) {
   if (!file.exists(path)) stop("Missing file: ", path)
   if (is.null(sep)) {
@@ -77,6 +77,55 @@ safe_read_csv <- function(path, sep = NULL) {
     read.csv(path, sep = sep)
   }
 }
+
+.detect_script_dir <- function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  idx <- grep("^--file=", args)
+  if (length(idx)) {
+    p <- sub("^--file=", "", args[idx[length(idx)]])
+    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
+  }
+  if (requireNamespace("rstudioapi", quietly = TRUE)) {
+    p <- tryCatch(rstudioapi::getActiveDocumentContext()$path, error = function(e) "")
+    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
+  }
+  if (requireNamespace("knitr", quietly = TRUE)) {
+    p <- tryCatch(knitr::current_input(dir = TRUE), error = function(e) "")
+    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
+  }
+  ""
+}
+.sanitize_base <- function(p) {
+  if (is.null(p)) return(NULL)
+  p2 <- normalizePath(p, winslash = "/", mustWork = FALSE)
+  tail <- tolower(basename(p2))
+  if (tail %in% c("experiment_data", "questionnaires")) dirname(p2) else p2
+}
+.normalize_sample <- function(x) {
+  x <- tolower(x)
+  if (grepl("parents_p6", x)) return("parents_p6")
+  if (grepl("children_p6", x)) return("children_p6")
+  if (grepl("children_parents", x)) return("children_parents")
+  if (grepl("(?:^|[_\\.-])(children)(?:$|[_\\.-])", x)) return("children_parents")
+  if (grepl("(?:^|[_\\.-])(adolescents)(?:$|[_\\.-])", x)) return("adolescents")
+  if (grepl("(?:^|[_\\.-])(adults)(?:$|[_\\.-])", x)) return("adults")
+  "unknown"
+}
+.infer_sample_from_call <- function(df) {
+  txt1 <- tryCatch(paste(deparse(substitute(df)), collapse = ""), error = function(e) "")
+  s1 <- .normalize_sample(txt1); if (s1 != "unknown") return(s1)
+  mc <- tryCatch(match.call(expand.dots = FALSE)$df, error = function(e) NULL)
+  txt2 <- tryCatch(if (!is.null(mc)) paste(deparse(mc), collapse = "") else "", error = function(e) "")
+  s2 <- .normalize_sample(txt2); if (s2 != "unknown") return(s2)
+  pf <- parent.frame()
+  nms <- ls(envir = pf, all.names = TRUE)
+  cand <- nms[grepl("adults|adolescents|children_parents|children|parents_p6|children_p6", tolower(nms))]
+  for (nm in cand) { s3 <- .normalize_sample(nm); if (s3 != "unknown") return(s3) }
+  "unknown"
+}
+.ensure_dir <- function(path, dry_run) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+.is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
+.parse_pid <- function(lbl) { s <- trimws(as.character(lbl)); d <- gsub("\\D+", "", s); if (nzchar(d)) d else "unknown" }
 
 ## Source required functions ---------------------------------------------------
 source(file.path(function_path, "separate_by_project.R"))
@@ -95,6 +144,9 @@ source(file.path(function_path, "setup_logging.R"))
 source(file.path(function_path, "qc_ranges_and_missing.R"))
 source(file.path(function_path, "aggregate_scales.R"))
 source(file.path(function_path, "extract_scales.R"))
+source(file.path(function_path, "prepare_project_slices.R"))
+source(file.path(function_path, "write_project_slices.R"))
+source(file.path(function_path, "analyze_rushing.R"))
 
 
 ## Move old Data ---------------------------------------------------------------
@@ -434,12 +486,22 @@ write_xlsx(all_trash_children,    file.path(out_path, "discarded", sprintf("dele
 write_xlsx(all_trash_adolescents, file.path(out_path, "discarded", sprintf("deleted-rows_%s_adolescents.xlsx", today)))
 
 # Separate the data by project and store on disk -------------------------------
+
+samples <- list(
+  adults          = dat_adults,
+  adolescents     = dat_adolescents,
+  children_parents= dat_children_parents,
+  children_p6     = dat_children_p6,
+  parents_p6      = dat_parents_p6
+)
+
 # Questionnaires
-separate_by_project(dat_adults,           out_path, "adults",          data_type = "questionnaires", metadata_info = quest_info)
-separate_by_project(dat_adolescents,      out_path, "adolescents",     data_type = "questionnaires", metadata_info = quest_info)
-separate_by_project(dat_children_parents, out_path, "children",        data_type = "questionnaires", metadata_info = quest_info)
-separate_by_project(dat_children_p6,      out_path, "children_p6",     data_type = "questionnaires", metadata_info = quest_info)
-separate_by_project(dat_parents_p6,       out_path, "parents_p6",      data_type = "questionnaires", metadata_info = quest_info)
+lapply(names(samples), function(s) {
+  prep <- prepare_project_slices(samples[[s]], out_path = out_path, sample = s, data_type = "questionnaires", metadata_info = quest_info)
+  prep <- analyze_rushing(prep)
+  write_project_slices(prep)
+})
+
 
 ##########################################################################
 ## Data Cleaning for Cognitive Test Data ---------------------------------
@@ -607,10 +669,19 @@ trash_children        <- res_children$trash_bin
 
 # Separate the data by project and store on disk -------------------------------
 # Cognitive Tests
-adult_paths      <- separate_by_project(psytool_info_adults,      cogtest_out_path, "adults",
-                                        data_type = "experiment_data", metadata_info = cogtest_info)
-children_paths   <- separate_by_project(psytool_info_children,    cogtest_out_path, "children_parents",
-                                        data_type = "experiment_data", metadata_info = cogtest_info)
+
+samples <- list(
+  adults          = psytool_info_adults,
+  adolescents     = psytool_info_adolescents,
+  children_parents= psytool_info_children
+)
+
+# Cogtests
+variable_output_paths = lapply(names(samples), function(s) {
+  prep <- prepare_project_slices(samples[[s]], out_path = out_path, sample = s, data_type = "experiment_data", metadata_info = cogtest_info)
+  write_project_slices(prep)
+})
+names(variable_output_paths) <- names(samples)
 
 
 # ================= Pilot exception for Project 9 ==============================
@@ -649,9 +720,9 @@ write_p9_pilots(pilot_quest_adults, "adults", "questionnaires", quest_info)
 write_p9_pilots(pilot_psytool_adults, "adults", "experiment_data", cogtest_info)
 
 
-path_components     <- unlist(strsplit(adult_paths[1], .Platform$file.sep))
+path_components     <- unlist(strsplit(variable_output_paths$adults[1], .Platform$file.sep))
 path_length         <- length(path_components)
-all_path_components <- unlist(strsplit(adult_paths, .Platform$file.sep))
+all_path_components <- unlist(strsplit(variable_output_paths$adults, .Platform$file.sep))
 
 # given: all_path_components (character vector), path_length (integer)
 n <- floor(length(all_path_components) / path_length)
@@ -859,123 +930,3 @@ qc_results <- imap(datasets, function(dat, nm) {
   invisible(res)
 })
 
-
-
-## ---- Combine data, log-transform, 2 SD rule on log scale, and plot ----
-
-# 1) Bind all datasets together while keeping dataset name
-all_dt <- do.call(
-  rbind,
-  lapply(names(datasets), function(nm) {
-    df <- datasets[[nm]]
-    needed <- intersect(c("vpid", "interviewtime"), names(df))
-    if (length(needed) < 2) {
-      stop(sprintf("Dataset '%s' is missing 'vpid' or 'interviewtime'.", nm))
-    }
-    out <- df[needed]
-    out$.dataset <- nm
-    out
-  })
-)
-
-# Coerce interviewtime to numeric
-all_dt$interviewtime <- suppressWarnings(as.numeric(all_dt$interviewtime))
-
-# Keep only positive times for log transform; warn about drops
-valid_idx <- !is.na(all_dt$interviewtime) & all_dt$interviewtime > 0
-if (!all(valid_idx)) {
-  message(sprintf(
-    "Excluding %d rows with non-positive or missing interviewtime before log-transform.",
-    sum(!valid_idx)
-  ))
-}
-dt_valid <- all_dt[valid_idx, , drop = FALSE]
-
-# 2) Compute mean and SD on the log scale (natural log)
-log_times <- log(dt_valid$interviewtime)
-log_mean  <- mean(log_times)
-log_sd    <- sd(log_times)
-
-# Cutoff on log scale and back-transform to seconds
-cutoff_log     <- log_mean - 2 * log_sd
-center_seconds <- exp(log_mean)
-cutoff_seconds <- exp(cutoff_log)
-
-cat(sprintf("Mean (log scale): %.4f\n", log_mean))
-cat(sprintf("SD (log scale): %.4f\n", log_sd))
-cat(sprintf("Cutoff (log): mean - 2*SD = %.4f\n", cutoff_log))
-cat(sprintf("Center on original scale (exp(mean_log)) = %.2f s\n", center_seconds))
-cat(sprintf("2 SD cutoff on original scale (exp(mean_log - 2*SD)) = %.2f s\n", cutoff_seconds))
-
-# 3) Flag participants: log(interviewtime) < log_mean - 2*SD
-dt_valid$log_interviewtime <- log_times
-flagged <- subset(
-  dt_valid,
-  log_interviewtime < cutoff_log
-)[, c(".dataset", "vpid", "interviewtime")]
-
-flagged <- flagged[order(flagged$interviewtime), ]
-
-if (nrow(flagged) == 0) {
-  message("No participants found below the 2 SD cutoff on the log scale.")
-} else {
-  message("Participants more than 2 SD below the mean on the log scale:")
-  print(flagged, row.names = FALSE)
-}
-
-# ---- 4a) Histogram on original seconds scale ----
-op <- par(no.readonly = TRUE)
-on.exit(par(op), add = TRUE)
-
-hist(
-  dt_valid$interviewtime,
-  breaks = "FD",
-  main   = "Interview Time (seconds) — Log-scale 2 SD Rule",
-  xlab   = "Interview time (seconds)"
-)
-abline(v = center_seconds, lwd = 2)        # exp(mean_log)
-abline(v = cutoff_seconds, lwd = 2, lty = 2)  # exp(mean_log - 2*SD_log)
-
-legend("topright",
-       legend = c(
-         sprintf("exp(mean_log) = %.2f s", center_seconds),
-         sprintf("Cutoff = %.2f s", cutoff_seconds)
-       ),
-       lwd = c(2, 2), lty = c(1, 2), bty = "n")
-
-if (nrow(flagged) > 0) {
-  rug(flagged$interviewtime, ticksize = 0.05)
-}
-
-# ---- 4b) Histogram on log-transformed scale ----
-hist(
-  log_times,
-  breaks = "FD",
-  main   = "Log(Interview Time) — 2 SD Rule",
-  xlab   = "log(Interview time)"
-)
-abline(v = log_mean, lwd = 2)       # mean on log scale
-abline(v = cutoff_log, lwd = 2, lty = 2)  # mean - 2*SD cutoff
-
-legend("topright",
-       legend = c(
-         sprintf("Mean(log) = %.3f", log_mean),
-         sprintf("Cutoff(log) = %.3f", cutoff_log)
-       ),
-       lwd = c(2, 2), lty = c(1, 2), bty = "n")
-
-rug(log(flagged$interviewtime), ticksize = 0.05)
-
-# ---- 5) Package results ----
-results <- list(
-  log_mean = log_mean,
-  log_sd = log_sd,
-  cutoff_log = cutoff_log,
-  center_seconds = center_seconds,
-  cutoff_seconds = cutoff_seconds,
-  flagged_participants = flagged,
-  combined_data_valid = dt_valid
-)
-
-# Inspect:
-# results$flagged_participants
