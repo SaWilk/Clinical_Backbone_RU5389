@@ -271,17 +271,14 @@ separate_by_project <- function(
   }
   
   # ----- suffixes -----
-  file_suffix   <- if (data_type == "experiment_data") "cogtests"     else "questionnaire"
-  env_suffix    <- if (data_type == "experiment_data") "cogtest"      else "questionnaire"
-  subfolder_main<- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
+  file_suffix    <- if (data_type == "experiment_data") "cogtests"        else "questionnaire"
+  env_suffix     <- if (data_type == "experiment_data") "cogtest"         else "questionnaire"
+  subfolder_main <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
   
   # final subpath under <pid>_backbone/...
-  # normal:  <subfolder_main>
-  # pilot :  pilot_data/<subfolder_main>
   subpath_parts <- if (pilot_mode) c("pilot_data", subfolder_main) else c(subfolder_main)
   
-  
-  # ----- project parsing/helpers -----
+  # ----- helpers -----
   parse_project <- function(lbl) {
     s <- trimws(as.character(lbl))
     digits <- gsub("\\D+", "", s)
@@ -290,46 +287,175 @@ separate_by_project <- function(
   is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
   ensure_dir <- function(path) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
   
-  # ====== NEW: collect output directories ======
-  collected_dirs <- character(0)
-  
-  # ----- split & write -----
+  # ===== Stage A: split, collect (no writing yet) =================================
   parts <- split(df, df[[proj_col]], drop = TRUE)
+  split_list <- list()
+  
   for (lbl in names(parts)) {
     d <- parts[[lbl]]
     pid_clean <- parse_project(lbl)$pid
     varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
-    assign(varname, d, envir = .GlobalEnv)
+    assign(varname, d, envir = .GlobalEnv) # side effect per original spec
     
-    if (pid_clean %in% c("0", "99", "unknown") || is_empty_df(d)) next
-    
+    # skip empty/unknown later; still store bookkeeping
     project_dir <- file.path(base_dir, sprintf("%s_backbone", pid_clean))
     pid_dir     <- do.call(file.path, as.list(c(project_dir, subpath_parts)))
-    ensure_dir(pid_dir)
     
-    # build filename parts without accidental double underscores
     name_parts <- c(pid_clean, date_str, if (pilot_mode) "PILOT" else NULL, sample_name, file_suffix)
     base       <- paste(name_parts, collapse = "_")
     
-    if (!dry_run) {
-      if (export_csv) utils::write.csv(d, file.path(pid_dir, paste0(base, ".csv")), row.names = FALSE, na = "")
-      writexl::write_xlsx(d, file.path(pid_dir, paste0(base, ".xlsx")))
-    }
-    if (verbose) message("Saved: ", file.path(pid_dir, paste0(base, ".xlsx")), " | env: ", varname)
+    split_list[[length(split_list) + 1]] <- list(
+      pid = pid_clean,
+      label = lbl,
+      varname = varname,
+      df = d,
+      project_dir = project_dir,
+      pid_dir = pid_dir,
+      file_base = base
+    )
+  }
+  
+  # ===== Stage B: compute rushing flag on combined data (per sample) ==============
+  # Only if typical questionnaire columns exist
+  can_flag <- any(vapply(split_list, function(x) all(c("vpid", "interviewtime") %in% names(x$df)), logical(1)))
+  cutoff_seconds <- NA_real_
+  center_seconds <- NA_real_
+  log_mean <- NA_real_; log_sd <- NA_real_
+  
+  if (can_flag) {
+    # combine only valid per-project slices (exclude unknown/empty)
+    all_valid <- lapply(split_list, function(x) {
+      d <- x$df
+      if (x$pid %in% c("0","99","unknown") || is_empty_df(d)) return(NULL)
+      # ensure numeric
+      d$interviewtime <- suppressWarnings(as.numeric(d$interviewtime))
+      d$.pid <- x$pid
+      d
+    })
+    all_valid <- do.call(rbind, all_valid)
     
-    # ====== NEW: record the directory ======
-    collected_dirs <- c(collected_dirs, pid_dir)
+    if (!is.null(all_valid) && nrow(all_valid) > 0) {
+      idx <- !is.na(all_valid$interviewtime) & all_valid$interviewtime > 0
+      if (sum(idx) > 1L) {
+        log_times <- log(all_valid$interviewtime[idx])
+        log_mean  <- mean(log_times)
+        log_sd    <- stats::sd(log_times)
+        cutoff_log <- log_mean - 2 * log_sd
+        center_seconds <- exp(log_mean)
+        cutoff_seconds <- exp(cutoff_log)
+      } else {
+        if (verbose) message("Not enough positive interviewtime values to compute log-based cutoff for sample '", sample_name, "'.")
+        can_flag <- FALSE
+      }
+    } else {
+      can_flag <- FALSE
+    }
   }
   
-  # Return unique paths as a character vector (named by project id for convenience)
+  if (verbose && isTRUE(can_flag)) {
+    message(sprintf("Rushing rule (sample='%s'): log mean = %.4f, log SD = %.4f, cutoff(seconds) = %.2f", 
+                    sample_name, log_mean, log_sd, cutoff_seconds))
+  }
+  
+  # ===== Stage C: augment, write per-project, and collect output dirs =============
+  collected_dirs <- character(0)
+  
+  for (i in seq_along(split_list)) {
+    info <- split_list[[i]]
+    d <- info$df
+    
+    # add rushing flag if possible
+    if (isTRUE(can_flag) && all(c("vpid","interviewtime") %in% names(d))) {
+      d$interviewtime <- suppressWarnings(as.numeric(d$interviewtime))
+      d$rushing_2sd_log <- with(d, !is.na(interviewtime) & interviewtime > 0 & log(interviewtime) < (log_mean - 2 * log_sd))
+    } else {
+      if (verbose) message("Skipping rushing flag for ", info$varname, " (missing vpid/interviewtime or cutoff unavailable).")
+    }
+    
+    # reassign augmented df into .GlobalEnv
+    assign(info$varname, d, envir = .GlobalEnv)
+    
+    # skip writing for unknown/empty
+    if (info$pid %in% c("0","99","unknown") || is_empty_df(d)) next
+    
+    ensure_dir(info$pid_dir)
+    fp_xlsx <- file.path(info$pid_dir, paste0(info$file_base, ".xlsx"))
+    if (!dry_run) {
+      if (export_csv) utils::write.csv(d, file.path(info$pid_dir, paste0(info$file_base, ".csv")), row.names = FALSE, na = "")
+      writexl::write_xlsx(d, fp_xlsx)
+    }
+    if (verbose) message("Saved: ", fp_xlsx, " | env: ", info$varname)
+    collected_dirs <- c(collected_dirs, info$pid_dir)
+  }
+  
+  # ===== Stage D: write composite "all projects" per-sample dataset ===============
+  if (length(split_list) > 0) {
+    comp_list <- lapply(split_list, function(x) {
+      d <- x$df
+      if (!is.null(d)) {
+        d$.pid <- x$pid
+        d
+      } else NULL
+    })
+    comp_df <- do.call(rbind, comp_list)
+    
+    all_projects_dir <- file.path(base_dir, "all_projects_backbone", subfolder_main)
+    ensure_dir(all_projects_dir)
+    
+    comp_base <- paste(c("ALL", date_str, if (pilot_mode) "PILOT" else NULL, sample_name, file_suffix), collapse = "_")
+    if (!dry_run) {
+      if (export_csv) utils::write.csv(comp_df, file.path(all_projects_dir, paste0(comp_base, ".csv")), row.names = FALSE, na = "")
+      writexl::write_xlsx(comp_df, file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
+    }
+    if (verbose) message("Saved composite sample dataset: ", file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
+  }
+  
+  # ===== Stage E: export histograms to 'out/' next to script ======================
+  # One on original seconds scale (with exp(mean_log) & exp(mean_log-2*SD));
+  # One on log scale (with mean_log & cutoff_log).
+  out_dir <- file.path(base_dir, "out")
+  ensure_dir(out_dir)
+  if (isTRUE(can_flag)) {
+    # gather valid seconds for plotting
+    plot_vec <- all_valid$interviewtime[idx]
+    
+    # seconds-scale histogram
+    png(file.path(out_dir, sprintf("%s_%s_hist_seconds.png", date_str, sample_name)), width = 1200, height = 800, res = 150)
+    hist(plot_vec, breaks = "FD",
+         main = sprintf("Interview Time (seconds) — %s", sample_name),
+         xlab = "Interview time (seconds)")
+    abline(v = exp(log_mean), lwd = 2)
+    abline(v = cutoff_seconds, lwd = 2, lty = 2)
+    legend("topright",
+           legend = c(sprintf("exp(mean_log) = %.2f s", exp(log_mean)),
+                      sprintf("Cutoff = %.2f s", cutoff_seconds)),
+           lwd = c(2,2), lty = c(1,2), bty = "n")
+    dev.off()
+    
+    # log-scale histogram
+    png(file.path(out_dir, sprintf("%s_%s_hist_log.png", date_str, sample_name)), width = 1200, height = 800, res = 150)
+    hist(log(plot_vec), breaks = "FD",
+         main = sprintf("log(Interview Time) — %s", sample_name),
+         xlab = "log(interview time)")
+    abline(v = log_mean, lwd = 2)
+    abline(v = (log_mean - 2 * log_sd), lwd = 2, lty = 2)
+    legend("topright",
+           legend = c(sprintf("Mean(log) = %.3f", log_mean),
+                      sprintf("Cutoff(log) = %.3f", log_mean - 2*log_sd)),
+           lwd = c(2,2), lty = c(1,2), bty = "n")
+    dev.off()
+    
+    if (verbose) message("Saved histograms to: ", out_dir)
+  } else if (verbose) {
+    message("Histograms not created (cutoff unavailable).")
+  }
+  
+  # ===== finalize return value ====================================================
   collected_dirs <- unique(collected_dirs)
-  # name entries consistently as "<pid>_backbone" for both normal and pilot paths
   if (pilot_mode) {
-    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))  # up two levels: .../<pid>_backbone/pilot_data/<...>
+    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))
   } else {
-    names(collected_dirs) <- basename(dirname(collected_dirs))           # .../<pid>_backbone/<...>
+    names(collected_dirs) <- basename(dirname(collected_dirs))
   }
-  
-  
   return(collected_dirs)
 }

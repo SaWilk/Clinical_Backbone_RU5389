@@ -92,7 +92,7 @@ source(file.path(function_path, "partition_empty_obs_psytoolkit.R"))
 source(file.path(function_path, "collect_ids_to_excel.R"))
 source(file.path(function_path, "move_old_backbones.R"))
 source(file.path(function_path, "setup_logging.R"))
-source(file.path(function_path, "check_ranges.R"))
+source(file.path(function_path, "qc_ranges_and_missing.R"))
 source(file.path(function_path, "aggregate_scales.R"))
 source(file.path(function_path, "extract_scales.R"))
 
@@ -178,7 +178,7 @@ dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)]  <- 2
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)] <- 9
 
 # Remove empty Rows ------------------------------------------------------------
-LAST_P_EMPTY <- 6
+LAST_P_EMPTY <- 7
 # Project 3
 PROJECT <- 3
 # adult
@@ -193,7 +193,9 @@ PROJECT <- 4
 # children
 empty_ch_4  <- dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
 dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
-
+# adult
+empty_ad_4  <- dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ]
+dat_adults  <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ]
 
 # Project 6
 LAST_P_EMPTY <- 3 # different questionnaire
@@ -206,7 +208,7 @@ dat_parents_p6   <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY)
 
 # Project 7
 PROJECT <- 7
-LAST_P_EMPTY <- 6 # back to original questionnaire
+LAST_P_EMPTY <- 7 # back to original questionnaire
 # adult
 empty_ad_7 <- dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
 dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
@@ -610,6 +612,7 @@ adult_paths      <- separate_by_project(psytool_info_adults,      cogtest_out_pa
 children_paths   <- separate_by_project(psytool_info_children,    cogtest_out_path, "children_parents",
                                         data_type = "experiment_data", metadata_info = cogtest_info)
 
+
 # ================= Pilot exception for Project 9 ==============================
 # Save pilot rows that belong to project 9 into '<pid>_backbone/pilot_data/'
 # using separate_by_project(..., pilot_mode = TRUE).
@@ -742,26 +745,29 @@ collect_ids_to_excel(
 
 ## Data Sanity Check -----------------------------------------
 
-# Canonical key: strip all non-alphanumerics, lowercase
+
+
+## ------------- helpers -------------
+
+# Canonical key: lowercase + remove all non-alphanumerics
 .canon_key <- function(x) {
-  x %>%
-    tolower() %>%
-    gsub("[^a-z0-9]+", "", ., perl = TRUE)
+  x <- tolower(x)
+  gsub("[^a-z0-9]", "", x, perl = TRUE)
 }
 
-# Normalize an Item/Scale table to columns: item, scale, item_key
+# Normalize item/scale mapping to columns: item, scale, item_key
 .normalize_item_info <- function(item_info_adults) {
   ii <- item_info_adults %>%
     rename_with(~ "item",  dplyr::matches("(?i)^item$")) %>%
     rename_with(~ "scale", dplyr::matches("(?i)^scale$")) %>%
     mutate(
-      item  = as.character(item),
-      scale = as.character(scale),
+      item     = as.character(item),
+      scale    = as.character(scale),
       item_key = .canon_key(item)
     ) %>%
     distinct(item, scale, item_key)
   
-  # sanity: warn if duplicate keys map to different items
+  # warn if different item names collapse to same key
   dup_keys <- ii %>% count(item_key) %>% filter(n > 1)
   if (nrow(dup_keys) > 0) {
     warning("Multiple Item names collapse to the same canonical key: ",
@@ -771,7 +777,7 @@ collect_ids_to_excel(
   ii
 }
 
-# Normalize scoring_info to columns: scale, min, max
+# Normalize scoring to columns: scale, min, max
 .normalize_scoring_info <- function(scoring_info) {
   scoring_info %>%
     rename_with(~ "scale", dplyr::matches("(?i)^scale$")) %>%
@@ -781,71 +787,195 @@ collect_ids_to_excel(
     select(scale, min, max)
 }
 
-# Build the link between Item names and actual dat_adults column names,
-# handling bracket/dot/etc. mismatches via canonical keys.
-.build_item_link <- function(dat_adults, item_info_adults) {
-  ii <- .normalize_item_info(item_info_adults)
+# Link mapping items to actual data columns (handles brackets/dots via canonical keys)
+# Returns: list(link, present, missing)
+.build_item_link <- function(dat, item_info_adults) {
+  ii <- .normalize_item_info(item_info_adults) %>%
+    mutate(item_key = .canon_key(item))
   
   dat_cols <- tibble(
-    data_col = names(dat_adults),
-    item_key = .canon_key(names(dat_adults))
+    data_col = names(dat),
+    data_key = .canon_key(names(dat))
   )
   
+  # join item_key (mapping) -> data_key (actual columns)
   link <- ii %>%
-    left_join(dat_cols, by = "item_key")
+    left_join(dat_cols, by = c("item_key" = "data_key")) %>%
+    select(item, scale, item_key, data_col)
   
-  # items present vs. missing in dat
-  present  <- link %>% filter(!is.na(data_col))
-  missing  <- link %>% filter(is.na(data_col))
+  # for QC we only care about true scales, not admin fields
+  present <- link %>% filter(!is.na(data_col), !is.na(scale))
+  missing <- link %>% filter(is.na(data_col), !is.na(scale))
   
-  # sanity: warn if multiple data columns collapse to same key
-  dup_dat_keys <- dat_cols %>% count(item_key) %>% filter(n > 1)
+  # warn if data columns canonicalize to the same key (rare)
+  dup_dat_keys <- dat_cols %>% count(data_key) %>% filter(n > 1)
   if (nrow(dup_dat_keys) > 0) {
     warning("Multiple data columns collapse to the same canonical key: ",
-            paste0(dup_dat_keys$item_key, collapse = ", "),
+            paste0(dup_dat_keys$data_key, collapse = ", "),
             ". Consider cleaning column names to avoid ambiguity.")
   }
   
   list(link = link, present = present, missing = missing)
 }
-# 0) (Optional) Quick look at mismatch resolution
-# items listed in mapping but not found in dat will be warned by check_ranges()
 
-# 1) Validate ranges & missingness
-qc <- check_ranges(
-  dat_adults        = dat_adults,
-  item_info_adults  = item_info_adults,  # columns: Item, Scale (any case OK)
-  scoring_info      = scoring_info,      # columns: scale/min/max (any case OK)
-  id_col            = NULL               # or "participant_id" if you have one
+
+
+
+
+# expect objects named data_adults_p_1_questionnaire ... _p_9_questionnaire
+dataset_names <- sprintf("data_adults_p_%d_questionnaire", 1:9)
+dataset_names <- dataset_names[dataset_names %in% ls(envir = .GlobalEnv)]
+datasets <- mget(dataset_names, envir = .GlobalEnv)
+
+# run QC on each dataset
+qc_results <- imap(datasets, function(dat, nm) {
+  message("\n--- QC for ", nm, " ---")
+  
+  # quick mapping counts (optional; useful for sanity)
+  lp <- .build_item_link(dat, item_info_adults)
+  message("Mapped items: ", nrow(lp$present), "  |  Unmapped (in mapping but not in data): ", nrow(lp$missing))
+  
+  res <- qc_ranges_and_missing(
+    dat                  = dat,
+    item_info_adults     = item_info_adults,
+    scoring_info         = scoring_info,
+    id_col               = "vpid",                 # this attaches vpids to outputs
+    all_or_nothing_scales= c("FHSfamilytree", "CAPE", "SUQ", "health", "demographics", "times"),
+    exclude_scales_from_qc = c("id")               # <-- ignore the ID scale in QC
+  )
+  
+  
+  # concise console output
+  message("Range violations: ", nrow(res$violations))
+  if (nrow(res$per_scale_summary) > 0) {
+    message("Scales with any FULL missing participants:")
+    print(res$per_scale_summary %>% filter(n_full_missing > 0) %>% arrange(desc(n_full_missing)))
+    message("Scales with any PARTIAL missing participants (excl. all-or-nothing):")
+    print(res$per_scale_summary %>% filter(n_partial_missing > 0) %>% arrange(desc(n_partial_missing)))
+  } else {
+    message("No mapped scales found (skipped).")
+  }
+  
+  invisible(res)
+})
+
+
+
+## ---- Combine data, log-transform, 2 SD rule on log scale, and plot ----
+
+# 1) Bind all datasets together while keeping dataset name
+all_dt <- do.call(
+  rbind,
+  lapply(names(datasets), function(nm) {
+    df <- datasets[[nm]]
+    needed <- intersect(c("vpid", "interviewtime"), names(df))
+    if (length(needed) < 2) {
+      stop(sprintf("Dataset '%s' is missing 'vpid' or 'interviewtime'.", nm))
+    }
+    out <- df[needed]
+    out$.dataset <- nm
+    out
+  })
 )
 
-qc$violations   # item, scale, row, value, min, max, direction
-qc$missing      # item, scale, row where value is missing or non-numeric
-qc$summary      # quick per-scale counts
-qc$notes        # which Items weren’t matched to dat; extra columns ignored
+# Coerce interviewtime to numeric
+all_dt$interviewtime <- suppressWarnings(as.numeric(all_dt$interviewtime))
 
-# 2) Reuse “items → scales” without repeating steps
-scales_list <- extract_scales(dat_adults, item_info_adults)
-# e.g., work with one scale:
-# anxiety_items <- scales_list[["Anxiety"]]
+# Keep only positive times for log transform; warn about drops
+valid_idx <- !is.na(all_dt$interviewtime) & all_dt$interviewtime > 0
+if (!all(valid_idx)) {
+  message(sprintf(
+    "Excluding %d rows with non-positive or missing interviewtime before log-transform.",
+    sum(!valid_idx)
+  ))
+}
+dt_valid <- all_dt[valid_idx, , drop = FALSE]
 
-# 3) Compute per-scale scores (mean by default) for each observation
-scale_scores <- aggregate_scales(
-  dat_adults       = dat_adults,
-  item_info_adults = item_info_adults,
-  id_col           = NULL,       # or your ID col
-  fun              = mean,       # median, sum, custom function etc.
-  na.rm            = TRUE,
-  min_items        = 2           # require at least 2 answered items to score
+# 2) Compute mean and SD on the log scale (natural log)
+log_times <- log(dt_valid$interviewtime)
+log_mean  <- mean(log_times)
+log_sd    <- sd(log_times)
+
+# Cutoff on log scale and back-transform to seconds
+cutoff_log     <- log_mean - 2 * log_sd
+center_seconds <- exp(log_mean)
+cutoff_seconds <- exp(cutoff_log)
+
+cat(sprintf("Mean (log scale): %.4f\n", log_mean))
+cat(sprintf("SD (log scale): %.4f\n", log_sd))
+cat(sprintf("Cutoff (log): mean - 2*SD = %.4f\n", cutoff_log))
+cat(sprintf("Center on original scale (exp(mean_log)) = %.2f s\n", center_seconds))
+cat(sprintf("2 SD cutoff on original scale (exp(mean_log - 2*SD)) = %.2f s\n", cutoff_seconds))
+
+# 3) Flag participants: log(interviewtime) < log_mean - 2*SD
+dt_valid$log_interviewtime <- log_times
+flagged <- subset(
+  dt_valid,
+  log_interviewtime < cutoff_log
+)[, c(".dataset", "vpid", "interviewtime")]
+
+flagged <- flagged[order(flagged$interviewtime), ]
+
+if (nrow(flagged) == 0) {
+  message("No participants found below the 2 SD cutoff on the log scale.")
+} else {
+  message("Participants more than 2 SD below the mean on the log scale:")
+  print(flagged, row.names = FALSE)
+}
+
+# ---- 4a) Histogram on original seconds scale ----
+op <- par(no.readonly = TRUE)
+on.exit(par(op), add = TRUE)
+
+hist(
+  dt_valid$interviewtime,
+  breaks = "FD",
+  main   = "Interview Time (seconds) — Log-scale 2 SD Rule",
+  xlab   = "Interview time (seconds)"
+)
+abline(v = center_seconds, lwd = 2)        # exp(mean_log)
+abline(v = cutoff_seconds, lwd = 2, lty = 2)  # exp(mean_log - 2*SD_log)
+
+legend("topright",
+       legend = c(
+         sprintf("exp(mean_log) = %.2f s", center_seconds),
+         sprintf("Cutoff = %.2f s", cutoff_seconds)
+       ),
+       lwd = c(2, 2), lty = c(1, 2), bty = "n")
+
+if (nrow(flagged) > 0) {
+  rug(flagged$interviewtime, ticksize = 0.05)
+}
+
+# ---- 4b) Histogram on log-transformed scale ----
+hist(
+  log_times,
+  breaks = "FD",
+  main   = "Log(Interview Time) — 2 SD Rule",
+  xlab   = "log(Interview time)"
+)
+abline(v = log_mean, lwd = 2)       # mean on log scale
+abline(v = cutoff_log, lwd = 2, lty = 2)  # mean - 2*SD cutoff
+
+legend("topright",
+       legend = c(
+         sprintf("Mean(log) = %.3f", log_mean),
+         sprintf("Cutoff(log) = %.3f", cutoff_log)
+       ),
+       lwd = c(2, 2), lty = c(1, 2), bty = "n")
+
+rug(log(flagged$interviewtime), ticksize = 0.05)
+
+# ---- 5) Package results ----
+results <- list(
+  log_mean = log_mean,
+  log_sd = log_sd,
+  cutoff_log = cutoff_log,
+  center_seconds = center_seconds,
+  cutoff_seconds = cutoff_seconds,
+  flagged_participants = flagged,
+  combined_data_valid = dt_valid
 )
 
-
-# Range check 
-
-# NA check
-
-# Completeness check
-
-# Suspicious participants check
-
-
+# Inspect:
+# results$flagged_participants
