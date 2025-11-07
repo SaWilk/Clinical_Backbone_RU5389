@@ -20,6 +20,11 @@ if (!require("dplyr"))     { install.packages("dplyr")     }; library(dplyr)
 if (!require("tidyr"))     { install.packages("tidyr")     }; library(tidyr)
 if (!require("writexl"))   { install.packages("writexl")   }; library(writexl)
 if (!require("rstudioapi")){ install.packages("rstudioapi")}; library(rstudioapi)
+if (!require("readxl"))    { install.packages("readxl")}; library(readxl)
+if (!require("purrr")){ install.packages("purrr")}; library(purrr)
+if (!require("stringr")){ install.packages("stringr")}; library(stringr)
+if (!require("rlang")){ install.packages("rlang")}; library(rlang)
+
 
 # Ensure proper number display -------------------------------------------------
 options(scipen = 999)  # disable scientific notation globally
@@ -87,6 +92,10 @@ source(file.path(function_path, "partition_empty_obs_psytoolkit.R"))
 source(file.path(function_path, "collect_ids_to_excel.R"))
 source(file.path(function_path, "move_old_backbones.R"))
 source(file.path(function_path, "setup_logging.R"))
+source(file.path(function_path, "check_ranges.R"))
+source(file.path(function_path, "aggregate_scales.R"))
+source(file.path(function_path, "extract_scales.R"))
+
 
 ## Move old Data ---------------------------------------------------------------
 move_old_backbones(out_path, dry_run = FALSE)
@@ -132,6 +141,11 @@ cogtest_info <- file.info(file.path(name, psytool_path, "adults", file_psytool_i
 cogtest_info$sample <- "adults"
 cogtest_info[2, ]   <- c(file.info(file.path(name, psytool_path, "adolescents", file_psytool_info)), "adolescents")
 cogtest_info[3, ]   <- c(file.info(file.path(name, psytool_path, "children",    file_psytool_info)), "children_parents")
+
+# Get item info
+
+scoring_info <- read_excel(file.path("information", "2025-10-28_Scoring.xlsx"))
+item_info_adults <- read_excel(file.path("information", "2025-10-28_Item_Information_Adults.xlsx"))
 
 # Remove Test Datasets from all Project data ----------------------------------
 dat_adults           <- remove_test_rows(dat_adults,           "Adults",      dat_general)
@@ -374,8 +388,7 @@ res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col,
                                  project_col, logger = logger)
 dat_adults    <- res_adults$cleaned
 trash_adults  <- res_adults$trash_bin
-# [adults] Multiple complete datasets for vpid=80009 — please resolve manually.
-# [adults] Multiple complete datasets for vpid=80011 — please resolve manually.
+
 
 # Adolescents
 res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col,
@@ -383,9 +396,7 @@ res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col,
                                       project_col, logger = logger)
 dat_adolescents   <- res_adolescents$cleaned
 trash_adolescents <- res_adolescents$trash_bin
-# [adolescents] Multiple complete datasets for vpid=70076 — please resolve manually.
-# [adolescents] Multiple complete datasets for vpid=70072 — please resolve manually.
-# [adolescents] Multiple complete datasets for vpid=70062 — please resolve manually.
+
 
 # Children/Parents
 res_children_parents <- resolve_duplicates(dat_children_parents, vp_col, submit_col,
@@ -577,7 +588,6 @@ res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col,
                                  project_col, logger = logger)
 psytool_info_adults <- res_adults$cleaned
 trash_adults        <- res_adults$trash_bin
-# ⚠️ [adults] Multiple complete datasets for id=30099 — please resolve manually.
 
 # Adolescents
 res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_col,
@@ -728,3 +738,114 @@ collect_ids_to_excel(
   project_col = "p",
   data_type = "cogtest"
 )
+
+
+## Data Sanity Check -----------------------------------------
+
+# Canonical key: strip all non-alphanumerics, lowercase
+.canon_key <- function(x) {
+  x %>%
+    tolower() %>%
+    gsub("[^a-z0-9]+", "", ., perl = TRUE)
+}
+
+# Normalize an Item/Scale table to columns: item, scale, item_key
+.normalize_item_info <- function(item_info_adults) {
+  ii <- item_info_adults %>%
+    rename_with(~ "item",  dplyr::matches("(?i)^item$")) %>%
+    rename_with(~ "scale", dplyr::matches("(?i)^scale$")) %>%
+    mutate(
+      item  = as.character(item),
+      scale = as.character(scale),
+      item_key = .canon_key(item)
+    ) %>%
+    distinct(item, scale, item_key)
+  
+  # sanity: warn if duplicate keys map to different items
+  dup_keys <- ii %>% count(item_key) %>% filter(n > 1)
+  if (nrow(dup_keys) > 0) {
+    warning("Multiple Item names collapse to the same canonical key: ",
+            paste0(dup_keys$item_key, collapse = ", "),
+            ". Disambiguate Item names if this is unintended.")
+  }
+  ii
+}
+
+# Normalize scoring_info to columns: scale, min, max
+.normalize_scoring_info <- function(scoring_info) {
+  scoring_info %>%
+    rename_with(~ "scale", dplyr::matches("(?i)^scale$")) %>%
+    rename_with(~ "min",   dplyr::matches("(?i)^min$")) %>%
+    rename_with(~ "max",   dplyr::matches("(?i)^max$")) %>%
+    mutate(scale = as.character(scale)) %>%
+    select(scale, min, max)
+}
+
+# Build the link between Item names and actual dat_adults column names,
+# handling bracket/dot/etc. mismatches via canonical keys.
+.build_item_link <- function(dat_adults, item_info_adults) {
+  ii <- .normalize_item_info(item_info_adults)
+  
+  dat_cols <- tibble(
+    data_col = names(dat_adults),
+    item_key = .canon_key(names(dat_adults))
+  )
+  
+  link <- ii %>%
+    left_join(dat_cols, by = "item_key")
+  
+  # items present vs. missing in dat
+  present  <- link %>% filter(!is.na(data_col))
+  missing  <- link %>% filter(is.na(data_col))
+  
+  # sanity: warn if multiple data columns collapse to same key
+  dup_dat_keys <- dat_cols %>% count(item_key) %>% filter(n > 1)
+  if (nrow(dup_dat_keys) > 0) {
+    warning("Multiple data columns collapse to the same canonical key: ",
+            paste0(dup_dat_keys$item_key, collapse = ", "),
+            ". Consider cleaning column names to avoid ambiguity.")
+  }
+  
+  list(link = link, present = present, missing = missing)
+}
+# 0) (Optional) Quick look at mismatch resolution
+# items listed in mapping but not found in dat will be warned by check_ranges()
+
+# 1) Validate ranges & missingness
+qc <- check_ranges(
+  dat_adults        = dat_adults,
+  item_info_adults  = item_info_adults,  # columns: Item, Scale (any case OK)
+  scoring_info      = scoring_info,      # columns: scale/min/max (any case OK)
+  id_col            = NULL               # or "participant_id" if you have one
+)
+
+qc$violations   # item, scale, row, value, min, max, direction
+qc$missing      # item, scale, row where value is missing or non-numeric
+qc$summary      # quick per-scale counts
+qc$notes        # which Items weren’t matched to dat; extra columns ignored
+
+# 2) Reuse “items → scales” without repeating steps
+scales_list <- extract_scales(dat_adults, item_info_adults)
+# e.g., work with one scale:
+# anxiety_items <- scales_list[["Anxiety"]]
+
+# 3) Compute per-scale scores (mean by default) for each observation
+scale_scores <- aggregate_scales(
+  dat_adults       = dat_adults,
+  item_info_adults = item_info_adults,
+  id_col           = NULL,       # or your ID col
+  fun              = mean,       # median, sum, custom function etc.
+  na.rm            = TRUE,
+  min_items        = 2           # require at least 2 answered items to score
+)
+
+
+# Range check 
+
+# NA check
+
+# Completeness check
+
+# Suspicious participants check
+
+

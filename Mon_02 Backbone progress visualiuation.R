@@ -37,7 +37,7 @@ refline_color <- "grey60"
 axis_labels <- c(p2="p2", p3="p3", p4="p4", p5="p5", p6="p6", p7="p7", p8="p8", p9="p9")
 
 # Targets (p4, p6 unknown → print "?")
-total_targets <- c(p2=80, p3=260, p4=NA, p5=100, p6=NA, p7=400, p8=194, p9=120)
+total_targets <- c(p2=80, p3=260, p4=50, p5=100, p6=NA, p7=400, p8=194, p9=120)
 
 # ---- Read latest report ----
 priv_dir <- file.path("private_information", "ids_in_all_projects")
