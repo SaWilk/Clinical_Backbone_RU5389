@@ -13,11 +13,31 @@ suppressPackageStartupMessages({
 # -------------------- Helpers & Config --------------------
 
 get_script_dir <- function() {
-  args <- commandArgs(trailingOnly = FALSE)
-  file_arg <- "--file="
-  path <- sub(file_arg, "", args[grepl(file_arg, args)])
-  if (length(path)) dirname(normalizePath(path)) else getwd()
+  # 1) When run via Rscript
+  cmd_args <- commandArgs(trailingOnly = FALSE)
+  i <- grep("^--file=", cmd_args)
+  if (length(i)) {
+    return(dirname(normalizePath(sub("^--file=", "", cmd_args[i]))))
+  }
+  
+  # 2) When sourced with source("file.R")
+  if (!is.null(sys.frames()[[1]]$ofile)) {
+    return(dirname(normalizePath(sys.frames()[[1]]$ofile)))
+  }
+  
+  # 3) In RStudio editor (active tab)
+  if (requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {
+    ctx <- try(rstudioapi::getSourceEditorContext(), silent = TRUE)
+    if (!inherits(ctx, "try-error") && nzchar(ctx$path)) {
+      return(dirname(normalizePath(ctx$path)))
+    }
+  }
+  
+  # 4) Fallback: working directory
+  normalizePath(getwd())
 }
+
 
 SCRIPT_DIR <- get_script_dir()
 DATA_DIR   <- file.path(SCRIPT_DIR, "private_information", "ids_in_all_projects")
