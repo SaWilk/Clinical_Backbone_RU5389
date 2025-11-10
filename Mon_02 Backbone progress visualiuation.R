@@ -50,8 +50,41 @@ outline_color <- "black"
 refline_color <- "grey60"
 axis_labels <- c(p2="p2", p3="p3", p4="p4", p5="p5", p6="p6", p7="p7", p8="p8", p9="p9")
 
-# Targets (p4, p6 unknown → print "?")
-total_targets <- c(p2=80, p3=260, p4=50, p5=100, p6=NA, p7=400, p8=194, p9=120)
+# ---- Targets from XLSX (replaces hardcoded total_targets) ----
+target_xlsx <- file.path(ROOT, "information", "2025-11-10_Target_Sample_Size_Projects.xlsx")
+if (!file.exists(target_xlsx)) stop("Target table not found: ", target_xlsx)
+
+read_targets_vanilla <- function(path){
+  df <- suppressMessages(readxl::read_excel(path, sheet = "Vanilla"))
+  names(df) <- tolower(names(df))
+  df %>%
+    dplyr::transmute(
+      project = as.integer(stringr::str_extract(as.character(project), "\\d+")),
+      target  = as.numeric(target)
+    ) %>%
+    dplyr::filter(!is.na(project))
+}
+targets_vanilla <- read_targets_vanilla(target_xlsx)
+# Named vector keyed by "p2","p3",...
+total_targets <- setNames(targets_vanilla$target, paste0("p", targets_vanilla$project))
+
+read_targets_split <- function(path){
+  df <- suppressMessages(readxl::read_excel(path, sheet = "Proj_8_Split"))
+  names(df) <- tolower(names(df))
+  tibble::tibble(project_raw = as.character(df$project), target = as.numeric(df$target)) %>%
+    dplyr::mutate(
+      prj_lower = tolower(project_raw),
+      project   = as.integer(stringr::str_extract(prj_lower, "\\d+")),
+      sample    = dplyr::case_when(
+        stringr::str_detect(prj_lower, "child") ~ "children",
+        stringr::str_detect(prj_lower, "adult") ~ "adults",
+        TRUE                                    ~ "ALL"
+      )
+    ) %>%
+    dplyr::filter(!is.na(project)) %>%
+    dplyr::select(project, sample, target)
+}
+targets_split <- read_targets_split(target_xlsx)
 
 # ---- Read latest report ----
 priv_dir <- file.path(ROOT, "private_information", "ids_in_all_projects")
@@ -256,3 +289,147 @@ summary_tbl <- progress_pct %>%
 print(summary_tbl, n = Inf)
 writexl::write_xlsx(list(progress_summary = summary_tbl), path = output_xlsx)
 message("Saved table: ", normalizePath(output_xlsx))
+
+
+
+
+# ---- Second plot: split project 8 into "children" and "adults" ----
+# Output name: same as original + "_split_proj_8"
+output_png_split <- file.path(out_dir, sprintf("%s_project_progress_split_proj_8.png", datestamp))
+
+# Helper: collapse to "ALL" for non-8, split sample into "children"/"adults" for p8
+collapse_with_split_p8 <- function(df_counts){
+  if (!nrow(df_counts)) return(tibble::tibble(project=integer(), sample=character(), n=integer()))
+  df_counts %>%
+    dplyr::mutate(
+      sample = dplyr::case_when(
+        project == 8 & stringr::str_detect(sample, "adult")   ~ "adults",
+        project == 8 & stringr::str_detect(sample, "child")   ~ "children",
+        TRUE                                                  ~ "ALL"
+      )
+    ) %>%
+    dplyr::group_by(project, sample) %>%
+    dplyr::summarise(n = sum(n), .groups = "drop")
+}
+
+n_complete_s <- collapse_with_split_p8(n_complete)
+n_miss_q_s   <- collapse_with_split_p8(n_miss_q)
+n_miss_c_s   <- collapse_with_split_p8(n_miss_c)
+
+# Ensure rows for p2-9 exist (ALL for others; children/adults for p8)
+base_rows <- tibble::tibble(
+  project = c(2:7, 8, 8, 9),
+  sample  = c(rep("ALL", 6), "children", "adults", "ALL")
+)
+
+progress_counts_split <- base_rows %>%
+  dplyr::left_join(n_complete_s, by=c("project","sample")) %>% dplyr::rename(n_complete = n) %>%
+  dplyr::left_join(n_miss_q_s,   by=c("project","sample")) %>% dplyr::rename(n_miss_q  = n) %>%
+  dplyr::left_join(n_miss_c_s,   by=c("project","sample")) %>% dplyr::rename(n_miss_c  = n) %>%
+  dplyr::mutate(dplyr::across(c(n_complete, n_miss_q, n_miss_c), ~tidyr::replace_na(., 0L))) %>%
+  dplyr::mutate(
+    project_id    = paste0("p", project),
+    # Project-level targets (used for non-8 entries)
+    proj_target   = as.numeric(total_targets[project_id]),
+    # Layer bases (same logic as original)
+    n_has_questionnaire = n_complete + n_miss_c,
+    n_has_cognitive     = n_complete + n_miss_q,
+    force_33            = project == 6
+  ) %>%
+  # Join per-(project,sample) targets from the Proj_8_Split sheet; fallback to project target
+  dplyr::left_join(targets_split, by = c("project","sample")) %>%
+  dplyr::rename(sample_target = target) %>%
+  dplyr::mutate(sample_target = dplyr::coalesce(sample_target, proj_target))
+
+# Percent-of-targets (with p6 forced visuals)
+pctify <- function(n, target) ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*n/target))
+
+progress_pct_split <- progress_counts_split %>%
+  dplyr::mutate(
+    pct_complete = pctify(n_complete,          sample_target),
+    pct_qmiss    = pctify(n_has_questionnaire, sample_target),  # cognitive tests missing (orange)
+    pct_cmiss    = pctify(n_has_cognitive,     sample_target)   # questionnaires missing (blue)
+  ) %>%
+  dplyr::mutate(
+    pct_complete = dplyr::if_else(force_33, 33, pct_complete),
+    pct_qmiss    = dplyr::if_else(force_33, 33, pct_qmiss),
+    pct_cmiss    = dplyr::if_else(force_33, 33, pct_cmiss)
+  )
+
+# Axis labels: keep p2..p7, then "p8 children", "p8 adults", then p9
+axis_levels_split <- c(axis_labels[paste0("p", 2:7)], "p8 children", "p8 adults", axis_labels["p9"]) |> as.character()
+
+plot_df2 <- progress_pct_split %>%
+  dplyr::mutate(
+    project_lbl = dplyr::case_when(
+      project == 8 & sample == "children" ~ "p8 children",
+      project == 8 & sample == "adults"   ~ "p8 adults",
+      TRUE                                ~ axis_labels[paste0("p", project)]
+    ) |> as.character()
+  ) %>%
+  dplyr::mutate(project_lbl = factor(project_lbl, levels = axis_levels_split)) %>%
+  dplyr::arrange(project, sample)
+
+plot_long2 <- plot_df2 %>%
+  tidyr::pivot_longer(
+    cols = c(pct_qmiss, pct_cmiss, pct_complete),
+    names_to = "layer", values_to = "pct"
+  ) %>%
+  dplyr::mutate(
+    x = factor(as.character(project_lbl), levels = axis_levels_split),
+    layer = factor(layer,
+                   levels = c("pct_qmiss","pct_cmiss","pct_complete"),
+                   labels = c("cognitive tests missing","questionnaires missing","complete"))
+  )
+
+p2 <- ggplot(plot_long2, aes(x = x, y = pct)) +
+  geom_col(data = plot_long2 %>% dplyr::distinct(x), aes(x = x, y = 100),
+           inherit.aes = FALSE, fill = NA, color = outline_color, linewidth = 0.9, width = 0.7) +
+  geom_col(aes(fill = layer), width = 0.7, position = position_identity()) +
+  geom_hline(yintercept = c(25, 50, 75), linetype = "dashed", linewidth = 0.3, color = refline_color) +
+  coord_flip(clip = "off") +
+  scale_fill_manual(values = layer_fills, name = NULL) +
+  scale_y_continuous(limits = c(0, 110), breaks = c(0,25,50,75,100),
+                     labels = c("0","25","50","75","100"),
+                     expand = expansion(mult = c(0.02, 0.12))) +
+  labs(
+    x = NULL,
+    y = "Percent of target sample size",
+    title = "Completed backbone datasets (p8 split into children/adults)",
+    caption = paste0("Status: ", datestamp)
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    panel.background      = element_rect(fill="white", color=NA),
+    plot.background       = element_rect(fill="white", color=NA),
+    axis.title.y          = element_blank(),
+    legend.position       = "bottom",
+    plot.caption.position = "plot",
+    plot.caption          = element_text(hjust = 0, size = 8)
+  )
+
+# Labels based on COMPLETE, with p6 special rule
+label_df2 <- plot_df2 %>%
+  dplyr::mutate(
+    label_total_complete = ifelse(force_33, NA_integer_, n_complete),
+    pct_for_label        = ifelse(force_33, NA_real_, pctify(n_complete, sample_target))
+  ) %>%
+  dplyr::transmute(
+    x = factor(as.character(project_lbl), levels = axis_levels_split),
+    pct_pos = dplyr::case_when(
+      force_33             ~ 35,
+      is.na(pct_for_label) ~ 5,
+      TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
+    ),
+    label = dplyr::case_when(
+      force_33             ~ "TBA / ?",
+      is.na(sample_target) ~ sprintf("%d / ?", n_complete),
+      TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
+    )
+  )
+
+p2 <- p2 + geom_text(data = label_df2, aes(x = x, y = pct_pos, label = label),
+                     inherit.aes = FALSE, hjust = 0, size = 3.4)
+
+ggsave(output_png_split, p2, width = png_width, height = png_height, dpi = png_dpi)
+message("Saved plot (p8 split): ", normalizePath(output_png_split))
