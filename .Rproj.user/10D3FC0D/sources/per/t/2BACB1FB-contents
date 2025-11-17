@@ -69,7 +69,7 @@ targets_vanilla <- read_targets_vanilla(target_xlsx)
 total_targets <- setNames(targets_vanilla$target, paste0("p", targets_vanilla$project))
 
 read_targets_split <- function(path){
-  df <- suppressMessages(readxl::read_excel(path, sheet = "P8_Split_P6.2_only"))
+  df <- suppressMessages(readxl::read_excel(path, sheet = "Proj_8_Split"))
   names(df) <- tolower(names(df))
   tibble::tibble(project_raw = as.character(df$project), target = as.numeric(df$target)) %>%
     dplyr::mutate(

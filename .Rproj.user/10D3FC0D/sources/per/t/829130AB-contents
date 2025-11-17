@@ -76,7 +76,7 @@ collect_ids_to_excel <- function(
     id_col = "vpid",
     project_col = "project",      # can be NULL
     ctime_col = "ctime",
-    submit_date_col = "submitdate",  # <-- NEW: where to look for participant dates in each df
+    submit_date_col = "startdate",
     data_type = "questionnaire",  # goes into file name
     out_basename = "ids_in_all_projects",
     out_dir = NULL                # defaults to "<script_dir>/private_information"

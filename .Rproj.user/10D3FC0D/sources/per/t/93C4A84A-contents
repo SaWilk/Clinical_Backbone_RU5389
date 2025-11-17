@@ -11,7 +11,7 @@
 #     2) Split layout (p8 children & adults separated; others aggregated)
 # - For each layout it saves:
 #     A) Empirical timeline only
-#     B) Empirical timeline + per-project linear regression with 95% CI (Newey–West) and horizon = 2x current duration
+#     B) Empirical timeline + per-project linear regression with 95% CI and horizon = 2x current duration
 # - Saves one PNG and one XLSX per output (=> 4 PNG, 4 XLSX) to ROOT/out/timeline
 #
 # Notes
@@ -37,8 +37,7 @@ if (requireNamespace("here", quietly = TRUE)) {
 # ---- Packages ----
 auto_install <- FALSE
 pkgs <- c("readxl","dplyr","tidyr","stringr","ggplot2","forcats","lubridate",
-          "writexl","purrr","scales","colorspace","broom","patchwork","tools",
-          "sandwich","lmtest")
+          "writexl","purrr","scales","colorspace","broom","patchwork","tools")
 if (auto_install) {
   to_get <- pkgs[!pkgs %in% installed.packages()[,"Package"]]
   if (length(to_get)) install.packages(to_get)
@@ -219,38 +218,27 @@ split_cum <- timeline_raw %>%
   ),
   label = stringr::str_squish(label))  # remove hidden spaces
 
-# ---- Regression (linear) + 95% Newey–West CI (mean fit) ----
+# ---- Regression (linear) + 95% Prediction Interval ----
 fit_project_lm <- function(df_grp){
   if (nrow(df_grp) < 2 || max(df_grp$cum_n, na.rm = TRUE) == 0) return(NULL)
   df_grp <- df_grp %>% dplyr::mutate(tnum = as.numeric(date))
   mod <- try(stats::lm(cum_n ~ tnum, data = df_grp), silent = TRUE)
   if (inherits(mod, "try-error")) return(NULL)
-  
-  # Automatic NW bandwidth; HAC covariance for coefficients
-  bw  <- try(sandwich::bwNeweyWest(mod), silent = TRUE)
-  if (inherits(bw, "try-error") || !is.finite(bw)) bw <- 0
-  Vnw <- sandwich::NeweyWest(mod, lag = bw, prewhite = FALSE, adjust = TRUE)
-  
-  list(model = mod, Vnw = Vnw, df = stats::df.residual(mod), bw = bw)
+  s <- summary(mod)
+  list(model = mod, sigma = s$sigma, df = stats::df.residual(mod))
 }
-predict_lm_ci_nw <- function(fit, date_seq){
+predict_lm_pi <- function(fit, date_seq){
   newd <- tibble::tibble(date = date_seq, tnum = as.numeric(date_seq))
-  # Design matrix matches cum_n ~ tnum (intercept + slope)
-  Xnew <- stats::model.matrix(~ tnum, data = newd)
-  beta <- stats::coef(fit$model)
-  fitv <- as.numeric(Xnew %*% beta)
-  
-  # SE_mean = sqrt(diag(X Vnw X'))
-  Vnw  <- fit$Vnw
-  XV   <- Xnew %*% Vnw
-  se_m <- sqrt(pmax(0, diag(XV %*% t(Xnew))))
+  prd  <- stats::predict(fit$model, newdata = newd, se.fit = TRUE)
   tval <- stats::qt(0.975, df = fit$df)
-  
+  se_mean <- as.numeric(prd$se.fit)
+  sigma   <- fit$sigma
+  se_pred <- sqrt(se_mean^2 + sigma^2)
   tibble::tibble(
     date = date_seq,
-    fit  = pmax(0, fitv),
-    lwr  = pmax(0, fitv - tval * se_m),
-    upr  = pmax(0, fitv + tval * se_m)
+    fit  = pmax(0, as.numeric(prd$fit)),
+    lwr  = pmax(0, as.numeric(prd$fit - tval * se_pred)),
+    upr  = pmin(Inf, as.numeric(prd$fit + tval * se_pred))
   )
 }
 
@@ -316,7 +304,7 @@ plot_timeline <- function(df, layout = c("vanilla","split"), with_pred = FALSE,
       fitinfo <- fit_project_lm(dsub); if (is.null(fitinfo)) return(NULL)
       end_date <- dmax
       dseq <- seq(min(dsub$date, na.rm = TRUE), end_date, by = "day")
-      preds <- predict_lm_ci_nw(fitinfo, dseq) %>%
+      preds <- predict_lm_pi(fitinfo, dseq) %>%
         dplyr::mutate(target = dsub$target[1], col_lab = lab)
       tgt <- preds$target[1]
       hit_idx_abs <- if (!is.na(tgt) && is.finite(tgt) && tgt > 0) which(preds$fit >= tgt)[1] else NA_integer_
@@ -347,10 +335,7 @@ plot_timeline <- function(df, layout = c("vanilla","split"), with_pred = FALSE,
   # Titles / captions
   main_title <- "Sample size over time via complete backbone datasets"
   perc_sub_emp  <- "Top: absolute | Bottom: percent of target sample size"
-  perc_sub_pred <- paste0(
-    perc_sub_emp,
-    " \u2022 Shaded: 95% Newey\u2013West CI = \u0177\u0302 \u00B1 t\u2080.\u2089\u2087\u2085,df \u221A(x\u2032 V\u2099\u2093 x)"
-  )
+  perc_sub_pred <- paste0(perc_sub_emp, " • Shaded: 95% PI = \u0177\u0302 \u00B1 t\u2080.\u2089\u2087\u2085,df \u221A(SE_fit\u00B2 + \u03C3\u00B2)")
   
   # Vline at 31.12.2027 only for prediction plots
   vline_abs <- if (has_pred) ggplot2::geom_vline(xintercept = as.numeric(ref_date),

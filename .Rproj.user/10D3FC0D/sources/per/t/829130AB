@@ -1,0 +1,26 @@
+{
+    "id": "829130AB",
+    "path": "K:/Wilken Arbeitsordner/Clinical_Backbone_RU5389/functions/collect_ids_to_excel.R",
+    "project_path": "functions/collect_ids_to_excel.R",
+    "type": "r_source",
+    "hash": "1445387012",
+    "contents": "",
+    "dirty": false,
+    "created": 1762790485879.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "75,20",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1762790508,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1762790508071,
+    "read_only": false,
+    "read_only_alternatives": []
+}
