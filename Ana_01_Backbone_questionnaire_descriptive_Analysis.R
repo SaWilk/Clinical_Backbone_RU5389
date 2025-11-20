@@ -4,9 +4,9 @@
 # First edited: 2025-11-07 (SW)
 #
 # Description:
-# This script reads questionnaire data (LimeSurvey, PsyToolkit), fixes known
-# VP-ID issues, removes test/empty entries, separates data per project, exports
-# cleaned datasets (and discarded rows) to disk, and manages logging.
+# Reads questionnaire data, filters bad rows, reverse-codes, exports per project,
+# produces demographics/health plots (bars + histograms), collapses multiple-
+# choice job/ownpsychdiagn into single plots, writes sanity logs, and keeps keys.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ---- Setup -------------------------------------------------------------------
@@ -19,13 +19,13 @@ ensure_packages <- function(pkgs) {
 
 ensure_packages(c(
   "readxl", "writexl", "janitor", "stringr", "dplyr", "tidyr",
-  "purrr", "lubridate", "tibble", "glue", "fs", "jsonlite"
+  "purrr", "lubridate", "tibble", "glue", "fs", "jsonlite", "readr",
+  "ggplot2", "forcats"
 ))
 
 # ---- Paths & Logging ---------------------------------------------------------
 
 script_dir <- function() {
-  # Robust-ish script directory detection (Rscript / RStudio / source)
   if (!interactive()) {
     args <- commandArgs(trailingOnly = FALSE)
     file_arg <- "--file="
@@ -45,13 +45,16 @@ ROOT <- script_dir()
 DIR_QUESTIONNAIRES <- fs::path(ROOT, "01_project_data", "all_projects_backbone", "questionnaires")
 DIR_INFO            <- fs::path(ROOT, "information")
 DIR_EXPORT          <- fs::path(ROOT, "02_cleaned")
-DIR_KEYS            <- fs::path(ROOT, "keys")
+DIR_KEYS            <- fs::path(DIR_EXPORT, "keys")
 DIR_LOGS            <- fs::path(ROOT, "logs")
-DIR_PRIVATE         <- fs::path(ROOT, "private_information")  # (NEW)
+DIR_PRIVATE         <- fs::path(ROOT, "private_information")
+DIR_ANALYSIS_BASE   <- fs::path(ROOT, "out", "internal_data_analysis", "demographics_and_health")
+SANITY_LOG_FILE     <- fs::path(DIR_LOGS, "sanity_check_backbone_data_log.txt")
 
 fs::dir_create(DIR_EXPORT)
 fs::dir_create(DIR_KEYS)
 fs::dir_create(DIR_LOGS)
+fs::dir_create(DIR_ANALYSIS_BASE)
 
 logfile <- fs::path(DIR_LOGS, glue::glue("clean_questionnaires_{format(Sys.time(), '%Y-%m-%d_%H%M%S')}.log"))
 
@@ -65,33 +68,30 @@ log_msg <- function(..., .sep = "", .newline = TRUE) {
 # ---- Filename helpers --------------------------------------------------------
 
 normalize_sample_case <- function(sample) {
-  # For item information files where Sample is Capitalized
   stringr::str_replace_all(stringr::str_to_title(sample), "_", " ")
 }
 
-# Matchers:
-#   Questionnaire: ALL_YYYY-MM-DD_<sample>_questionnaire.xlsx
-#   Item Info:     YYYY-MM-DD_Item_Information_<Sample>.xlsx  (Sample Capitalized)
-#   Scoring:       YYYY-MM-DD_Scoring.xlsx (single, latest if multiple)
 extract_date <- function(x) {
   d <- stringr::str_match(x, "(\\d{4}-\\d{2}-\\d{2})")[,2]
   suppressWarnings(lubridate::ymd(d))
 }
 
+extract_date_string <- function(path) {
+  b <- basename(path)
+  d <- stringr::str_match(b, "ALL_(\\d{4}-\\d{2}-\\d{2})_")[,2]
+  ifelse(is.na(d), format(Sys.Date(), "%Y-%m-%d"), d)
+}
+
 latest_file_by_pattern <- function(dir, pattern) {
-  # List files first, then filter by basename with regex (not full path)
   files_all <- fs::dir_ls(dir, type = "file", fail = FALSE)
   files <- files_all[grepl(pattern, basename(files_all))]
-  
   if (!length(files)) return(NA_character_)
-  
   dts <- extract_date(basename(files))
   files <- files[order(dts, decreasing = TRUE)]
   files[1]
 }
 
 latest_questionnaire_for_sample <- function(sample) {
-  # Note: data_type fixed to questionnaire
   patt <- glue::glue("^ALL_\\d{{4}}-\\d{{2}}-\\d{{2}}_{sample}_questionnaire\\.xlsx$")
   latest_file_by_pattern(DIR_QUESTIONNAIRES, patt)
 }
@@ -107,25 +107,19 @@ latest_scoring <- function() {
   latest_file_by_pattern(DIR_INFO, patt)
 }
 
-latest_groupings_file <- function() {  # (NEW)
+latest_groupings_file <- function() {
   patt <- "^\\d{4}-\\d{2}-\\d{2}_groupings\\.xlsx$"
   latest_file_by_pattern(DIR_PRIVATE, patt)
 }
 
 # ---- Normalization helpers ---------------------------------------------------
 
-# Normalize item IDs so headers match Item Information::Item exactly, even if R renamed them
 normalize_id <- function(x) {
-  x %>%
-    as.character() %>%
-    stringr::str_to_lower() %>%
-    # Keep only letters+digits, drop everything else
-    stringr::str_replace_all("[^a-z0-9]", "")
+  x %>% as.character() %>% stringr::str_to_lower() %>% stringr::str_replace_all("[^a-z0-9]", "")
 }
 
-normalize_vpid <- function(x) {  # (NEW)
-  x %>% as.character() %>% stringr::str_to_lower() %>%
-    stringr::str_replace_all("[^a-z0-9]", "")
+normalize_vpid <- function(x) {
+  x %>% as.character() %>% stringr::str_to_lower() %>% stringr::str_replace_all("[^a-z0-9]", "")
 }
 
 # ---- IO helpers --------------------------------------------------------------
@@ -161,11 +155,8 @@ read_scoring <- function(filepath) {
     dplyr::mutate(dplyr::across(c(min, max), as.numeric))
 }
 
-# ---- Groupings helpers (NEW) -------------------------------------------------
+# ---- Groupings helpers -------------------------------------------------------
 
-# Read and combine all groupings sheets for a given sample.
-# Sheet names: p<project>_<sample>  (e.g., p123_adults)
-# Returns tibble: p, vp_join, group
 read_groupings_for_sample <- function(sample, filepath = NULL) {
   if (is.null(filepath)) filepath <- latest_groupings_file()
   if (is.null(filepath) || is.na(filepath) || !fs::file_exists(filepath)) {
@@ -230,7 +221,6 @@ read_groupings_for_sample <- function(sample, filepath = NULL) {
   out
 }
 
-# Attach a 'group' column to any dataframe that has IDs and 'p' (project).
 attach_groupings <- function(df, sample, id_guess = c("vp","vpid","participant","participant_id","participantid")) {
   if (!"p" %in% names(df)) {
     log_msg("No 'p' column in data — cannot attach groupings. Returning original df.")
@@ -254,46 +244,21 @@ attach_groupings <- function(df, sample, id_guess = c("vp","vpid","participant",
     dplyr::select(-.vp_join)
 }
 
-# ---- Core processing ---------------------------------------------------------
-
-split_id_and_item_columns <- function(q_df, item_info) {
-  # Only keep items that have a non-missing Scale entry
-  item_info_valid <- item_info %>%
-    dplyr::filter(!is.na(scale) & scale != "") %>%
-    dplyr::mutate(item_norm = normalize_id(item))
-  
-  valid_ids <- unique(item_info_valid$item_norm)
-  col_norm  <- normalize_id(names(q_df))
-  is_item   <- col_norm %in% valid_ids
-  
-  id_cols   <- names(q_df)[!is_item]
-  item_cols <- names(q_df)[is_item]
-  
-  log_msg("Using only items with defined 'Scale' in Item Information.")
-  log_msg("Detected ", length(item_cols), " item columns and ",
-          length(id_cols), " meta/ID columns for this sample.")
-  
-  list(
-    id_cols   = id_cols,
-    item_cols = item_cols,
-    item_info_valid = item_info_valid
-  )
-}
+# ---- Validation & keys -------------------------------------------------------
 
 check_header_match <- function(q_df, item_info) {
-  # Normalize both sides
   q_norm  <- normalize_id(names(q_df))
   ii_norm <- unique(item_info$item_norm)
   
   not_in_q  <- setdiff(ii_norm, q_norm)
   not_in_ii <- setdiff(q_norm, ii_norm)
   
-  # Exempt obvious non-item identifiers
-  exempt <- c("p", "project", "rushingflag", "participant",
-              "participantid", "vp", "vpid")
+  exempt <- c("p", "project", "rushingflag", "rushing_flag", "rushingmethod",
+              "participant", "participantid", "vp", "vpid", "id", "submitdate",
+              "startdate", "datestamp", "end", "consent", "startlanguage",
+              "seed", "refurl", "lastpage")
   not_in_ii <- setdiff(not_in_ii, exempt)
   
-  # Compose a human-readable message
   if (length(not_in_q) || length(not_in_ii)) {
     msg <- paste0(
       "⚠️  Header / Item Information mismatch detected.\n",
@@ -306,53 +271,57 @@ check_header_match <- function(q_df, item_info) {
                paste(not_in_ii, collapse = ", "), "\n")
       else ""
     )
-    
     warning(msg, call. = FALSE)
     log_msg(msg)
   } else {
-    log_msg("Header check: all questionnaire columns align with Item Information.")
+    log_msg("Header check: questionnaire columns align with Item Information (filtered to scored scales).")
   }
-  
-  # Return invisibly so processing continues
   invisible(TRUE)
 }
 
-remove_flagged_rows <- function(q_df, sample) {
-  if (!"rushing_flag" %in% names(q_df)) {
-    log_msg("Column 'rushing_flag' not found; 0 rows removed.")
-    return(list(clean = q_df, discarded = tibble()))
-  }
-  discarded <- q_df %>% filter(.data$rushing_flag == TRUE)
-  clean     <- q_df %>% filter(is.na(.data$rushing_flag) | .data$rushing_flag == FALSE)
-  log_msg(glue::glue("Sample '{sample}': removed {nrow(discarded)} rows due to rushing_flag == TRUE."))
-  list(clean = clean, discarded = discarded)
-}
-
 build_keys <- function(item_info) {
-  # Nested keys for later analysis/filtering
-  # Returns a named list with:
-  # - items_by_scale
-  # - items_by_subscale
-  # - items_by_higher_order
-  # - nested hierarchy
-  ii <- item_info %>%
-    mutate(
-      scale = as.character(.data$scale),
-      subscale = as.character(.data$subscale),
-      higher_order_subscale = as.character(.data$higher_order_subscale)
+  ii <- item_info
+  if (!"item_norm" %in% names(ii)) ii$item_norm <- normalize_id(ii$item)
+  if (!"scale" %in% names(ii)) ii$scale <- NA_character_
+  if (!"subscale" %in% names(ii)) ii$subscale <- NA_character_
+  if (!"higher_order_subscale" %in% names(ii)) ii$higher_order_subscale <- NA_character_
+  
+  ii <- ii %>%
+    dplyr::mutate(
+      scale = as.character(scale),
+      subscale = as.character(subscale),
+      higher_order_subscale = as.character(higher_order_subscale)
     )
   
-  items_by_scale <- ii %>% group_by(.data$scale) %>% summarise(items = list(unique(item_norm)), .groups = "drop")
-  items_by_sub   <- ii %>% group_by(.data$scale, .data$subscale) %>% summarise(items = list(unique(item_norm)), .groups = "drop")
-  items_by_ho    <- ii %>% group_by(.data$higher_order_subscale) %>% summarise(items = list(unique(item_norm)), .groups = "drop")
+  items_by_scale <- ii %>% dplyr::group_by(scale) %>%
+    dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
   
-  nested <- ii %>%
-    group_by(.data$scale, .data$higher_order_subscale, .data$subscale) %>%
-    summarise(items = list(unique(item_norm)), .groups = "drop") %>%
-    group_by(.data$scale, .data$higher_order_subscale) %>%
-    summarise(subscales = list(tibble(subscale = .data$subscale, items = .data$items)), .groups = "drop") %>%
-    group_by(.data$scale) %>%
-    summarise(higher_order = list(tibble(higher_order_subscale = .data$higher_order_subscale, subscales = .data$subscales)), .groups = "drop")
+  items_by_sub <- ii %>% dplyr::group_by(scale, subscale) %>%
+    dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
+  
+  items_by_ho <- ii %>% dplyr::group_by(higher_order_subscale) %>%
+    dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
+  
+  leaf <- ii %>%
+    dplyr::group_by(scale, higher_order_subscale, subscale) %>%
+    dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
+  
+  ho_level <- leaf %>%
+    dplyr::group_by(scale, higher_order_subscale) %>%
+    dplyr::summarise(
+      subscales = list(tibble::tibble(subscale = subscale, items = items)),
+      .groups = "drop"
+    )
+  
+  nested <- ho_level %>%
+    dplyr::group_by(scale) %>%
+    dplyr::summarise(
+      higher_order = list(tibble::tibble(
+        higher_order_subscale = higher_order_subscale,
+        subscales = subscales
+      )),
+      .groups = "drop"
+    )
   
   list(
     items_by_scale = items_by_scale,
@@ -362,47 +331,86 @@ build_keys <- function(item_info) {
   )
 }
 
-reverse_code_long <- function(long_df, item_info, scoring) {
-  # long_df has: id columns + item_norm + value + (optional) p, sample
-  # Join item_info to get scale & reverse flag, then scoring by scale for min,max
-  out <- long_df %>%
-    left_join(select(item_info, item_norm, scale, reverse_coded), by = "item_norm") %>%
-    left_join(select(scoring, scale, min, max), by = "scale") %>%
-    mutate(
-      value_rc = ifelse(isTRUE(reverse_coded),
-                        .data$min + .data$max - as.numeric(.data$value),
-                        as.numeric(.data$value))
-    ) %>%
-    select(-min, -max)
-  out
-}
+# ---- Row filtering -----------------------------------------------------------
 
-pivot_items_long <- function(q_df, item_cols, item_info) {
-  # Normalize names and pivot
-  col_map <- tibble(
-    orig = item_cols,
-    item_norm = normalize_id(item_cols)
+remove_flagged_rows <- function(q_df, sample) {
+  flag_col <- intersect(names(q_df), c("rushing_flag", "rushingflag")) |> purrr::pluck(1, .default = NA_character_)
+  if (is.na(flag_col)) {
+    log_msg("No rushing flag column found; 0 rows removed.")
+    return(list(clean = q_df, discarded = tibble::tibble()))
+  }
+  flag_val <- q_df[[flag_col]]
+  flag_log <- dplyr::case_when(
+    is.logical(flag_val) ~ flag_val,
+    is.numeric(flag_val) ~ flag_val != 0,
+    TRUE ~ tolower(as.character(flag_val)) %in% c("true","t","1","yes","y")
   )
-  q2 <- q_df %>%
-    mutate(row_id__ = dplyr::row_number()) %>%
-    pivot_longer(cols = all_of(col_map$orig), names_to = "orig", values_to = "value") %>%
-    left_join(col_map, by = "orig") %>%
-    select(-orig)
-  # Keep only items that exist in item_info (strictness already asserted)
-  q2 %>% filter(.data$item_norm %in% item_info$item_norm)
+  discarded <- q_df %>% dplyr::filter(flag_log %in% TRUE)
+  clean     <- q_df %>% dplyr::filter(!(flag_log %in% TRUE))
+  log_msg(glue::glue("Sample '{sample}': removed {nrow(discarded)} rows due to rushing flag."))
+  list(clean = clean, discarded = discarded)
 }
 
-pivot_items_wide <- function(long_df) {
-  long_df %>%
-    select(-row_id__) %>%
-    pivot_wider(names_from = item_norm, values_from = value_rc)
+# ---- Wide-only scoring helpers ----------------------------------------------
+
+split_id_and_item_columns <- function(q_df, item_info, scoring) {
+  valid_scales <- unique(scoring$scale)
+  item_info_valid <- item_info %>%
+    dplyr::filter(!is.na(scale) & scale != "" & .data$scale %in% valid_scales) %>%
+    dplyr::mutate(item_norm = normalize_id(item))
+  
+  valid_ids <- unique(item_info_valid$item_norm)
+  col_norm  <- normalize_id(names(q_df))
+  is_item   <- col_norm %in% valid_ids
+  
+  id_cols   <- names(q_df)[!is_item]
+  item_cols <- names(q_df)[is_item]
+  
+  log_msg("Using only items whose Scale is present in the Scoring sheet.")
+  log_msg("Detected ", length(item_cols), " item columns and ",
+          length(id_cols), " meta/ID columns for this sample.")
+  
+  list(
+    id_cols   = id_cols,
+    item_cols = item_cols,
+    item_info_valid = item_info_valid
+  )
 }
+
+reverse_code_wide <- function(df, item_cols, col_meta) {
+  min_by_col <- col_meta$min; names(min_by_col) <- col_meta$orig
+  max_by_col <- col_meta$max; names(max_by_col) <- col_meta$orig
+  rev_by_col <- col_meta$reverse_coded; names(rev_by_col) <- col_meta$orig
+  
+  df %>%
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::all_of(item_cols),
+        ~ suppressWarnings(as.numeric(.x))
+      )
+    ) %>%
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::all_of(item_cols),
+        ~ {
+          val <- .x
+          col <- dplyr::cur_column()
+          if (isTRUE(rev_by_col[[col]])) {
+            min_by_col[[col]] + max_by_col[[col]] - val
+          } else {
+            val
+          }
+        }
+      )
+    )
+}
+
+# ---- Export helpers ----------------------------------------------------------
 
 export_per_project <- function(df_clean, df_discard, sample) {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
-  # master exports
   readr::write_csv(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")))
   readr::write_csv(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")))
   
@@ -429,7 +437,390 @@ save_keys <- function(keys, sample) {
   log_msg(glue::glue("Saved keys for '{sample}' to: {path_rds} and {path_json}"))
 }
 
-# ---- One-sample driver -------------------------------------------------------
+# ---- Demographics & Health utilities -----------------------------------------
+
+safe_var <- function(x) gsub("[^A-Za-z0-9_-]+", "_", x)
+
+label_demographics_health <- function(df) {
+  out <- df
+  
+  out <- out %>%
+    dplyr::mutate(
+      dplyr::across(
+        c(
+          tidyselect::any_of("gender"),
+          tidyselect::starts_with("parentsgender"),
+          tidyselect::starts_with("siblingsgender"),
+          tidyselect::starts_with("cildrengender"),
+          tidyselect::starts_with("childrengender"),
+          tidyselect::matches("^children(gender)?", ignore.case = TRUE)
+        ),
+        ~ factor(as.character(.x),
+                 levels = c("1","2","3","0","-oth-"),
+                 labels = c("female","male","nonbinary","no gender","other"))
+      )
+    )
+  
+  if ("education" %in% names(out)) {
+    out <- out %>%
+      dplyr::mutate(
+        education = factor(as.character(education),
+                           levels = c("0","1","2","3","4","5","6","7","8","9","10","-oth-"),
+                           labels = c("no school diploma",
+                                      "primary school",
+                                      "Lower Secondary School Certificate",
+                                      "Intermediate Secondary School Certificate",
+                                      "General Qualification for University Entrance",
+                                      "apprentice",
+                                      "applied science (Fachhochschulabschluss)",
+                                      "diploma","bachelor","master","PhD","other")
+        )
+      ) %>%
+      dplyr::mutate(
+        education = forcats::fct_relevel(
+          education,
+          "no school diploma","primary school",
+          "Lower Secondary School Certificate","Intermediate Secondary School Certificate",
+          "General Qualification for University Entrance","apprentice",
+          "applied science (Fachhochschulabschluss)",
+          "bachelor","diploma","master","PhD","other"
+        ),
+        education = factor(education, levels = levels(education), ordered = TRUE)
+      )
+  }
+  
+  if ("maritalstat" %in% names(out)) {
+    out <- out %>%
+      dplyr::mutate(
+        maritalstat = factor(as.character(maritalstat),
+                             levels = c("0","1","2","3","4"),
+                             labels = c("single","relationship","married","divorced","widowed")
+        )
+      )
+  }
+  
+  out <- out %>%
+    dplyr::mutate(
+      dplyr::across(
+        tidyselect::any_of(c("eyesight","hearing")),
+        ~ factor(as.character(.x),
+                 levels = c("0","1","2"),
+                 labels = c("normal","corrected","not corrected"))
+      )
+    )
+  
+  out <- out %>%
+    dplyr::mutate(
+      dplyr::across(
+        c(
+          tidyselect::any_of(c("psychomedication","othermedication","ownpsychdisorder")),
+          tidyselect::contains("contact")
+        ),
+        ~ factor(as.character(.x), levels = c("0","1"), labels = c("no","yes"))
+      )
+    )
+  out
+}
+
+# -------- Multiple-choice helpers (robust to different naming styles) ---------
+
+pick_first_existing_col <- function(df, candidates) {
+  for (nm in candidates) if (nm %in% names(df)) return(nm)
+  return(NULL)
+}
+
+job_Y_count <- function(df, i) {
+  nm <- pick_first_existing_col(df, c(
+    glue::glue("job[{i}]"),
+    glue::glue("job_{i}_"),
+    glue::glue("job_{i}")
+  ))
+  if (is.null(nm)) return(0L)
+  sum(df[[nm]] == "Y", na.rm = TRUE)
+}
+
+job_other_count <- function(df) {
+  nm <- pick_first_existing_col(df, c("job[other]", "job_other"))
+  if (is.null(nm)) return(0L)
+  sum(!is.na(df[[nm]]))
+}
+
+compute_job_count <- function(df) {
+  tibble::tibble(
+    jobsearch = job_Y_count(df, 0),
+    school = job_Y_count(df, 1),
+    apprentice = job_Y_count(df, 2),
+    university = job_Y_count(df, 3),
+    self_employed = job_Y_count(df, 4),
+    minijob = job_Y_count(df, 5),
+    parttime = job_Y_count(df, 6),
+    fulltime = job_Y_count(df, 7),
+    home = job_Y_count(df, 8),
+    support_institution = job_Y_count(df, 9),
+    unable = job_Y_count(df, 10),
+    retirement = job_Y_count(df, 11),
+    other = job_other_count(df)
+  ) %>%
+    tidyr::pivot_longer(
+      cols = c(jobsearch, school, apprentice, university, self_employed, minijob,
+               parttime, fulltime, home, support_institution, unable, retirement, other),
+      names_to = "level", values_to = "quantity"
+    ) %>%
+    dplyr::mutate(variable = "job")
+}
+
+diag_Y_count <- function(df, code) {
+  nm <- pick_first_existing_col(df, c(
+    glue::glue("ownpsychdiagn[{code}]"),
+    glue::glue("ownpsychdiagn_{code}_"),
+    glue::glue("ownpsychdiagn_{code}")
+  ))
+  if (is.null(nm)) return(0L)
+  sum(df[[nm]] == "Y", na.rm = TRUE)
+}
+
+diag_other_count <- function(df) {
+  nm <- pick_first_existing_col(df, c("ownpsychdiagn[other]", "ownpsychdiagn_other"))
+  if (is.null(nm)) return(0L)
+  sum(!is.na(df[[nm]]))
+}
+
+compute_diag_count <- function(df) {
+  tibble::tibble(
+    depression = diag_Y_count(df, "MDE"),
+    bipolar    = diag_Y_count(df, "Bipolar"),
+    OCD        = diag_Y_count(df, "OCD"),
+    anxiety    = diag_Y_count(df, "Anx"),
+    psychotic  = diag_Y_count(df, "Psy"),
+    substance  = diag_Y_count(df, "SUD"),
+    eatingdis  = diag_Y_count(df, "ED"),
+    idk        = diag_Y_count(df, "idk"),
+    other      = diag_other_count(df)
+  ) %>%
+    tidyr::pivot_longer(
+      cols = c(depression, bipolar, OCD, anxiety, psychotic, substance,
+               eatingdis, idk, other),
+      names_to = "level", values_to = "quantity"
+    ) %>%
+    dplyr::mutate(variable = "diagnosis")
+}
+
+plot_mc_counts <- function(counts_tbl, title, out_file, N_total) {
+  if (nrow(counts_tbl) == 0) return(invisible(NULL))
+  dfp <- counts_tbl %>%
+    dplyr::arrange(dplyr::desc(quantity)) %>%
+    dplyr::mutate(pct = ifelse(N_total > 0, 100*quantity/N_total, NA_real_))
+  p <- ggplot2::ggplot(dfp, ggplot2::aes(x = reorder(level, quantity), y = quantity)) +
+    ggplot2::geom_col() +
+    ggplot2::coord_flip() +
+    ggplot2::geom_text(ggplot2::aes(label = paste0(sprintf("%.1f", pct), "%")),
+                       hjust = -0.1, size = 3) +
+    ggplot2::labs(title = title, x = NULL, y = "Count") +
+    ggplot2::expand_limits(y = max(dfp$quantity, na.rm = TRUE) * 1.12) +
+    ggplot2::annotate("text", x = Inf, y = Inf,
+                      label = paste0("N=", N_total),
+                      hjust = 1.1, vjust = 1.5, size = 3)
+  ggplot2::ggsave(out_file, plot = p, width = 7, height = 5, dpi = 150, limitsize = FALSE)
+  log_msg("Saved: ", out_file)
+  invisible(TRUE)
+}
+
+# Sanity logger ---------------------------------------------------------------
+
+log_sanity <- function(sample, df_rows, var, rule_desc) {
+  if (nrow(df_rows) == 0) return(invisible(NULL))
+  cat("", file = SANITY_LOG_FILE, append = FALSE)
+  apply(df_rows, 1, function(r) {
+    msg <- glue::glue("🔺 vpid {r[['vpid']]} (p={r[['p']]}, sample={sample}) has {var}={r[['value']]} — {rule_desc}.")
+    log_msg(msg)
+    cat(paste0(msg, "\n"), file = SANITY_LOG_FILE, append = TRUE)
+  })
+  invisible(TRUE)
+}
+
+# Main plotting for demographics & health -------------------------------------
+
+plot_demographics_and_health <- function(df, ii_all, sample, questionnaire_path) {
+  # Reset sanity log
+  if (fs::file_exists(SANITY_LOG_FILE)) fs::file_delete(SANITY_LOG_FILE)
+  fs::file_create(SANITY_LOG_FILE) |> suppressWarnings()
+  
+  ii_dh <- ii_all %>%
+    dplyr::mutate(item_norm = normalize_id(.data$item),
+                  scale = as.character(.data$scale)) %>%
+    dplyr::filter(tolower(scale) %in% c("demographics","health"))
+  if (nrow(ii_dh) == 0) {
+    log_msg("No Item Information rows for scales 'demographics'/'health' — skipping plots.")
+    return(invisible(NULL))
+  }
+  col_map <- tibble::tibble(orig = names(df), item_norm = normalize_id(names(df)))
+  cols <- col_map %>%
+    dplyr::inner_join(ii_dh %>% dplyr::select(item_norm), by = "item_norm") %>%
+    dplyr::pull(orig) %>% unique()
+  if (!length(cols)) {
+    log_msg("No matching demographics/health columns found in data — skipping plots.")
+    return(invisible(NULL))
+  }
+  date_str <- extract_date_string(questionnaire_path)
+  out_dir  <- fs::path(DIR_ANALYSIS_BASE, paste0(date_str, "_", sample))
+  if (fs::dir_exists(out_dir)) {
+    old_files <- fs::dir_ls(out_dir, type = "file", glob = "*")
+    if (length(old_files)) fs::file_delete(old_files)
+  } else {
+    fs::dir_create(out_dir)
+  }
+  sub <- df %>%
+    dplyr::select(dplyr::any_of(c("submitdate","vpid","vp","participantid","p","age","height","weight", cols)))
+  
+  sub <- label_demographics_health(sub)
+  
+  if ("age" %in% names(sub)) sub <- sub %>% dplyr::rename(date_birth = age)
+  sub <- sub %>%
+    dplyr::mutate(
+      quest_date = suppressWarnings(as.Date(submitdate)),
+      date_birth = suppressWarnings(as.Date(date_birth)),
+      age_years_raw = dplyr::if_else(
+        !is.na(date_birth) & !is.na(quest_date),
+        as.integer(floor(lubridate::interval(date_birth, quest_date) / lubridate::years(1))),
+        as.integer(NA)
+      )
+    )
+  
+  get_id_vec <- function(d) {
+    if ("vpid" %in% names(d)) d$vpid
+    else if ("vp" %in% names(d)) d$vp
+    else if ("participantid" %in% names(d)) d$participantid
+    else rep(NA_character_, nrow(d))
+  }
+  
+  if (tolower(sample) %in% c("adults","adolescents")) {
+    height_num <- suppressWarnings(as.numeric(sub$height))
+    weight_num <- suppressWarnings(as.numeric(sub$weight))
+    age_bad    <- !is.na(sub$age_years_raw) & sub$age_years_raw < 5L
+    height_bad <- !is.na(height_num) & height_num > 250
+    weight_bad <- !is.na(weight_num) & weight_num < 35
+    rep_rows <- function(idx, var, values, rule) {
+      if (any(idx, na.rm = TRUE)) {
+        tibble::tibble(
+          vpid = get_id_vec(sub)[idx],
+          p = if ("p" %in% names(sub)) sub$p[idx] else NA_character_,
+          value = values[idx]
+        ) %>% log_sanity(sample, ., var, rule)
+      }
+    }
+    rep_rows(age_bad,    "age",    sub$age_years_raw, "below sensible threshold 5 years")
+    rep_rows(height_bad, "height", height_num,        "above sensible threshold 250 cm")
+    rep_rows(weight_bad, "weight", weight_num,        "below sensible threshold 35 kg")
+    sub <- sub %>%
+      dplyr::mutate(
+        age_years = dplyr::if_else(age_bad, as.integer(NA), age_years_raw),
+        height    = dplyr::if_else(height_bad, NA_real_, height_num),
+        weight    = dplyr::if_else(weight_bad, NA_real_, weight_num)
+      )
+  } else {
+    sub <- sub %>%
+      dplyr::mutate(
+        age_years = age_years_raw,
+        height = suppressWarnings(as.numeric(height)),
+        weight = suppressWarnings(as.numeric(weight))
+      )
+  }
+  
+  save_plot <- function(p, fname) {
+    f <- fs::path(out_dir, fname)
+    ggplot2::ggsave(filename = f, plot = p, width = 7, height = 5, dpi = 150, limitsize = FALSE)
+    log_msg("Saved: ", f)
+  }
+  N_total <- nrow(sub)
+  
+  # Histograms
+  hist_vars <- intersect(c("age_years","height","weight"), names(sub))
+  for (v in hist_vars) {
+    vec <- sub[[v]]
+    n_non_na <- sum(!is.na(vec))
+    mean_val <- suppressWarnings(mean(vec, na.rm = TRUE))
+    median_val <- suppressWarnings(stats::median(vec, na.rm = TRUE))
+    df_v <- tibble::tibble(value = vec)
+    p <- ggplot2::ggplot(df_v, ggplot2::aes(x = value)) +
+      ggplot2::geom_histogram(bins = 30, na.rm = TRUE) +
+      ggplot2::labs(title = paste0(sample, " — Histogram of ", v), x = v, y = "Count") +
+      ggplot2::geom_vline(xintercept = median_val, linetype = "solid") +
+      ggplot2::geom_vline(xintercept = mean_val,   linetype = "dashed") +
+      ggplot2::annotate("text", x = Inf, y = Inf,
+                        label = paste0("N=", n_non_na, "  mean=", sprintf("%.2f", mean_val),
+                                       "  median=", sprintf("%.2f", median_val)),
+                        hjust = 1.05, vjust = 1.5, size = 3)
+    save_plot(p, paste0("hist_", safe_var(v), ".png"))
+  }
+  
+  # Categorical bars (exclude job/ownpsychdiagn variants + gender_other etc.)
+  vars_for_bars <- setdiff(cols, c("age","height","weight","submitdate"))
+  # Exclude job bracket & underscore forms
+  ex_job <- grepl("^job\\[[^\\]]+\\]$", vars_for_bars, ignore.case = TRUE) |
+    grepl("^job_\\d+_?$",        vars_for_bars, ignore.case = TRUE) |
+    grepl("^job_(other)$",       vars_for_bars, ignore.case = TRUE) |
+    grepl("^job\\[other\\]$",    vars_for_bars, ignore.case = TRUE)
+  # Exclude ownpsychdiagn bracket & underscore forms
+  ex_diag <- grepl("^ownpsychdiagn(osis)?\\[[^\\]]+\\]$", vars_for_bars, ignore.case = TRUE) |
+    grepl("^ownpsychdiagn(osis)?_[A-Za-z]+_?$",  vars_for_bars, ignore.case = TRUE) |
+    grepl("^ownpsychdiagn(osis)?_(other)$",      vars_for_bars, ignore.case = TRUE) |
+    grepl("^ownpsychdiagn(osis)?\\[other\\]$",   vars_for_bars, ignore.case = TRUE)
+  # Exclude gender_other (and variants), [other] free-text, and explicit otherdrug/psychodrug
+  ex_misc <- grepl("gender[_]?other", vars_for_bars, ignore.case = TRUE) |
+    grepl("\\[other\\]$|_other$", vars_for_bars, ignore.case = TRUE) |
+    grepl("otherdrug|psychodrug", vars_for_bars, ignore.case = TRUE)
+  
+  vars_for_bars <- vars_for_bars[!(ex_job | ex_diag | ex_misc)]
+  
+  # Belt & suspenders: remove anything starting with job/ownpsychdiagn anyway
+  vars_for_bars <- vars_for_bars[!grepl("^job($|\\[|_)", vars_for_bars, ignore.case = TRUE)]
+  vars_for_bars <- vars_for_bars[!grepl("^ownpsychdiagn(osis)?($|\\[|_)", vars_for_bars, ignore.case = TRUE)]
+  
+  if (length(vars_for_bars)) {
+    for (v in vars_for_bars) {
+      x <- sub[[v]]
+      xf <- if (is.factor(x)) x else factor(as.character(x))
+      xf <- forcats::fct_explicit_na(xf, na_level = "missing")
+      df_v <- tibble::tibble(value = xf)
+      n_non_na <- sum(!is.na(x))
+      p <- ggplot2::ggplot(df_v, ggplot2::aes(x = value)) +
+        ggplot2::geom_bar(na.rm = TRUE) +
+        ggplot2::geom_text(
+          ggplot2::aes(label = paste0(sprintf("%.1f", 100*after_stat(count)/N_total), "%")),
+          stat = "count", vjust = -0.2, size = 3
+        ) +
+        ggplot2::labs(title = paste0(sample, " — ", v), x = v, y = "Count") +
+        ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1)) +
+        ggplot2::annotate("text", x = Inf, y = Inf,
+                          label = paste0("N=", n_non_na),
+                          hjust = 1.1, vjust = 1.5, size = 3)
+      save_plot(p, paste0("bar_", safe_var(v), ".png"))
+    }
+  } else {
+    log_msg("No variables to bar-plot after exclusions.")
+  }
+  
+  # Multiple-choice aggregates (single plots)
+  job_count <- compute_job_count(sub)
+  plot_mc_counts(
+    job_count,
+    title   = paste0(sample, " — Current occupation (multiple responses)"),
+    out_file = fs::path(out_dir, "bar_job_multiple_choice.png"),
+    N_total = N_total
+  )
+  
+  diag_count <- compute_diag_count(sub)
+  plot_mc_counts(
+    diag_count,
+    title    = paste0(sample, " — Own psychological diagnosis (multiple responses)"),
+    out_file = fs::path(out_dir, "bar_ownpsychdiagnosis_multiple_choice.png"),
+    N_total  = N_total
+  )
+  
+  invisible(TRUE)
+}
+
+# ---- One-sample driver ------------------------------------------
 
 process_sample <- function(sample,
                            questionnaire_path = NULL,
@@ -448,50 +839,45 @@ process_sample <- function(sample,
   if (is.null(scoring_df)) scoring_df <- read_scoring(latest_scoring())
   
   q_raw <- read_questionnaire(questionnaire_path)
-  ii    <- read_item_info(iteminfo_path)
-  
-  if (is.null(ii)) {
+  ii_all <- read_item_info(iteminfo_path)
+  if (is.null(ii_all)) {
     log_msg("Item Information missing; cannot proceed with mapping and reverse coding. Skipping sample.")
     return(invisible(NULL))
   }
   
-  # Strict header mapping
-  check_header_match(q_raw, ii)
-  
-  # Remove flagged rows (extensible criteria)
-  dropped <- drop_criteria_fun(q_raw, sample)
-  q_clean0 <- dropped$clean
+  dropped   <- drop_criteria_fun(q_raw, sample)
+  q_clean0  <- dropped$clean
   q_discard <- dropped$discarded
   
-  # Identify item columns
-  parts <- split_id_and_item_columns(q_clean0, ii)
-  id_cols   <- parts$id_cols
+  parts   <- split_id_and_item_columns(q_clean0, ii_all, scoring_df)
+  id_cols <- parts$id_cols
   item_cols <- parts$item_cols
-  ii        <- parts$item_info_valid  # restrict to items with defined Scale
+  ii <- parts$item_info_valid
   
-  # Long → reverse code → wide
-  q_long <- pivot_items_long(q_clean0, item_cols, ii)
+  check_header_match(q_clean0, ii)
   
-  # carry over id columns (including 'p' and any other metadata)
-  q_long <- q_long %>%
-    left_join(q_clean0 %>% mutate(row_id__ = dplyr::row_number()) %>% select(row_id__, all_of(id_cols)),
-              by = "row_id__")
+  col_map <- tibble::tibble(
+    orig      = names(q_clean0),
+    item_norm = normalize_id(names(q_clean0))
+  ) %>%
+    dplyr::inner_join(ii %>% dplyr::select(item_norm, scale, reverse_coded),
+                      by = "item_norm") %>%
+    dplyr::distinct(orig, .keep_all = TRUE)
   
-  q_long_rc <- reverse_code_long(q_long, ii, scoring_df)
-  q_wide_rc <- pivot_items_wide(q_long_rc)
+  minmax <- scoring_df %>% dplyr::select(scale, min, max)
+  col_meta <- col_map %>%
+    dplyr::left_join(minmax, by = "scale") %>%
+    dplyr::select(orig, reverse_coded, min, max)
   
-  # Reorder: id columns first
-  q_final <- q_wide_rc %>%
-    select(any_of(id_cols), dplyr::everything())
-  
-  # ---- Attach HC/patient grouping before export (NEW) ------------------------
+  q_final <- reverse_code_wide(q_clean0, unique(col_map$orig), col_meta)
+  q_final <- q_final %>% dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
   q_final <- attach_groupings(q_final, sample)
   
-  # Build and save keys
+  plot_demographics_and_health(q_final, ii_all, sample, questionnaire_path)
+  
   keys <- build_keys(ii)
   save_keys(keys, sample)
   
-  # Export
   export_per_project(q_final, q_discard, sample)
   
   log_msg("--- Done sample: ", sample, " ---\n")
@@ -504,24 +890,11 @@ process_sample <- function(sample,
 
 # ---- Main --------------------------------------------------------------------
 
-# Samples available (extend whenever new samples appear)
 ALL_SAMPLES <- c("adolescents", "adults", "children_p6", "children_parents", "parents_p6")
+SAMPLES_TO_PROCESS <- c("adults")
 
-# For now, process only adults; later switch to ALL_SAMPLES
-SAMPLES_TO_PROCESS <- c("adults")  # change to ALL_SAMPLES when ready
-
-# Preload scoring (once)
 SCORING <- read_scoring(latest_scoring())
 
 results <- purrr::map(SAMPLES_TO_PROCESS, ~ process_sample(.x, scoring_df = SCORING))
 
 log_msg("\nPipeline finished.\n")
-
-# ---- Extension hooks (placeholders) ------------------------------------------
-# 1) Factor/level renaming & multiple-choice translation:
-#    - Add a function `translate_factors(df, dict)`; call inside process_sample after q_final
-# 2) Group assignment via external Excel:
-#    - Read mapping and left_join to q_final before export
-# 3) Descriptives & EFA across merged samples:
-#    - Bind rows of results[[...]]$data_clean, filter by keys (scales/subscales), then psych::fa()
-#    - Plot per-project summaries using ggplot2

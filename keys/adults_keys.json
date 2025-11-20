@@ -1,0 +1,649 @@
+{
+  "items_by_scale": [
+    {
+      "scale": "APS",
+      "items": ["aps001", "aps002", "aps003", "aps004", "aps005", "aps006", "aps007", "aps008", "aps009", "aps010", "aps011", "aps012"]
+    },
+    {
+      "scale": "AQ",
+      "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+    },
+    {
+      "scale": "BISBAS",
+      "items": ["bisbas001", "bisbas002", "bisbas003", "bisbas004", "bisbas005", "bisbas006", "bisbas007", "bisbas008", "bisbas009", "bisbas010", "bisbas011", "bisbas012", "bisbas013", "bisbas014", "bisbas015", "bisbas016", "bisbas017", "bisbas018", "bisbas019", "bisbas020", "bisbas021", "bisbas022", "bisbas023", "bisbas024"]
+    },
+    {
+      "scale": "CAPE",
+      "items": ["capefreq002", "capefreq005", "capefreq006", "capefreq007", "capefreq010", "capefreq011", "capefreq013", "capefreq015", "capefreq017", "capefreq020", "capefreq022", "capefreq024", "capefreq026", "capefreq028", "capefreq030", "capefreq031", "capefreq033", "capefreq034", "capefreq041", "capefreq042", "capedistr002", "capedistr005", "capedistr006", "capedistr007", "capedistr010", "capedistr011", "capedistr013", "capedistr015", "capedistr017", "capedistr020", "capedistr022", "capedistr024", "capedistr026", "capedistr028", "capedistr030", "capedistr031", "capedistr033", "capedistr034", "capedistr041", "capedistr042"]
+    },
+    {
+      "scale": "CTQ",
+      "items": ["ctq001", "ctq002", "ctq003", "ctq004", "ctq005", "ctq006", "ctq007", "ctq008", "ctq009", "ctq010", "ctq011", "ctq012", "ctq013", "ctq014", "ctq015", "ctq016", "ctq017", "ctq018", "ctq019", "ctq020", "ctq021", "ctq022", "ctq023", "ctq024", "ctq025", "ctq026", "ctq027", "ctq028"]
+    },
+    {
+      "scale": "FHSfamilytree",
+      "items": ["relativesinfo", "parents001", "parents002", "parentsgender001", "parentsgender002", "parentscontact001", "parentscontact002", "siblings", "siblingsnames001", "siblingsnames002", "siblingsnames003", "siblingsnames004", "siblingsnames005", "siblingsnames006", "siblingsnames007", "siblingsnames008", "siblingsnames009", "siblingsgender001", "siblingsgender002", "siblingsgender003", "siblingsgender004", "siblingsgender005", "siblingsgender006", "siblingsgender007", "siblingsgender008", "siblingsgender009", "siblingscontact001", "siblingscontact002", "siblingscontact003", "siblingscontact004", "siblingscontact005", "siblingscontact006", "siblingscontact007", "siblingscontact008", "siblingscontact009", "children", "childrennames001", "childrennames002", "childrennames003", "childrennames004", "childrennames005", "childrennames006", "childrennames007", "childrennames008", "childrennames009", "childrengender001", "childrengender002", "childrengender003", "childrengender004", "childrengender005", "childrengender006", "childrengender007", "childrengender008", "childrengender009", "childrencontact001", "childrencontact002", "childrencontact003", "childrencontact004", "childrencontact005", "childrencontact006", "childrencontact007", "childrencontact008", "childrencontact009", "depression1self", "depression1parent1", "depression1parent2", "depression1sibling1", "depression1sibling2", "depression1sibling3", "depression1sibling4", "depression1sibling5", "depression1sibling6", "depression1sibling7", "depression1sibling8", "depression1sibling9", "depression1child1", "depression1child2", "depression1child3", "depression1child4", "depression1child5", "depression1child6", "depression1child7", "depression1child8", "depression1child9", "depression10", "depressionconfidenceself", "depressionconfidenceparent1", "depressionconfidenceparent2", "depressionconfidencesibling1", "depressionconfidencesibling2", "depressionconfidencesibling3", "depressionconfidencesibling4", "depressionconfidencesibling5", "depressionconfidencesibling6", "depressionconfidencesibling7", "depressionconfidencesibling8", "depressionconfidencesibling9", "depressionconfidencechild1", "depressionconfidencechild2", "depressionconfidencechild3", "depressionconfidencechild4", "depressionconfidencechild5", "depressionconfidencechild6", "depressionconfidencechild7", "depressionconfidencechild8", "depressionconfidencechild9", "mania1self", "mania1parent1", "mania1parent2", "mania1sibling1", "mania1sibling2", "mania1sibling3", "mania1sibling4", "mania1sibling5", "mania1sibling6", "mania1sibling7", "mania1sibling8", "mania1sibling9", "mania1child1", "mania1child2", "mania1child3", "mania1child4", "mania1child5", "mania1child6", "mania1child7", "mania1child8", "mania1child9", "mania10", "maniaconfidenceself", "maniaconfidenceparent1", "maniaconfidenceparent2", "maniaconfidencesibling1", "maniaconfidencesibling2", "maniaconfidencesibling3", "maniaconfidencesibling4", "maniaconfidencesibling5", "maniaconfidencesibling6", "maniaconfidencesibling7", "maniaconfidencesibling8", "maniaconfidencesibling9", "maniaconfidencechild1", "maniaconfidencechild2", "maniaconfidencechild3", "maniaconfidencechild4", "maniaconfidencechild5", "maniaconfidencechild6", "maniaconfidencechild7", "maniaconfidencechild8", "maniaconfidencechild9", "panic1self", "panic1parent1", "panic1parent2", "panic1sibling1", "panic1sibling2", "panic1sibling3", "panic1sibling4", "panic1sibling5", "panic1sibling6", "panic1sibling7", "panic1sibling8", "panic1sibling9", "panic1child1", "panic1child2", "panic1child3", "panic1child4", "panic1child5", "panic1child6", "panic1child7", "panic1child8", "panic1child9", "panic10", "panicconfidenceself", "panicconfidenceparent1", "panicconfidenceparent2", "panicconfidencesibling1", "panicconfidencesibling2", "panicconfidencesibling3", "panicconfidencesibling4", "panicconfidencesibling5", "panicconfidencesibling6", "panicconfidencesibling7", "panicconfidencesibling8", "panicconfidencesibling9", "panicconfidencechild1", "panicconfidencechild2", "panicconfidencechild3", "panicconfidencechild4", "panicconfidencechild5", "panicconfidencechild6", "panicconfidencechild7", "panicconfidencechild8", "panicconfidencechild9", "agora1self", "agora1parent1", "agora1parent2", "agora1sibling1", "agora1sibling2", "agora1sibling3", "agora1sibling4", "agora1sibling5", "agora1sibling6", "agora1sibling7", "agora1sibling8", "agora1sibling9", "agora1child1", "agora1child2", "agora1child3", "agora1child4", "agora1child5", "agora1child6", "agora1child7", "agora1child8", "agora1child9", "agora10", "agoraconfidenceself", "agoraconfidenceparent1", "agoraconfidenceparent2", "agoraconfidencesibling1", "agoraconfidencesibling2", "agoraconfidencesibling3", "agoraconfidencesibling4", "agoraconfidencesibling5", "agoraconfidencesibling6", "agoraconfidencesibling7", "agoraconfidencesibling8", "agoraconfidencesibling9", "agoraconfidencechild1", "agoraconfidencechild2", "agoraconfidencechild3", "agoraconfidencechild4", "agoraconfidencechild5", "agoraconfidencechild6", "agoraconfidencechild7", "agoraconfidencechild8", "agoraconfidencechild9", "phobia1self", "phobia1parent1", "phobia1parent2", "phobia1sibling1", "phobia1sibling2", "phobia1sibling3", "phobia1sibling4", "phobia1sibling5", "phobia1sibling6", "phobia1sibling7", "phobia1sibling8", "phobia1sibling9", "phobia1child1", "phobia1child2", "phobia1child3", "phobia1child4", "phobia1child5", "phobia1child6", "phobia1child7", "phobia1child8", "phobia1child9", "phobia10", "phobiaconfidenceself", "phobiaconfidenceparent1", "phobiaconfidenceparent2", "phobiaconfidencesibling1", "phobiaconfidencesibling2", "phobiaconfidencesibling3", "phobiaconfidencesibling4", "phobiaconfidencesibling5", "phobiaconfidencesibling6", "phobiaconfidencesibling7", "phobiaconfidencesibling8", "phobiaconfidencesibling9", "phobiaconfidencechild1", "phobiaconfidencechild2", "phobiaconfidencechild3", "phobiaconfidencechild4", "phobiaconfidencechild5", "phobiaconfidencechild6", "phobiaconfidencechild7", "phobiaconfidencechild8", "phobiaconfidencechild9", "socialanx1self", "socialanx1parent1", "socialanx1parent2", "socialanx1sibling1", "socialanx1sibling2", "socialanx1sibling3", "socialanx1sibling4", "socialanx1sibling5", "socialanx1sibling6", "socialanx1sibling7", "socialanx1sibling8", "socialanx1sibling9", "socialanx1child1", "socialanx1child2", "socialanx1child3", "socialanx1child4", "socialanx1child5", "socialanx1child6", "socialanx1child7", "socialanx1child8", "socialanx1child9", "socialanx10", "socialanxconfidenceself", "socialanxconfidenceparent1", "socialanxconfidenceparent2", "socialanxconfidencesibling1", "socialanxconfidencesibling2", "socialanxconfidencesibling3", "socialanxconfidencesibling4", "socialanxconfidencesibling5", "socialanxconfidencesibling6", "socialanxconfidencesibling7", "socialanxconfidencesibling8", "socialanxconfidencesibling9", "socialanxconfidencechild1", "socialanxconfidencechild2", "socialanxconfidencechild3", "socialanxconfidencechild4", "socialanxconfidencechild5", "socialanxconfidencechild6", "socialanxconfidencechild7", "socialanxconfidencechild8", "socialanxconfidencechild9", "sepanx1self", "sepanx1parent1", "sepanx1parent2", "sepanx1sibling1", "sepanx1sibling2", "sepanx1sibling3", "sepanx1sibling4", "sepanx1sibling5", "sepanx1sibling6", "sepanx1sibling7", "sepanx1sibling8", "sepanx1sibling9", "sepanx1child1", "sepanx1child2", "sepanx1child3", "sepanx1child4", "sepanx1child5", "sepanx1child6", "sepanx1child7", "sepanx1child8", "sepanx1child9", "sepanx10", "sepanxconfidenceself", "sepanxconfidenceparent1", "sepanxconfidenceparent2", "sepanxconfidencesibling1", "sepanxconfidencesibling2", "sepanxconfidencesibling3", "sepanxconfidencesibling4", "sepanxconfidencesibling5", "sepanxconfidencesibling6", "sepanxconfidencesibling7", "sepanxconfidencesibling8", "sepanxconfidencesibling9", "sepanxconfidencechild1", "sepanxconfidencechild2", "sepanxconfidencechild3", "sepanxconfidencechild4", "sepanxconfidencechild5", "sepanxconfidencechild6", "sepanxconfidencechild7", "sepanxconfidencechild8", "sepanxconfidencechild9", "gas1self", "gas1parent1", "gas1parent2", "gas1sibling1", "gas1sibling2", "gas1sibling3", "gas1sibling4", "gas1sibling5", "gas1sibling6", "gas1sibling7", "gas1sibling8", "gas1sibling9", "gas1child1", "gas1child2", "gas1child3", "gas1child4", "gas1child5", "gas1child6", "gas1child7", "gas1child8", "gas1child9", "gas10", "gasconfidenceself", "gasconfidenceparent1", "gasconfidenceparent2", "gasconfidencesibling1", "gasconfidencesibling2", "gasconfidencesibling3", "gasconfidencesibling4", "gasconfidencesibling5", "gasconfidencesibling6", "gasconfidencesibling7", "gasconfidencesibling8", "gasconfidencesibling9", "gasconfidencechild1", "gasconfidencechild2", "gasconfidencechild3", "gasconfidencechild4", "gasconfidencechild5", "gasconfidencechild6", "gasconfidencechild7", "gasconfidencechild8", "gasconfidencechild9", "sud1self", "sud1parent1", "sud1parent2", "sud1sibling1", "sud1sibling2", "sud1sibling3", "sud1sibling4", "sud1sibling5", "sud1sibling6", "sud1sibling7", "sud1sibling8", "sud1sibling9", "sud1child1", "sud1child2", "sud1child3", "sud1child4", "sud1child5", "sud1child6", "sud1child7", "sud1child8", "sud1child9", "sud10", "sudconfidenceself", "sudconfidenceparent1", "sudconfidenceparent2", "sudconfidencesibling1", "sudconfidencesibling2", "sudconfidencesibling3", "sudconfidencesibling4", "sudconfidencesibling5", "sudconfidencesibling6", "sudconfidencesibling7", "sudconfidencesibling8", "sudconfidencesibling9", "sudconfidencechild1", "sudconfidencechild2", "sudconfidencechild3", "sudconfidencechild4", "sudconfidencechild5", "sudconfidencechild6", "sudconfidencechild7", "sudconfidencechild8", "sudconfidencechild9", "ocd1self", "ocd1parent1", "ocd1parent2", "ocd1sibling1", "ocd1sibling2", "ocd1sibling3", "ocd1sibling4", "ocd1sibling5", "ocd1sibling6", "ocd1sibling7", "ocd1sibling8", "ocd1sibling9", "ocd1child1", "ocd1child2", "ocd1child3", "ocd1child4", "ocd1child5", "ocd1child6", "ocd1child7", "ocd1child8", "ocd1child9", "ocd10", "ocdconfidenceself", "ocdconfidenceparent1", "ocdconfidenceparent2", "ocdconfidencesibling1", "ocdconfidencesibling2", "ocdconfidencesibling3", "ocdconfidencesibling4", "ocdconfidencesibling5", "ocdconfidencesibling6", "ocdconfidencesibling7", "ocdconfidencesibling8", "ocdconfidencesibling9", "ocdconfidencechild1", "ocdconfidencechild2", "ocdconfidencechild3", "ocdconfidencechild4", "ocdconfidencechild5", "ocdconfidencechild6", "ocdconfidencechild7", "ocdconfidencechild8", "ocdconfidencechild9", "psy1self", "psy1parent1", "psy1parent2", "psy1sibling1", "psy1sibling2", "psy1sibling3", "psy1sibling4", "psy1sibling5", "psy1sibling6", "psy1sibling7", "psy1sibling8", "psy1sibling9", "psy1child1", "psy1child2", "psy1child3", "psy1child4", "psy1child5", "psy1child6", "psy1child7", "psy1child8", "psy1child9", "psy10", "psyconfidenceself", "psyconfidenceparent1", "psyconfidenceparent2", "psyconfidencesibling1", "psyconfidencesibling2", "psyconfidencesibling3", "psyconfidencesibling4", "psyconfidencesibling5", "psyconfidencesibling6", "psyconfidencesibling7", "psyconfidencesibling8", "psyconfidencesibling9", "psyconfidencechild1", "psyconfidencechild2", "psyconfidencechild3", "psyconfidencechild4", "psyconfidencechild5", "psyconfidencechild6", "psyconfidencechild7", "psyconfidencechild8", "psyconfidencechild9", "ed1self", "ed1parent1", "ed1parent2", "ed1sibling1", "ed1sibling2", "ed1sibling3", "ed1sibling4", "ed1sibling5", "ed1sibling6", "ed1sibling7", "ed1sibling8", "ed1sibling9", "ed1child1", "ed1child2", "ed1child3", "ed1child4", "ed1child5", "ed1child6", "ed1child7", "ed1child8", "ed1child9", "ed10", "edconfidenceself", "edconfidenceparent1", "edconfidenceparent2", "edconfidencesibling1", "edconfidencesibling2", "edconfidencesibling3", "edconfidencesibling4", "edconfidencesibling5", "edconfidencesibling6", "edconfidencesibling7", "edconfidencesibling8", "edconfidencesibling9", "edconfidencechild1", "edconfidencechild2", "edconfidencechild3", "edconfidencechild4", "edconfidencechild5", "edconfidencechild6", "edconfidencechild7", "edconfidencechild8", "edconfidencechild9", "fhsopentext", "ownpsychdisorder", "ownpsychdiagnmde", "ownpsychdiagnbipolar", "ownpsychdiagnocd", "ownpsychdiagnanx", "ownpsychdiagnpsy", "ownpsychdiagnsud", "ownpsychdiagned", "ownpsychdiagnidk", "ownpsychdiagnother", "ownpsychprevalentmde1", "ownpsychprevalentmde2", "ownpsychprevalentbipolar1", "ownpsychprevalentbipolar2", "ownpsychprevalentocd1", "ownpsychprevalentocd2", "ownpsychprevalentanx1", "ownpsychprevalentanx2", "ownpsychprevalentpsy1", "ownpsychprevalentpsy2", "ownpsychprevalentsud1", "ownpsychprevalentsud2", "ownpsychprevalented1", "ownpsychprevalented2", "ownpsychprevalentidk1", "ownpsychprevalentidk2", "ownpsychprevalentother1", "ownpsychprevalentother2"]
+    },
+    {
+      "scale": "IDAS",
+      "items": ["idas001", "idas002", "idas003", "idas004", "idas005", "idas006", "idas007", "idas008", "idas009", "idas010", "idas011", "idas012", "idas013", "idas014", "idas015", "idas016", "idas017", "idas018", "idas019", "idas020", "idas021", "idas022", "idas023", "idas024", "idas025", "idas026", "idas027", "idas028", "idas029", "idas030", "idas031", "idas032", "idas033", "idas034", "idas035", "idas036", "idas037", "idas038", "idas039", "idas040", "idas041", "idas042", "idas043", "idas044", "idas045", "idas046", "idas047", "idas048", "idas049", "idas050", "idas051", "idas052", "idas053", "idas054", "idas055", "idas056", "idas057", "idas058", "idas059", "idas060", "idas061", "idas062", "idas063", "idas064", "idas065", "idas066", "idas067", "idas068", "idas069", "idas070", "idas071", "idas072", "idas073", "idas074", "idas075", "idas076", "idas077", "idas078", "idas079", "idas080", "idas081", "idas082", "idas083", "idas084", "idas085", "idas086", "idas087", "idas088", "idas089", "idas090", "idas091", "idas092", "idas093", "idas094", "idas095", "idas096", "idas097", "idas098"]
+    },
+    {
+      "scale": "IUS",
+      "items": ["ius001", "ius002", "ius003", "ius004", "ius005", "ius006", "ius007", "ius008", "ius009", "ius010", "ius011", "ius012", "ius013", "ius014", "ius015", "ius016", "ius017", "ius018", "ius019", "ius020", "ius021", "ius022", "ius023", "ius024", "ius025", "ius026", "ius027"]
+    },
+    {
+      "scale": "MAP-SR",
+      "items": ["map1", "map2", "map3", "map4", "map5", "map6", "mapa2007", "mapa2008", "mapa2009", "mapa3motivation010", "mapa3motivation012", "mapa3motivation014", "mapa3effort011", "mapa3effort013", "mapa3effort015"]
+    },
+    {
+      "scale": "SUQ",
+      "items": ["alk1", "alk2", "alk3", "tab1", "tab2", "tab3", "cann1", "cann2", "cann3", "stim1", "stim2", "stim3", "opi1", "opi2", "opi3", "hal1", "hal2", "hal3", "inh1", "inh2", "inh3", "med1", "med2", "med3", "and1", "and2", "and3"]
+    },
+    {
+      "scale": "TICS",
+      "items": ["tics025", "tics029", "tics037", "tics040", "tics045", "tics046", "tics054", "tics055", "tics057"]
+    }
+  ],
+  "items_by_subscale": [
+    {
+      "scale": "APS",
+      "subscale": "emotreactivtiy",
+      "items": ["aps002", "aps003", "aps004", "aps006", "aps008", "aps009", "aps010", "aps011", "aps012"]
+    },
+    {
+      "scale": "APS",
+      "subscale": "traitanxiety",
+      "items": ["aps001", "aps005", "aps007"]
+    },
+    {
+      "scale": "AQ",
+      "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+    },
+    {
+      "scale": "BISBAS",
+      "subscale": "BIS",
+      "items": ["bisbas002", "bisbas008", "bisbas013", "bisbas016", "bisbas019", "bisbas022", "bisbas024"]
+    },
+    {
+      "scale": "BISBAS",
+      "subscale": "drive",
+      "items": ["bisbas003", "bisbas009", "bisbas012", "bisbas021"]
+    },
+    {
+      "scale": "BISBAS",
+      "subscale": "dummy",
+      "items": ["bisbas001", "bisbas006", "bisbas011", "bisbas017"]
+    },
+    {
+      "scale": "BISBAS",
+      "subscale": "funseeking",
+      "items": ["bisbas005", "bisbas010", "bisbas015", "bisbas020"]
+    },
+    {
+      "scale": "BISBAS",
+      "subscale": "rewardresponsiveness",
+      "items": ["bisbas004", "bisbas007", "bisbas014", "bisbas018", "bisbas023"]
+    },
+    {
+      "scale": "CAPE",
+      "subscale": "distress",
+      "items": ["capedistr002", "capedistr005", "capedistr006", "capedistr007", "capedistr010", "capedistr011", "capedistr013", "capedistr015", "capedistr017", "capedistr020", "capedistr022", "capedistr024", "capedistr026", "capedistr028", "capedistr030", "capedistr031", "capedistr033", "capedistr034", "capedistr041", "capedistr042"]
+    },
+    {
+      "scale": "CAPE",
+      "subscale": "frequency",
+      "items": ["capefreq002", "capefreq005", "capefreq006", "capefreq007", "capefreq010", "capefreq011", "capefreq013", "capefreq015", "capefreq017", "capefreq020", "capefreq022", "capefreq024", "capefreq026", "capefreq028", "capefreq030", "capefreq031", "capefreq033", "capefreq034", "capefreq041", "capefreq042"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "emotionalabuse",
+      "items": ["ctq003", "ctq008", "ctq014", "ctq018", "ctq025"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "emotionalneglect",
+      "items": ["ctq005", "ctq007", "ctq013", "ctq019", "ctq028"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "minimization",
+      "items": ["ctq010", "ctq016", "ctq022"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "physicalabuse",
+      "items": ["ctq009", "ctq011", "ctq012", "ctq015", "ctq017"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "physicalneglect",
+      "items": ["ctq001", "ctq002", "ctq004", "ctq006", "ctq026"]
+    },
+    {
+      "scale": "CTQ",
+      "subscale": "sexualabuse",
+      "items": ["ctq020", "ctq021", "ctq023", "ctq024", "ctq027"]
+    },
+    {
+      "scale": "FHSfamilytree",
+      "items": ["relativesinfo", "parents001", "parents002", "parentsgender001", "parentsgender002", "parentscontact001", "parentscontact002", "siblings", "siblingsnames001", "siblingsnames002", "siblingsnames003", "siblingsnames004", "siblingsnames005", "siblingsnames006", "siblingsnames007", "siblingsnames008", "siblingsnames009", "siblingsgender001", "siblingsgender002", "siblingsgender003", "siblingsgender004", "siblingsgender005", "siblingsgender006", "siblingsgender007", "siblingsgender008", "siblingsgender009", "siblingscontact001", "siblingscontact002", "siblingscontact003", "siblingscontact004", "siblingscontact005", "siblingscontact006", "siblingscontact007", "siblingscontact008", "siblingscontact009", "children", "childrennames001", "childrennames002", "childrennames003", "childrennames004", "childrennames005", "childrennames006", "childrennames007", "childrennames008", "childrennames009", "childrengender001", "childrengender002", "childrengender003", "childrengender004", "childrengender005", "childrengender006", "childrengender007", "childrengender008", "childrengender009", "childrencontact001", "childrencontact002", "childrencontact003", "childrencontact004", "childrencontact005", "childrencontact006", "childrencontact007", "childrencontact008", "childrencontact009", "depression1self", "depression1parent1", "depression1parent2", "depression1sibling1", "depression1sibling2", "depression1sibling3", "depression1sibling4", "depression1sibling5", "depression1sibling6", "depression1sibling7", "depression1sibling8", "depression1sibling9", "depression1child1", "depression1child2", "depression1child3", "depression1child4", "depression1child5", "depression1child6", "depression1child7", "depression1child8", "depression1child9", "depression10", "depressionconfidenceself", "depressionconfidenceparent1", "depressionconfidenceparent2", "depressionconfidencesibling1", "depressionconfidencesibling2", "depressionconfidencesibling3", "depressionconfidencesibling4", "depressionconfidencesibling5", "depressionconfidencesibling6", "depressionconfidencesibling7", "depressionconfidencesibling8", "depressionconfidencesibling9", "depressionconfidencechild1", "depressionconfidencechild2", "depressionconfidencechild3", "depressionconfidencechild4", "depressionconfidencechild5", "depressionconfidencechild6", "depressionconfidencechild7", "depressionconfidencechild8", "depressionconfidencechild9", "mania1self", "mania1parent1", "mania1parent2", "mania1sibling1", "mania1sibling2", "mania1sibling3", "mania1sibling4", "mania1sibling5", "mania1sibling6", "mania1sibling7", "mania1sibling8", "mania1sibling9", "mania1child1", "mania1child2", "mania1child3", "mania1child4", "mania1child5", "mania1child6", "mania1child7", "mania1child8", "mania1child9", "mania10", "maniaconfidenceself", "maniaconfidenceparent1", "maniaconfidenceparent2", "maniaconfidencesibling1", "maniaconfidencesibling2", "maniaconfidencesibling3", "maniaconfidencesibling4", "maniaconfidencesibling5", "maniaconfidencesibling6", "maniaconfidencesibling7", "maniaconfidencesibling8", "maniaconfidencesibling9", "maniaconfidencechild1", "maniaconfidencechild2", "maniaconfidencechild3", "maniaconfidencechild4", "maniaconfidencechild5", "maniaconfidencechild6", "maniaconfidencechild7", "maniaconfidencechild8", "maniaconfidencechild9", "panic1self", "panic1parent1", "panic1parent2", "panic1sibling1", "panic1sibling2", "panic1sibling3", "panic1sibling4", "panic1sibling5", "panic1sibling6", "panic1sibling7", "panic1sibling8", "panic1sibling9", "panic1child1", "panic1child2", "panic1child3", "panic1child4", "panic1child5", "panic1child6", "panic1child7", "panic1child8", "panic1child9", "panic10", "panicconfidenceself", "panicconfidenceparent1", "panicconfidenceparent2", "panicconfidencesibling1", "panicconfidencesibling2", "panicconfidencesibling3", "panicconfidencesibling4", "panicconfidencesibling5", "panicconfidencesibling6", "panicconfidencesibling7", "panicconfidencesibling8", "panicconfidencesibling9", "panicconfidencechild1", "panicconfidencechild2", "panicconfidencechild3", "panicconfidencechild4", "panicconfidencechild5", "panicconfidencechild6", "panicconfidencechild7", "panicconfidencechild8", "panicconfidencechild9", "agora1self", "agora1parent1", "agora1parent2", "agora1sibling1", "agora1sibling2", "agora1sibling3", "agora1sibling4", "agora1sibling5", "agora1sibling6", "agora1sibling7", "agora1sibling8", "agora1sibling9", "agora1child1", "agora1child2", "agora1child3", "agora1child4", "agora1child5", "agora1child6", "agora1child7", "agora1child8", "agora1child9", "agora10", "agoraconfidenceself", "agoraconfidenceparent1", "agoraconfidenceparent2", "agoraconfidencesibling1", "agoraconfidencesibling2", "agoraconfidencesibling3", "agoraconfidencesibling4", "agoraconfidencesibling5", "agoraconfidencesibling6", "agoraconfidencesibling7", "agoraconfidencesibling8", "agoraconfidencesibling9", "agoraconfidencechild1", "agoraconfidencechild2", "agoraconfidencechild3", "agoraconfidencechild4", "agoraconfidencechild5", "agoraconfidencechild6", "agoraconfidencechild7", "agoraconfidencechild8", "agoraconfidencechild9", "phobia1self", "phobia1parent1", "phobia1parent2", "phobia1sibling1", "phobia1sibling2", "phobia1sibling3", "phobia1sibling4", "phobia1sibling5", "phobia1sibling6", "phobia1sibling7", "phobia1sibling8", "phobia1sibling9", "phobia1child1", "phobia1child2", "phobia1child3", "phobia1child4", "phobia1child5", "phobia1child6", "phobia1child7", "phobia1child8", "phobia1child9", "phobia10", "phobiaconfidenceself", "phobiaconfidenceparent1", "phobiaconfidenceparent2", "phobiaconfidencesibling1", "phobiaconfidencesibling2", "phobiaconfidencesibling3", "phobiaconfidencesibling4", "phobiaconfidencesibling5", "phobiaconfidencesibling6", "phobiaconfidencesibling7", "phobiaconfidencesibling8", "phobiaconfidencesibling9", "phobiaconfidencechild1", "phobiaconfidencechild2", "phobiaconfidencechild3", "phobiaconfidencechild4", "phobiaconfidencechild5", "phobiaconfidencechild6", "phobiaconfidencechild7", "phobiaconfidencechild8", "phobiaconfidencechild9", "socialanx1self", "socialanx1parent1", "socialanx1parent2", "socialanx1sibling1", "socialanx1sibling2", "socialanx1sibling3", "socialanx1sibling4", "socialanx1sibling5", "socialanx1sibling6", "socialanx1sibling7", "socialanx1sibling8", "socialanx1sibling9", "socialanx1child1", "socialanx1child2", "socialanx1child3", "socialanx1child4", "socialanx1child5", "socialanx1child6", "socialanx1child7", "socialanx1child8", "socialanx1child9", "socialanx10", "socialanxconfidenceself", "socialanxconfidenceparent1", "socialanxconfidenceparent2", "socialanxconfidencesibling1", "socialanxconfidencesibling2", "socialanxconfidencesibling3", "socialanxconfidencesibling4", "socialanxconfidencesibling5", "socialanxconfidencesibling6", "socialanxconfidencesibling7", "socialanxconfidencesibling8", "socialanxconfidencesibling9", "socialanxconfidencechild1", "socialanxconfidencechild2", "socialanxconfidencechild3", "socialanxconfidencechild4", "socialanxconfidencechild5", "socialanxconfidencechild6", "socialanxconfidencechild7", "socialanxconfidencechild8", "socialanxconfidencechild9", "sepanx1self", "sepanx1parent1", "sepanx1parent2", "sepanx1sibling1", "sepanx1sibling2", "sepanx1sibling3", "sepanx1sibling4", "sepanx1sibling5", "sepanx1sibling6", "sepanx1sibling7", "sepanx1sibling8", "sepanx1sibling9", "sepanx1child1", "sepanx1child2", "sepanx1child3", "sepanx1child4", "sepanx1child5", "sepanx1child6", "sepanx1child7", "sepanx1child8", "sepanx1child9", "sepanx10", "sepanxconfidenceself", "sepanxconfidenceparent1", "sepanxconfidenceparent2", "sepanxconfidencesibling1", "sepanxconfidencesibling2", "sepanxconfidencesibling3", "sepanxconfidencesibling4", "sepanxconfidencesibling5", "sepanxconfidencesibling6", "sepanxconfidencesibling7", "sepanxconfidencesibling8", "sepanxconfidencesibling9", "sepanxconfidencechild1", "sepanxconfidencechild2", "sepanxconfidencechild3", "sepanxconfidencechild4", "sepanxconfidencechild5", "sepanxconfidencechild6", "sepanxconfidencechild7", "sepanxconfidencechild8", "sepanxconfidencechild9", "gas1self", "gas1parent1", "gas1parent2", "gas1sibling1", "gas1sibling2", "gas1sibling3", "gas1sibling4", "gas1sibling5", "gas1sibling6", "gas1sibling7", "gas1sibling8", "gas1sibling9", "gas1child1", "gas1child2", "gas1child3", "gas1child4", "gas1child5", "gas1child6", "gas1child7", "gas1child8", "gas1child9", "gas10", "gasconfidenceself", "gasconfidenceparent1", "gasconfidenceparent2", "gasconfidencesibling1", "gasconfidencesibling2", "gasconfidencesibling3", "gasconfidencesibling4", "gasconfidencesibling5", "gasconfidencesibling6", "gasconfidencesibling7", "gasconfidencesibling8", "gasconfidencesibling9", "gasconfidencechild1", "gasconfidencechild2", "gasconfidencechild3", "gasconfidencechild4", "gasconfidencechild5", "gasconfidencechild6", "gasconfidencechild7", "gasconfidencechild8", "gasconfidencechild9", "sud1self", "sud1parent1", "sud1parent2", "sud1sibling1", "sud1sibling2", "sud1sibling3", "sud1sibling4", "sud1sibling5", "sud1sibling6", "sud1sibling7", "sud1sibling8", "sud1sibling9", "sud1child1", "sud1child2", "sud1child3", "sud1child4", "sud1child5", "sud1child6", "sud1child7", "sud1child8", "sud1child9", "sud10", "sudconfidenceself", "sudconfidenceparent1", "sudconfidenceparent2", "sudconfidencesibling1", "sudconfidencesibling2", "sudconfidencesibling3", "sudconfidencesibling4", "sudconfidencesibling5", "sudconfidencesibling6", "sudconfidencesibling7", "sudconfidencesibling8", "sudconfidencesibling9", "sudconfidencechild1", "sudconfidencechild2", "sudconfidencechild3", "sudconfidencechild4", "sudconfidencechild5", "sudconfidencechild6", "sudconfidencechild7", "sudconfidencechild8", "sudconfidencechild9", "ocd1self", "ocd1parent1", "ocd1parent2", "ocd1sibling1", "ocd1sibling2", "ocd1sibling3", "ocd1sibling4", "ocd1sibling5", "ocd1sibling6", "ocd1sibling7", "ocd1sibling8", "ocd1sibling9", "ocd1child1", "ocd1child2", "ocd1child3", "ocd1child4", "ocd1child5", "ocd1child6", "ocd1child7", "ocd1child8", "ocd1child9", "ocd10", "ocdconfidenceself", "ocdconfidenceparent1", "ocdconfidenceparent2", "ocdconfidencesibling1", "ocdconfidencesibling2", "ocdconfidencesibling3", "ocdconfidencesibling4", "ocdconfidencesibling5", "ocdconfidencesibling6", "ocdconfidencesibling7", "ocdconfidencesibling8", "ocdconfidencesibling9", "ocdconfidencechild1", "ocdconfidencechild2", "ocdconfidencechild3", "ocdconfidencechild4", "ocdconfidencechild5", "ocdconfidencechild6", "ocdconfidencechild7", "ocdconfidencechild8", "ocdconfidencechild9", "psy1self", "psy1parent1", "psy1parent2", "psy1sibling1", "psy1sibling2", "psy1sibling3", "psy1sibling4", "psy1sibling5", "psy1sibling6", "psy1sibling7", "psy1sibling8", "psy1sibling9", "psy1child1", "psy1child2", "psy1child3", "psy1child4", "psy1child5", "psy1child6", "psy1child7", "psy1child8", "psy1child9", "psy10", "psyconfidenceself", "psyconfidenceparent1", "psyconfidenceparent2", "psyconfidencesibling1", "psyconfidencesibling2", "psyconfidencesibling3", "psyconfidencesibling4", "psyconfidencesibling5", "psyconfidencesibling6", "psyconfidencesibling7", "psyconfidencesibling8", "psyconfidencesibling9", "psyconfidencechild1", "psyconfidencechild2", "psyconfidencechild3", "psyconfidencechild4", "psyconfidencechild5", "psyconfidencechild6", "psyconfidencechild7", "psyconfidencechild8", "psyconfidencechild9", "ed1self", "ed1parent1", "ed1parent2", "ed1sibling1", "ed1sibling2", "ed1sibling3", "ed1sibling4", "ed1sibling5", "ed1sibling6", "ed1sibling7", "ed1sibling8", "ed1sibling9", "ed1child1", "ed1child2", "ed1child3", "ed1child4", "ed1child5", "ed1child6", "ed1child7", "ed1child8", "ed1child9", "ed10", "edconfidenceself", "edconfidenceparent1", "edconfidenceparent2", "edconfidencesibling1", "edconfidencesibling2", "edconfidencesibling3", "edconfidencesibling4", "edconfidencesibling5", "edconfidencesibling6", "edconfidencesibling7", "edconfidencesibling8", "edconfidencesibling9", "edconfidencechild1", "edconfidencechild2", "edconfidencechild3", "edconfidencechild4", "edconfidencechild5", "edconfidencechild6", "edconfidencechild7", "edconfidencechild8", "edconfidencechild9", "fhsopentext", "ownpsychdisorder", "ownpsychdiagnmde", "ownpsychdiagnbipolar", "ownpsychdiagnocd", "ownpsychdiagnanx", "ownpsychdiagnpsy", "ownpsychdiagnsud", "ownpsychdiagned", "ownpsychdiagnidk", "ownpsychdiagnother", "ownpsychprevalentmde1", "ownpsychprevalentmde2", "ownpsychprevalentbipolar1", "ownpsychprevalentbipolar2", "ownpsychprevalentocd1", "ownpsychprevalentocd2", "ownpsychprevalentanx1", "ownpsychprevalentanx2", "ownpsychprevalentpsy1", "ownpsychprevalentpsy2", "ownpsychprevalentsud1", "ownpsychprevalentsud2", "ownpsychprevalented1", "ownpsychprevalented2", "ownpsychprevalentidk1", "ownpsychprevalentidk2", "ownpsychprevalentother1", "ownpsychprevalentother2"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "appetitegain",
+      "items": ["idas019", "idas024", "idas062"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "appetiteloss",
+      "items": ["idas001", "idas026", "idas059"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "checking",
+      "items": ["idas067", "idas074", "idas080"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "claustrophobia",
+      "items": ["idas073", "idas079", "idas083", "idas089", "idas093"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "cleaning",
+      "items": ["idas065", "idas069", "idas075", "idas085", "idas090", "idas095", "idas097"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "dysphoria",
+      "items": ["idas002", "idas005", "idas008", "idas009", "idas021", "idas031", "idas039", "idas047", "idas056", "idas060"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "euphoria",
+      "items": ["idas071", "idas077", "idas087", "idas091", "idas096"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "illtemper",
+      "items": ["idas012", "idas035", "idas043", "idas061"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "insomnia",
+      "items": ["idas004", "idas011", "idas017", "idas025", "idas036", "idas050"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "lassitude",
+      "items": ["idas006", "idas029", "idas030", "idas042", "idas053", "idas054"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "mania",
+      "items": ["idas066", "idas070", "idas076", "idas082", "idas086"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "ordering",
+      "items": ["idas064", "idas068", "idas081", "idas084", "idas094"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "panic",
+      "items": ["idas007", "idas016", "idas032", "idas038", "idas044", "idas048", "idas055", "idas057"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "socialanxiety",
+      "items": ["idas015", "idas018", "idas020", "idas040", "idas046", "idas098"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "suicidality",
+      "items": ["idas013", "idas022", "idas033", "idas037", "idas045", "idas051"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "traumaticavoidance",
+      "items": ["idas072", "idas078", "idas088", "idas092"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "traumaticintrusions",
+      "items": ["idas014", "idas028", "idas034", "idas041"]
+    },
+    {
+      "scale": "IDAS",
+      "subscale": "wellbeing",
+      "items": ["idas003", "idas010", "idas023", "idas027", "idas049", "idas052", "idas058", "idas063"]
+    },
+    {
+      "scale": "IUS",
+      "subscale": "uncertainavoid",
+      "items": ["ius008", "ius010", "ius011", "ius019", "ius021"]
+    },
+    {
+      "scale": "IUS",
+      "subscale": "uncertaininability",
+      "items": ["ius001", "ius009", "ius012", "ius013", "ius014", "ius015", "ius020", "ius022", "ius025"]
+    },
+    {
+      "scale": "IUS",
+      "subscale": "uncertainstress",
+      "items": ["ius002", "ius003", "ius004", "ius005", "ius006", "ius007", "ius017", "ius024", "ius026"]
+    },
+    {
+      "scale": "IUS",
+      "subscale": "uncertainunfair",
+      "items": ["ius016", "ius018", "ius023", "ius027"]
+    },
+    {
+      "scale": "MAP-SR",
+      "items": ["map1", "map2", "map3", "map4", "map5", "map6", "mapa2007", "mapa2008", "mapa2009", "mapa3motivation010", "mapa3motivation012", "mapa3motivation014", "mapa3effort011", "mapa3effort013", "mapa3effort015"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Alcohol",
+      "items": ["alk1", "alk2", "alk3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Cannabis",
+      "items": ["cann1", "cann2", "cann3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Hallucinogens",
+      "items": ["hal1", "hal2", "hal3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Inhalants",
+      "items": ["inh1", "inh2", "inh3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Medication",
+      "items": ["med1", "med2", "med3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Opioids",
+      "items": ["opi1", "opi2", "opi3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Other",
+      "items": ["and1", "and2", "and3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Stimulants",
+      "items": ["stim1", "stim2", "stim3"]
+    },
+    {
+      "scale": "SUQ",
+      "subscale": "Tobacco",
+      "items": ["tab1", "tab2", "tab3"]
+    },
+    {
+      "scale": "TICS",
+      "items": ["tics025", "tics029", "tics037", "tics040", "tics045", "tics046", "tics054", "tics055", "tics057"]
+    }
+  ],
+  "items_by_higher_order": [
+    {
+      "higher_order_subscale": "BAS",
+      "items": ["bisbas003", "bisbas004", "bisbas005", "bisbas007", "bisbas009", "bisbas010", "bisbas012", "bisbas014", "bisbas015", "bisbas018", "bisbas020", "bisbas021", "bisbas023"]
+    },
+    {
+      "higher_order_subscale": "BIS",
+      "items": ["bisbas002", "bisbas008", "bisbas013", "bisbas016", "bisbas019", "bisbas022", "bisbas024"]
+    },
+    {
+      "higher_order_subscale": "autism",
+      "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+    },
+    {
+      "higher_order_subscale": "distress",
+      "items": ["idas001", "idas002", "idas004", "idas005", "idas006", "idas007", "idas008", "idas009", "idas011", "idas012", "idas013", "idas014", "idas015", "idas016", "idas017", "idas018", "idas019", "idas020", "idas021", "idas022", "idas024", "idas025", "idas026", "idas028", "idas029", "idas030", "idas031", "idas032", "idas033", "idas034", "idas035", "idas036", "idas037", "idas038", "idas039", "idas040", "idas041", "idas042", "idas043", "idas044", "idas045", "idas046", "idas047", "idas048", "idas050", "idas051", "idas053", "idas054", "idas055", "idas056", "idas057", "idas059", "idas060", "idas061", "idas062", "idas066", "idas070", "idas076", "idas082", "idas086", "idas098"]
+    },
+    {
+      "higher_order_subscale": "obsession_fear",
+      "items": ["idas064", "idas065", "idas067", "idas068", "idas069", "idas072", "idas073", "idas074", "idas075", "idas078", "idas079", "idas080", "idas081", "idas083", "idas084", "idas085", "idas088", "idas089", "idas090", "idas092", "idas093", "idas094", "idas095", "idas097"]
+    },
+    {
+      "higher_order_subscale": "positivemood",
+      "items": ["idas003", "idas010", "idas023", "idas027", "idas049", "idas052", "idas058", "idas063", "idas071", "idas077", "idas087", "idas091", "idas096"]
+    },
+    {
+      "higher_order_subscale": "positivesymp",
+      "items": ["capefreq002", "capefreq005", "capefreq006", "capefreq007", "capefreq010", "capefreq011", "capefreq013", "capefreq015", "capefreq017", "capefreq020", "capefreq022", "capefreq024", "capefreq026", "capefreq028", "capefreq030", "capefreq031", "capefreq033", "capefreq034", "capefreq041", "capefreq042", "capedistr002", "capedistr005", "capedistr006", "capedistr007", "capedistr010", "capedistr011", "capedistr013", "capedistr015", "capedistr017", "capedistr020", "capedistr022", "capedistr024", "capedistr026", "capedistr028", "capedistr030", "capedistr031", "capedistr033", "capedistr034", "capedistr041", "capedistr042"]
+    },
+    {
+      "items": ["alk1", "alk2", "alk3", "tab1", "tab2", "tab3", "cann1", "cann2", "cann3", "stim1", "stim2", "stim3", "opi1", "opi2", "opi3", "hal1", "hal2", "hal3", "inh1", "inh2", "inh3", "med1", "med2", "med3", "and1", "and2", "and3", "bisbas001", "bisbas006", "bisbas011", "bisbas017", "ius001", "ius002", "ius003", "ius004", "ius005", "ius006", "ius007", "ius008", "ius009", "ius010", "ius011", "ius012", "ius013", "ius014", "ius015", "ius016", "ius017", "ius018", "ius019", "ius020", "ius021", "ius022", "ius023", "ius024", "ius025", "ius026", "ius027", "aps001", "aps002", "aps003", "aps004", "aps005", "aps006", "aps007", "aps008", "aps009", "aps010", "aps011", "aps012", "tics025", "tics029", "tics037", "tics040", "tics045", "tics046", "tics054", "tics055", "tics057", "ctq001", "ctq002", "ctq003", "ctq004", "ctq005", "ctq006", "ctq007", "ctq008", "ctq009", "ctq010", "ctq011", "ctq012", "ctq013", "ctq014", "ctq015", "ctq016", "ctq017", "ctq018", "ctq019", "ctq020", "ctq021", "ctq022", "ctq023", "ctq024", "ctq025", "ctq026", "ctq027", "ctq028", "map1", "map2", "map3", "map4", "map5", "map6", "mapa2007", "mapa2008", "mapa2009", "mapa3motivation010", "mapa3motivation012", "mapa3motivation014", "mapa3effort011", "mapa3effort013", "mapa3effort015", "relativesinfo", "parents001", "parents002", "parentsgender001", "parentsgender002", "parentscontact001", "parentscontact002", "siblings", "siblingsnames001", "siblingsnames002", "siblingsnames003", "siblingsnames004", "siblingsnames005", "siblingsnames006", "siblingsnames007", "siblingsnames008", "siblingsnames009", "siblingsgender001", "siblingsgender002", "siblingsgender003", "siblingsgender004", "siblingsgender005", "siblingsgender006", "siblingsgender007", "siblingsgender008", "siblingsgender009", "siblingscontact001", "siblingscontact002", "siblingscontact003", "siblingscontact004", "siblingscontact005", "siblingscontact006", "siblingscontact007", "siblingscontact008", "siblingscontact009", "children", "childrennames001", "childrennames002", "childrennames003", "childrennames004", "childrennames005", "childrennames006", "childrennames007", "childrennames008", "childrennames009", "childrengender001", "childrengender002", "childrengender003", "childrengender004", "childrengender005", "childrengender006", "childrengender007", "childrengender008", "childrengender009", "childrencontact001", "childrencontact002", "childrencontact003", "childrencontact004", "childrencontact005", "childrencontact006", "childrencontact007", "childrencontact008", "childrencontact009", "depression1self", "depression1parent1", "depression1parent2", "depression1sibling1", "depression1sibling2", "depression1sibling3", "depression1sibling4", "depression1sibling5", "depression1sibling6", "depression1sibling7", "depression1sibling8", "depression1sibling9", "depression1child1", "depression1child2", "depression1child3", "depression1child4", "depression1child5", "depression1child6", "depression1child7", "depression1child8", "depression1child9", "depression10", "depressionconfidenceself", "depressionconfidenceparent1", "depressionconfidenceparent2", "depressionconfidencesibling1", "depressionconfidencesibling2", "depressionconfidencesibling3", "depressionconfidencesibling4", "depressionconfidencesibling5", "depressionconfidencesibling6", "depressionconfidencesibling7", "depressionconfidencesibling8", "depressionconfidencesibling9", "depressionconfidencechild1", "depressionconfidencechild2", "depressionconfidencechild3", "depressionconfidencechild4", "depressionconfidencechild5", "depressionconfidencechild6", "depressionconfidencechild7", "depressionconfidencechild8", "depressionconfidencechild9", "mania1self", "mania1parent1", "mania1parent2", "mania1sibling1", "mania1sibling2", "mania1sibling3", "mania1sibling4", "mania1sibling5", "mania1sibling6", "mania1sibling7", "mania1sibling8", "mania1sibling9", "mania1child1", "mania1child2", "mania1child3", "mania1child4", "mania1child5", "mania1child6", "mania1child7", "mania1child8", "mania1child9", "mania10", "maniaconfidenceself", "maniaconfidenceparent1", "maniaconfidenceparent2", "maniaconfidencesibling1", "maniaconfidencesibling2", "maniaconfidencesibling3", "maniaconfidencesibling4", "maniaconfidencesibling5", "maniaconfidencesibling6", "maniaconfidencesibling7", "maniaconfidencesibling8", "maniaconfidencesibling9", "maniaconfidencechild1", "maniaconfidencechild2", "maniaconfidencechild3", "maniaconfidencechild4", "maniaconfidencechild5", "maniaconfidencechild6", "maniaconfidencechild7", "maniaconfidencechild8", "maniaconfidencechild9", "panic1self", "panic1parent1", "panic1parent2", "panic1sibling1", "panic1sibling2", "panic1sibling3", "panic1sibling4", "panic1sibling5", "panic1sibling6", "panic1sibling7", "panic1sibling8", "panic1sibling9", "panic1child1", "panic1child2", "panic1child3", "panic1child4", "panic1child5", "panic1child6", "panic1child7", "panic1child8", "panic1child9", "panic10", "panicconfidenceself", "panicconfidenceparent1", "panicconfidenceparent2", "panicconfidencesibling1", "panicconfidencesibling2", "panicconfidencesibling3", "panicconfidencesibling4", "panicconfidencesibling5", "panicconfidencesibling6", "panicconfidencesibling7", "panicconfidencesibling8", "panicconfidencesibling9", "panicconfidencechild1", "panicconfidencechild2", "panicconfidencechild3", "panicconfidencechild4", "panicconfidencechild5", "panicconfidencechild6", "panicconfidencechild7", "panicconfidencechild8", "panicconfidencechild9", "agora1self", "agora1parent1", "agora1parent2", "agora1sibling1", "agora1sibling2", "agora1sibling3", "agora1sibling4", "agora1sibling5", "agora1sibling6", "agora1sibling7", "agora1sibling8", "agora1sibling9", "agora1child1", "agora1child2", "agora1child3", "agora1child4", "agora1child5", "agora1child6", "agora1child7", "agora1child8", "agora1child9", "agora10", "agoraconfidenceself", "agoraconfidenceparent1", "agoraconfidenceparent2", "agoraconfidencesibling1", "agoraconfidencesibling2", "agoraconfidencesibling3", "agoraconfidencesibling4", "agoraconfidencesibling5", "agoraconfidencesibling6", "agoraconfidencesibling7", "agoraconfidencesibling8", "agoraconfidencesibling9", "agoraconfidencechild1", "agoraconfidencechild2", "agoraconfidencechild3", "agoraconfidencechild4", "agoraconfidencechild5", "agoraconfidencechild6", "agoraconfidencechild7", "agoraconfidencechild8", "agoraconfidencechild9", "phobia1self", "phobia1parent1", "phobia1parent2", "phobia1sibling1", "phobia1sibling2", "phobia1sibling3", "phobia1sibling4", "phobia1sibling5", "phobia1sibling6", "phobia1sibling7", "phobia1sibling8", "phobia1sibling9", "phobia1child1", "phobia1child2", "phobia1child3", "phobia1child4", "phobia1child5", "phobia1child6", "phobia1child7", "phobia1child8", "phobia1child9", "phobia10", "phobiaconfidenceself", "phobiaconfidenceparent1", "phobiaconfidenceparent2", "phobiaconfidencesibling1", "phobiaconfidencesibling2", "phobiaconfidencesibling3", "phobiaconfidencesibling4", "phobiaconfidencesibling5", "phobiaconfidencesibling6", "phobiaconfidencesibling7", "phobiaconfidencesibling8", "phobiaconfidencesibling9", "phobiaconfidencechild1", "phobiaconfidencechild2", "phobiaconfidencechild3", "phobiaconfidencechild4", "phobiaconfidencechild5", "phobiaconfidencechild6", "phobiaconfidencechild7", "phobiaconfidencechild8", "phobiaconfidencechild9", "socialanx1self", "socialanx1parent1", "socialanx1parent2", "socialanx1sibling1", "socialanx1sibling2", "socialanx1sibling3", "socialanx1sibling4", "socialanx1sibling5", "socialanx1sibling6", "socialanx1sibling7", "socialanx1sibling8", "socialanx1sibling9", "socialanx1child1", "socialanx1child2", "socialanx1child3", "socialanx1child4", "socialanx1child5", "socialanx1child6", "socialanx1child7", "socialanx1child8", "socialanx1child9", "socialanx10", "socialanxconfidenceself", "socialanxconfidenceparent1", "socialanxconfidenceparent2", "socialanxconfidencesibling1", "socialanxconfidencesibling2", "socialanxconfidencesibling3", "socialanxconfidencesibling4", "socialanxconfidencesibling5", "socialanxconfidencesibling6", "socialanxconfidencesibling7", "socialanxconfidencesibling8", "socialanxconfidencesibling9", "socialanxconfidencechild1", "socialanxconfidencechild2", "socialanxconfidencechild3", "socialanxconfidencechild4", "socialanxconfidencechild5", "socialanxconfidencechild6", "socialanxconfidencechild7", "socialanxconfidencechild8", "socialanxconfidencechild9", "sepanx1self", "sepanx1parent1", "sepanx1parent2", "sepanx1sibling1", "sepanx1sibling2", "sepanx1sibling3", "sepanx1sibling4", "sepanx1sibling5", "sepanx1sibling6", "sepanx1sibling7", "sepanx1sibling8", "sepanx1sibling9", "sepanx1child1", "sepanx1child2", "sepanx1child3", "sepanx1child4", "sepanx1child5", "sepanx1child6", "sepanx1child7", "sepanx1child8", "sepanx1child9", "sepanx10", "sepanxconfidenceself", "sepanxconfidenceparent1", "sepanxconfidenceparent2", "sepanxconfidencesibling1", "sepanxconfidencesibling2", "sepanxconfidencesibling3", "sepanxconfidencesibling4", "sepanxconfidencesibling5", "sepanxconfidencesibling6", "sepanxconfidencesibling7", "sepanxconfidencesibling8", "sepanxconfidencesibling9", "sepanxconfidencechild1", "sepanxconfidencechild2", "sepanxconfidencechild3", "sepanxconfidencechild4", "sepanxconfidencechild5", "sepanxconfidencechild6", "sepanxconfidencechild7", "sepanxconfidencechild8", "sepanxconfidencechild9", "gas1self", "gas1parent1", "gas1parent2", "gas1sibling1", "gas1sibling2", "gas1sibling3", "gas1sibling4", "gas1sibling5", "gas1sibling6", "gas1sibling7", "gas1sibling8", "gas1sibling9", "gas1child1", "gas1child2", "gas1child3", "gas1child4", "gas1child5", "gas1child6", "gas1child7", "gas1child8", "gas1child9", "gas10", "gasconfidenceself", "gasconfidenceparent1", "gasconfidenceparent2", "gasconfidencesibling1", "gasconfidencesibling2", "gasconfidencesibling3", "gasconfidencesibling4", "gasconfidencesibling5", "gasconfidencesibling6", "gasconfidencesibling7", "gasconfidencesibling8", "gasconfidencesibling9", "gasconfidencechild1", "gasconfidencechild2", "gasconfidencechild3", "gasconfidencechild4", "gasconfidencechild5", "gasconfidencechild6", "gasconfidencechild7", "gasconfidencechild8", "gasconfidencechild9", "sud1self", "sud1parent1", "sud1parent2", "sud1sibling1", "sud1sibling2", "sud1sibling3", "sud1sibling4", "sud1sibling5", "sud1sibling6", "sud1sibling7", "sud1sibling8", "sud1sibling9", "sud1child1", "sud1child2", "sud1child3", "sud1child4", "sud1child5", "sud1child6", "sud1child7", "sud1child8", "sud1child9", "sud10", "sudconfidenceself", "sudconfidenceparent1", "sudconfidenceparent2", "sudconfidencesibling1", "sudconfidencesibling2", "sudconfidencesibling3", "sudconfidencesibling4", "sudconfidencesibling5", "sudconfidencesibling6", "sudconfidencesibling7", "sudconfidencesibling8", "sudconfidencesibling9", "sudconfidencechild1", "sudconfidencechild2", "sudconfidencechild3", "sudconfidencechild4", "sudconfidencechild5", "sudconfidencechild6", "sudconfidencechild7", "sudconfidencechild8", "sudconfidencechild9", "ocd1self", "ocd1parent1", "ocd1parent2", "ocd1sibling1", "ocd1sibling2", "ocd1sibling3", "ocd1sibling4", "ocd1sibling5", "ocd1sibling6", "ocd1sibling7", "ocd1sibling8", "ocd1sibling9", "ocd1child1", "ocd1child2", "ocd1child3", "ocd1child4", "ocd1child5", "ocd1child6", "ocd1child7", "ocd1child8", "ocd1child9", "ocd10", "ocdconfidenceself", "ocdconfidenceparent1", "ocdconfidenceparent2", "ocdconfidencesibling1", "ocdconfidencesibling2", "ocdconfidencesibling3", "ocdconfidencesibling4", "ocdconfidencesibling5", "ocdconfidencesibling6", "ocdconfidencesibling7", "ocdconfidencesibling8", "ocdconfidencesibling9", "ocdconfidencechild1", "ocdconfidencechild2", "ocdconfidencechild3", "ocdconfidencechild4", "ocdconfidencechild5", "ocdconfidencechild6", "ocdconfidencechild7", "ocdconfidencechild8", "ocdconfidencechild9", "psy1self", "psy1parent1", "psy1parent2", "psy1sibling1", "psy1sibling2", "psy1sibling3", "psy1sibling4", "psy1sibling5", "psy1sibling6", "psy1sibling7", "psy1sibling8", "psy1sibling9", "psy1child1", "psy1child2", "psy1child3", "psy1child4", "psy1child5", "psy1child6", "psy1child7", "psy1child8", "psy1child9", "psy10", "psyconfidenceself", "psyconfidenceparent1", "psyconfidenceparent2", "psyconfidencesibling1", "psyconfidencesibling2", "psyconfidencesibling3", "psyconfidencesibling4", "psyconfidencesibling5", "psyconfidencesibling6", "psyconfidencesibling7", "psyconfidencesibling8", "psyconfidencesibling9", "psyconfidencechild1", "psyconfidencechild2", "psyconfidencechild3", "psyconfidencechild4", "psyconfidencechild5", "psyconfidencechild6", "psyconfidencechild7", "psyconfidencechild8", "psyconfidencechild9", "ed1self", "ed1parent1", "ed1parent2", "ed1sibling1", "ed1sibling2", "ed1sibling3", "ed1sibling4", "ed1sibling5", "ed1sibling6", "ed1sibling7", "ed1sibling8", "ed1sibling9", "ed1child1", "ed1child2", "ed1child3", "ed1child4", "ed1child5", "ed1child6", "ed1child7", "ed1child8", "ed1child9", "ed10", "edconfidenceself", "edconfidenceparent1", "edconfidenceparent2", "edconfidencesibling1", "edconfidencesibling2", "edconfidencesibling3", "edconfidencesibling4", "edconfidencesibling5", "edconfidencesibling6", "edconfidencesibling7", "edconfidencesibling8", "edconfidencesibling9", "edconfidencechild1", "edconfidencechild2", "edconfidencechild3", "edconfidencechild4", "edconfidencechild5", "edconfidencechild6", "edconfidencechild7", "edconfidencechild8", "edconfidencechild9", "fhsopentext", "ownpsychdisorder", "ownpsychdiagnmde", "ownpsychdiagnbipolar", "ownpsychdiagnocd", "ownpsychdiagnanx", "ownpsychdiagnpsy", "ownpsychdiagnsud", "ownpsychdiagned", "ownpsychdiagnidk", "ownpsychdiagnother", "ownpsychprevalentmde1", "ownpsychprevalentmde2", "ownpsychprevalentbipolar1", "ownpsychprevalentbipolar2", "ownpsychprevalentocd1", "ownpsychprevalentocd2", "ownpsychprevalentanx1", "ownpsychprevalentanx2", "ownpsychprevalentpsy1", "ownpsychprevalentpsy2", "ownpsychprevalentsud1", "ownpsychprevalentsud2", "ownpsychprevalented1", "ownpsychprevalented2", "ownpsychprevalentidk1", "ownpsychprevalentidk2", "ownpsychprevalentother1", "ownpsychprevalentother2"]
+    }
+  ],
+  "nested": [
+    {
+      "scale": "APS",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "subscale": "emotreactivtiy",
+              "items": ["aps002", "aps003", "aps004", "aps006", "aps008", "aps009", "aps010", "aps011", "aps012"]
+            },
+            {
+              "subscale": "traitanxiety",
+              "items": ["aps001", "aps005", "aps007"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "AQ",
+      "higher_order": [
+        {
+          "higher_order_subscale": "autism",
+          "subscales": [
+            {
+              "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "BISBAS",
+      "higher_order": [
+        {
+          "higher_order_subscale": "BAS",
+          "subscales": [
+            {
+              "subscale": "drive",
+              "items": ["bisbas003", "bisbas009", "bisbas012", "bisbas021"]
+            },
+            {
+              "subscale": "funseeking",
+              "items": ["bisbas005", "bisbas010", "bisbas015", "bisbas020"]
+            },
+            {
+              "subscale": "rewardresponsiveness",
+              "items": ["bisbas004", "bisbas007", "bisbas014", "bisbas018", "bisbas023"]
+            }
+          ]
+        },
+        {
+          "higher_order_subscale": "BIS",
+          "subscales": [
+            {
+              "subscale": "BIS",
+              "items": ["bisbas002", "bisbas008", "bisbas013", "bisbas016", "bisbas019", "bisbas022", "bisbas024"]
+            }
+          ]
+        },
+        {
+          "subscales": [
+            {
+              "subscale": "dummy",
+              "items": ["bisbas001", "bisbas006", "bisbas011", "bisbas017"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "CAPE",
+      "higher_order": [
+        {
+          "higher_order_subscale": "positivesymp",
+          "subscales": [
+            {
+              "subscale": "distress",
+              "items": ["capedistr002", "capedistr005", "capedistr006", "capedistr007", "capedistr010", "capedistr011", "capedistr013", "capedistr015", "capedistr017", "capedistr020", "capedistr022", "capedistr024", "capedistr026", "capedistr028", "capedistr030", "capedistr031", "capedistr033", "capedistr034", "capedistr041", "capedistr042"]
+            },
+            {
+              "subscale": "frequency",
+              "items": ["capefreq002", "capefreq005", "capefreq006", "capefreq007", "capefreq010", "capefreq011", "capefreq013", "capefreq015", "capefreq017", "capefreq020", "capefreq022", "capefreq024", "capefreq026", "capefreq028", "capefreq030", "capefreq031", "capefreq033", "capefreq034", "capefreq041", "capefreq042"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "CTQ",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "subscale": "emotionalabuse",
+              "items": ["ctq003", "ctq008", "ctq014", "ctq018", "ctq025"]
+            },
+            {
+              "subscale": "emotionalneglect",
+              "items": ["ctq005", "ctq007", "ctq013", "ctq019", "ctq028"]
+            },
+            {
+              "subscale": "minimization",
+              "items": ["ctq010", "ctq016", "ctq022"]
+            },
+            {
+              "subscale": "physicalabuse",
+              "items": ["ctq009", "ctq011", "ctq012", "ctq015", "ctq017"]
+            },
+            {
+              "subscale": "physicalneglect",
+              "items": ["ctq001", "ctq002", "ctq004", "ctq006", "ctq026"]
+            },
+            {
+              "subscale": "sexualabuse",
+              "items": ["ctq020", "ctq021", "ctq023", "ctq024", "ctq027"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "FHSfamilytree",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "items": ["relativesinfo", "parents001", "parents002", "parentsgender001", "parentsgender002", "parentscontact001", "parentscontact002", "siblings", "siblingsnames001", "siblingsnames002", "siblingsnames003", "siblingsnames004", "siblingsnames005", "siblingsnames006", "siblingsnames007", "siblingsnames008", "siblingsnames009", "siblingsgender001", "siblingsgender002", "siblingsgender003", "siblingsgender004", "siblingsgender005", "siblingsgender006", "siblingsgender007", "siblingsgender008", "siblingsgender009", "siblingscontact001", "siblingscontact002", "siblingscontact003", "siblingscontact004", "siblingscontact005", "siblingscontact006", "siblingscontact007", "siblingscontact008", "siblingscontact009", "children", "childrennames001", "childrennames002", "childrennames003", "childrennames004", "childrennames005", "childrennames006", "childrennames007", "childrennames008", "childrennames009", "childrengender001", "childrengender002", "childrengender003", "childrengender004", "childrengender005", "childrengender006", "childrengender007", "childrengender008", "childrengender009", "childrencontact001", "childrencontact002", "childrencontact003", "childrencontact004", "childrencontact005", "childrencontact006", "childrencontact007", "childrencontact008", "childrencontact009", "depression1self", "depression1parent1", "depression1parent2", "depression1sibling1", "depression1sibling2", "depression1sibling3", "depression1sibling4", "depression1sibling5", "depression1sibling6", "depression1sibling7", "depression1sibling8", "depression1sibling9", "depression1child1", "depression1child2", "depression1child3", "depression1child4", "depression1child5", "depression1child6", "depression1child7", "depression1child8", "depression1child9", "depression10", "depressionconfidenceself", "depressionconfidenceparent1", "depressionconfidenceparent2", "depressionconfidencesibling1", "depressionconfidencesibling2", "depressionconfidencesibling3", "depressionconfidencesibling4", "depressionconfidencesibling5", "depressionconfidencesibling6", "depressionconfidencesibling7", "depressionconfidencesibling8", "depressionconfidencesibling9", "depressionconfidencechild1", "depressionconfidencechild2", "depressionconfidencechild3", "depressionconfidencechild4", "depressionconfidencechild5", "depressionconfidencechild6", "depressionconfidencechild7", "depressionconfidencechild8", "depressionconfidencechild9", "mania1self", "mania1parent1", "mania1parent2", "mania1sibling1", "mania1sibling2", "mania1sibling3", "mania1sibling4", "mania1sibling5", "mania1sibling6", "mania1sibling7", "mania1sibling8", "mania1sibling9", "mania1child1", "mania1child2", "mania1child3", "mania1child4", "mania1child5", "mania1child6", "mania1child7", "mania1child8", "mania1child9", "mania10", "maniaconfidenceself", "maniaconfidenceparent1", "maniaconfidenceparent2", "maniaconfidencesibling1", "maniaconfidencesibling2", "maniaconfidencesibling3", "maniaconfidencesibling4", "maniaconfidencesibling5", "maniaconfidencesibling6", "maniaconfidencesibling7", "maniaconfidencesibling8", "maniaconfidencesibling9", "maniaconfidencechild1", "maniaconfidencechild2", "maniaconfidencechild3", "maniaconfidencechild4", "maniaconfidencechild5", "maniaconfidencechild6", "maniaconfidencechild7", "maniaconfidencechild8", "maniaconfidencechild9", "panic1self", "panic1parent1", "panic1parent2", "panic1sibling1", "panic1sibling2", "panic1sibling3", "panic1sibling4", "panic1sibling5", "panic1sibling6", "panic1sibling7", "panic1sibling8", "panic1sibling9", "panic1child1", "panic1child2", "panic1child3", "panic1child4", "panic1child5", "panic1child6", "panic1child7", "panic1child8", "panic1child9", "panic10", "panicconfidenceself", "panicconfidenceparent1", "panicconfidenceparent2", "panicconfidencesibling1", "panicconfidencesibling2", "panicconfidencesibling3", "panicconfidencesibling4", "panicconfidencesibling5", "panicconfidencesibling6", "panicconfidencesibling7", "panicconfidencesibling8", "panicconfidencesibling9", "panicconfidencechild1", "panicconfidencechild2", "panicconfidencechild3", "panicconfidencechild4", "panicconfidencechild5", "panicconfidencechild6", "panicconfidencechild7", "panicconfidencechild8", "panicconfidencechild9", "agora1self", "agora1parent1", "agora1parent2", "agora1sibling1", "agora1sibling2", "agora1sibling3", "agora1sibling4", "agora1sibling5", "agora1sibling6", "agora1sibling7", "agora1sibling8", "agora1sibling9", "agora1child1", "agora1child2", "agora1child3", "agora1child4", "agora1child5", "agora1child6", "agora1child7", "agora1child8", "agora1child9", "agora10", "agoraconfidenceself", "agoraconfidenceparent1", "agoraconfidenceparent2", "agoraconfidencesibling1", "agoraconfidencesibling2", "agoraconfidencesibling3", "agoraconfidencesibling4", "agoraconfidencesibling5", "agoraconfidencesibling6", "agoraconfidencesibling7", "agoraconfidencesibling8", "agoraconfidencesibling9", "agoraconfidencechild1", "agoraconfidencechild2", "agoraconfidencechild3", "agoraconfidencechild4", "agoraconfidencechild5", "agoraconfidencechild6", "agoraconfidencechild7", "agoraconfidencechild8", "agoraconfidencechild9", "phobia1self", "phobia1parent1", "phobia1parent2", "phobia1sibling1", "phobia1sibling2", "phobia1sibling3", "phobia1sibling4", "phobia1sibling5", "phobia1sibling6", "phobia1sibling7", "phobia1sibling8", "phobia1sibling9", "phobia1child1", "phobia1child2", "phobia1child3", "phobia1child4", "phobia1child5", "phobia1child6", "phobia1child7", "phobia1child8", "phobia1child9", "phobia10", "phobiaconfidenceself", "phobiaconfidenceparent1", "phobiaconfidenceparent2", "phobiaconfidencesibling1", "phobiaconfidencesibling2", "phobiaconfidencesibling3", "phobiaconfidencesibling4", "phobiaconfidencesibling5", "phobiaconfidencesibling6", "phobiaconfidencesibling7", "phobiaconfidencesibling8", "phobiaconfidencesibling9", "phobiaconfidencechild1", "phobiaconfidencechild2", "phobiaconfidencechild3", "phobiaconfidencechild4", "phobiaconfidencechild5", "phobiaconfidencechild6", "phobiaconfidencechild7", "phobiaconfidencechild8", "phobiaconfidencechild9", "socialanx1self", "socialanx1parent1", "socialanx1parent2", "socialanx1sibling1", "socialanx1sibling2", "socialanx1sibling3", "socialanx1sibling4", "socialanx1sibling5", "socialanx1sibling6", "socialanx1sibling7", "socialanx1sibling8", "socialanx1sibling9", "socialanx1child1", "socialanx1child2", "socialanx1child3", "socialanx1child4", "socialanx1child5", "socialanx1child6", "socialanx1child7", "socialanx1child8", "socialanx1child9", "socialanx10", "socialanxconfidenceself", "socialanxconfidenceparent1", "socialanxconfidenceparent2", "socialanxconfidencesibling1", "socialanxconfidencesibling2", "socialanxconfidencesibling3", "socialanxconfidencesibling4", "socialanxconfidencesibling5", "socialanxconfidencesibling6", "socialanxconfidencesibling7", "socialanxconfidencesibling8", "socialanxconfidencesibling9", "socialanxconfidencechild1", "socialanxconfidencechild2", "socialanxconfidencechild3", "socialanxconfidencechild4", "socialanxconfidencechild5", "socialanxconfidencechild6", "socialanxconfidencechild7", "socialanxconfidencechild8", "socialanxconfidencechild9", "sepanx1self", "sepanx1parent1", "sepanx1parent2", "sepanx1sibling1", "sepanx1sibling2", "sepanx1sibling3", "sepanx1sibling4", "sepanx1sibling5", "sepanx1sibling6", "sepanx1sibling7", "sepanx1sibling8", "sepanx1sibling9", "sepanx1child1", "sepanx1child2", "sepanx1child3", "sepanx1child4", "sepanx1child5", "sepanx1child6", "sepanx1child7", "sepanx1child8", "sepanx1child9", "sepanx10", "sepanxconfidenceself", "sepanxconfidenceparent1", "sepanxconfidenceparent2", "sepanxconfidencesibling1", "sepanxconfidencesibling2", "sepanxconfidencesibling3", "sepanxconfidencesibling4", "sepanxconfidencesibling5", "sepanxconfidencesibling6", "sepanxconfidencesibling7", "sepanxconfidencesibling8", "sepanxconfidencesibling9", "sepanxconfidencechild1", "sepanxconfidencechild2", "sepanxconfidencechild3", "sepanxconfidencechild4", "sepanxconfidencechild5", "sepanxconfidencechild6", "sepanxconfidencechild7", "sepanxconfidencechild8", "sepanxconfidencechild9", "gas1self", "gas1parent1", "gas1parent2", "gas1sibling1", "gas1sibling2", "gas1sibling3", "gas1sibling4", "gas1sibling5", "gas1sibling6", "gas1sibling7", "gas1sibling8", "gas1sibling9", "gas1child1", "gas1child2", "gas1child3", "gas1child4", "gas1child5", "gas1child6", "gas1child7", "gas1child8", "gas1child9", "gas10", "gasconfidenceself", "gasconfidenceparent1", "gasconfidenceparent2", "gasconfidencesibling1", "gasconfidencesibling2", "gasconfidencesibling3", "gasconfidencesibling4", "gasconfidencesibling5", "gasconfidencesibling6", "gasconfidencesibling7", "gasconfidencesibling8", "gasconfidencesibling9", "gasconfidencechild1", "gasconfidencechild2", "gasconfidencechild3", "gasconfidencechild4", "gasconfidencechild5", "gasconfidencechild6", "gasconfidencechild7", "gasconfidencechild8", "gasconfidencechild9", "sud1self", "sud1parent1", "sud1parent2", "sud1sibling1", "sud1sibling2", "sud1sibling3", "sud1sibling4", "sud1sibling5", "sud1sibling6", "sud1sibling7", "sud1sibling8", "sud1sibling9", "sud1child1", "sud1child2", "sud1child3", "sud1child4", "sud1child5", "sud1child6", "sud1child7", "sud1child8", "sud1child9", "sud10", "sudconfidenceself", "sudconfidenceparent1", "sudconfidenceparent2", "sudconfidencesibling1", "sudconfidencesibling2", "sudconfidencesibling3", "sudconfidencesibling4", "sudconfidencesibling5", "sudconfidencesibling6", "sudconfidencesibling7", "sudconfidencesibling8", "sudconfidencesibling9", "sudconfidencechild1", "sudconfidencechild2", "sudconfidencechild3", "sudconfidencechild4", "sudconfidencechild5", "sudconfidencechild6", "sudconfidencechild7", "sudconfidencechild8", "sudconfidencechild9", "ocd1self", "ocd1parent1", "ocd1parent2", "ocd1sibling1", "ocd1sibling2", "ocd1sibling3", "ocd1sibling4", "ocd1sibling5", "ocd1sibling6", "ocd1sibling7", "ocd1sibling8", "ocd1sibling9", "ocd1child1", "ocd1child2", "ocd1child3", "ocd1child4", "ocd1child5", "ocd1child6", "ocd1child7", "ocd1child8", "ocd1child9", "ocd10", "ocdconfidenceself", "ocdconfidenceparent1", "ocdconfidenceparent2", "ocdconfidencesibling1", "ocdconfidencesibling2", "ocdconfidencesibling3", "ocdconfidencesibling4", "ocdconfidencesibling5", "ocdconfidencesibling6", "ocdconfidencesibling7", "ocdconfidencesibling8", "ocdconfidencesibling9", "ocdconfidencechild1", "ocdconfidencechild2", "ocdconfidencechild3", "ocdconfidencechild4", "ocdconfidencechild5", "ocdconfidencechild6", "ocdconfidencechild7", "ocdconfidencechild8", "ocdconfidencechild9", "psy1self", "psy1parent1", "psy1parent2", "psy1sibling1", "psy1sibling2", "psy1sibling3", "psy1sibling4", "psy1sibling5", "psy1sibling6", "psy1sibling7", "psy1sibling8", "psy1sibling9", "psy1child1", "psy1child2", "psy1child3", "psy1child4", "psy1child5", "psy1child6", "psy1child7", "psy1child8", "psy1child9", "psy10", "psyconfidenceself", "psyconfidenceparent1", "psyconfidenceparent2", "psyconfidencesibling1", "psyconfidencesibling2", "psyconfidencesibling3", "psyconfidencesibling4", "psyconfidencesibling5", "psyconfidencesibling6", "psyconfidencesibling7", "psyconfidencesibling8", "psyconfidencesibling9", "psyconfidencechild1", "psyconfidencechild2", "psyconfidencechild3", "psyconfidencechild4", "psyconfidencechild5", "psyconfidencechild6", "psyconfidencechild7", "psyconfidencechild8", "psyconfidencechild9", "ed1self", "ed1parent1", "ed1parent2", "ed1sibling1", "ed1sibling2", "ed1sibling3", "ed1sibling4", "ed1sibling5", "ed1sibling6", "ed1sibling7", "ed1sibling8", "ed1sibling9", "ed1child1", "ed1child2", "ed1child3", "ed1child4", "ed1child5", "ed1child6", "ed1child7", "ed1child8", "ed1child9", "ed10", "edconfidenceself", "edconfidenceparent1", "edconfidenceparent2", "edconfidencesibling1", "edconfidencesibling2", "edconfidencesibling3", "edconfidencesibling4", "edconfidencesibling5", "edconfidencesibling6", "edconfidencesibling7", "edconfidencesibling8", "edconfidencesibling9", "edconfidencechild1", "edconfidencechild2", "edconfidencechild3", "edconfidencechild4", "edconfidencechild5", "edconfidencechild6", "edconfidencechild7", "edconfidencechild8", "edconfidencechild9", "fhsopentext", "ownpsychdisorder", "ownpsychdiagnmde", "ownpsychdiagnbipolar", "ownpsychdiagnocd", "ownpsychdiagnanx", "ownpsychdiagnpsy", "ownpsychdiagnsud", "ownpsychdiagned", "ownpsychdiagnidk", "ownpsychdiagnother", "ownpsychprevalentmde1", "ownpsychprevalentmde2", "ownpsychprevalentbipolar1", "ownpsychprevalentbipolar2", "ownpsychprevalentocd1", "ownpsychprevalentocd2", "ownpsychprevalentanx1", "ownpsychprevalentanx2", "ownpsychprevalentpsy1", "ownpsychprevalentpsy2", "ownpsychprevalentsud1", "ownpsychprevalentsud2", "ownpsychprevalented1", "ownpsychprevalented2", "ownpsychprevalentidk1", "ownpsychprevalentidk2", "ownpsychprevalentother1", "ownpsychprevalentother2"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "IDAS",
+      "higher_order": [
+        {
+          "higher_order_subscale": "distress",
+          "subscales": [
+            {
+              "subscale": "appetitegain",
+              "items": ["idas019", "idas024", "idas062"]
+            },
+            {
+              "subscale": "appetiteloss",
+              "items": ["idas001", "idas026", "idas059"]
+            },
+            {
+              "subscale": "dysphoria",
+              "items": ["idas002", "idas005", "idas008", "idas009", "idas021", "idas031", "idas039", "idas047", "idas056", "idas060"]
+            },
+            {
+              "subscale": "illtemper",
+              "items": ["idas012", "idas035", "idas043", "idas061"]
+            },
+            {
+              "subscale": "insomnia",
+              "items": ["idas004", "idas011", "idas017", "idas025", "idas036", "idas050"]
+            },
+            {
+              "subscale": "lassitude",
+              "items": ["idas006", "idas029", "idas030", "idas042", "idas053", "idas054"]
+            },
+            {
+              "subscale": "mania",
+              "items": ["idas066", "idas070", "idas076", "idas082", "idas086"]
+            },
+            {
+              "subscale": "panic",
+              "items": ["idas007", "idas016", "idas032", "idas038", "idas044", "idas048", "idas055", "idas057"]
+            },
+            {
+              "subscale": "socialanxiety",
+              "items": ["idas015", "idas018", "idas020", "idas040", "idas046", "idas098"]
+            },
+            {
+              "subscale": "suicidality",
+              "items": ["idas013", "idas022", "idas033", "idas037", "idas045", "idas051"]
+            },
+            {
+              "subscale": "traumaticintrusions",
+              "items": ["idas014", "idas028", "idas034", "idas041"]
+            }
+          ]
+        },
+        {
+          "higher_order_subscale": "obsession_fear",
+          "subscales": [
+            {
+              "subscale": "checking",
+              "items": ["idas067", "idas074", "idas080"]
+            },
+            {
+              "subscale": "claustrophobia",
+              "items": ["idas073", "idas079", "idas083", "idas089", "idas093"]
+            },
+            {
+              "subscale": "cleaning",
+              "items": ["idas065", "idas069", "idas075", "idas085", "idas090", "idas095", "idas097"]
+            },
+            {
+              "subscale": "ordering",
+              "items": ["idas064", "idas068", "idas081", "idas084", "idas094"]
+            },
+            {
+              "subscale": "traumaticavoidance",
+              "items": ["idas072", "idas078", "idas088", "idas092"]
+            }
+          ]
+        },
+        {
+          "higher_order_subscale": "positivemood",
+          "subscales": [
+            {
+              "subscale": "euphoria",
+              "items": ["idas071", "idas077", "idas087", "idas091", "idas096"]
+            },
+            {
+              "subscale": "wellbeing",
+              "items": ["idas003", "idas010", "idas023", "idas027", "idas049", "idas052", "idas058", "idas063"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "IUS",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "subscale": "uncertainavoid",
+              "items": ["ius008", "ius010", "ius011", "ius019", "ius021"]
+            },
+            {
+              "subscale": "uncertaininability",
+              "items": ["ius001", "ius009", "ius012", "ius013", "ius014", "ius015", "ius020", "ius022", "ius025"]
+            },
+            {
+              "subscale": "uncertainstress",
+              "items": ["ius002", "ius003", "ius004", "ius005", "ius006", "ius007", "ius017", "ius024", "ius026"]
+            },
+            {
+              "subscale": "uncertainunfair",
+              "items": ["ius016", "ius018", "ius023", "ius027"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "MAP-SR",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "items": ["map1", "map2", "map3", "map4", "map5", "map6", "mapa2007", "mapa2008", "mapa2009", "mapa3motivation010", "mapa3motivation012", "mapa3motivation014", "mapa3effort011", "mapa3effort013", "mapa3effort015"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "SUQ",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "subscale": "Alcohol",
+              "items": ["alk1", "alk2", "alk3"]
+            },
+            {
+              "subscale": "Cannabis",
+              "items": ["cann1", "cann2", "cann3"]
+            },
+            {
+              "subscale": "Hallucinogens",
+              "items": ["hal1", "hal2", "hal3"]
+            },
+            {
+              "subscale": "Inhalants",
+              "items": ["inh1", "inh2", "inh3"]
+            },
+            {
+              "subscale": "Medication",
+              "items": ["med1", "med2", "med3"]
+            },
+            {
+              "subscale": "Opioids",
+              "items": ["opi1", "opi2", "opi3"]
+            },
+            {
+              "subscale": "Other",
+              "items": ["and1", "and2", "and3"]
+            },
+            {
+              "subscale": "Stimulants",
+              "items": ["stim1", "stim2", "stim3"]
+            },
+            {
+              "subscale": "Tobacco",
+              "items": ["tab1", "tab2", "tab3"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "TICS",
+      "higher_order": [
+        {
+          "subscales": [
+            {
+              "items": ["tics025", "tics029", "tics037", "tics040", "tics045", "tics046", "tics054", "tics055", "tics057"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
