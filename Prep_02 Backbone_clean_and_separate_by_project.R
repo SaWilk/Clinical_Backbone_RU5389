@@ -720,51 +720,74 @@ write_p9_pilots(pilot_quest_adults, "adults", "questionnaires", quest_info)
 write_p9_pilots(pilot_psytool_adults, "adults", "experiment_data", cogtest_info)
 
 
-path_components     <- unlist(strsplit(variable_output_paths$adults[1], .Platform$file.sep))
-path_length         <- length(path_components)
-all_path_components <- unlist(strsplit(variable_output_paths$adults, .Platform$file.sep))
+# Build logger dest map robustly from the file paths we just wrote
+build_dest_dirs <- function(paths_vec) {
+  # Flatten + drop empties
+  paths_vec <- as.character(unlist(paths_vec, use.names = FALSE))
+  paths_vec <- paths_vec[nzchar(paths_vec)]
+  if (!length(paths_vec)) stop("No output paths to derive per-project destinations from.")
+  
+  find_backbone_root <- function(p) {
+    p <- normalizePath(p, winslash = "/", mustWork = FALSE)
+    if (!nzchar(p)) return(NA_character_)
+    # if it's a file, start at its directory
+    cur <- if (file.exists(p) && !dir.exists(p)) dirname(p) else p
+    # climb until we hit X_backbone
+    for (i in 1:10) {
+      base <- basename(cur)
+      if (grepl("^[0-9]+_backbone$", base)) return(cur)
+      parent <- dirname(cur)
+      if (identical(parent, cur)) break
+      cur <- parent
+    }
+    NA_character_
+  }
+  
+  roots <- vapply(paths_vec, find_backbone_root, character(1))
+  roots <- unique(roots[!is.na(roots)])
+  if (!length(roots)) stop("No per-project folders (<digits>_backbone) found among the given paths.")
+  
+  proj_keys <- sub("^([0-9]+).*", "\\1", basename(roots))
+  stats::setNames(roots, proj_keys)
+}
 
-# given: all_path_components (character vector), path_length (integer)
-n <- floor(length(all_path_components) / path_length)
-stopifnot(n > 0)
 
-# reshape components into rows of length `path_length`
-m <- matrix(all_path_components[seq_len(n * path_length)], nrow = n, byrow = TRUE)
+# Use adults (any sample works; they all produce the same project set)
+dest_dirs <- build_dest_dirs(variable_output_paths$adults)
 
-# everything except the last element of each row
-proj_folders <- m[, 1:(path_length - 1), drop = FALSE]
-
-# first character of the (path_length-1)-th element in each row
-proj_numbers <- substr(m[, path_length - 1], 1, 1)
-
-# 1) Collapse each row of components into a full folder path
-project_folder <- apply(proj_folders, 1, function(parts) do.call(file.path, as.list(parts)))
-
-# 2) Make sure the first-digit keys are character
-proj_keys <- as.character(proj_numbers)
-
-# 3) Build the named character vector for logger$split()
-dest_dirs <- stats::setNames(project_folder, proj_keys)
-
-# Step 4: remove existing .log files if they exist
+# (Optional) clear old .log files in those project folders
 for (dir in dest_dirs) {
   if (dir.exists(dir)) {
     log_files <- list.files(dir, pattern = "\\.log$", full.names = TRUE)
-    if (length(log_files) > 0) {
+    if (length(log_files)) {
       message("Removing existing log files in: ", dir)
       file.remove(log_files)
     }
   }
 }
 
+# Split the main log into the per-project folders
 logger$split(dest_dirs)
+
+# --- REPLACE up to here --------------------------------------------------------
+
 
 # 4️⃣ Close when done
 logger$close()
 
 ## Get the Experimental Data Sets Associated with the project ------------------
 
-copy_psytool_files(cogtest_out_path = out_path, meta_env_name = "cogtest_info")
+# copy TXT files for all per-project cogtests AND mirror into all_projects_backbone
+log_copy <- copy_psytool_files(
+  env_objects       = ls(pattern = "^data_.*_p_[0-9]+_cogtest$"),
+  cogtest_out_path  = out_path,          # "01_project_data"
+  meta_env_name     = "cogtest_info",
+  test_cols         = NULL,              # let it auto-detect
+  allowed_projects  = as.character(2:9),
+  middle_subdir     = NULL,
+  purge_old_dated   = TRUE,              # delete old *_cogtest_data before copying
+  write_all_projects= TRUE               # also write ALL_<date>_*_cogtest_data
+)
 
 # Expose the P9 adults pilot subset under the name copy_psytool_files() expects
 if (exists("pilot_psytool_adults") && NROW(pilot_psytool_adults)) {

@@ -62,8 +62,6 @@ setup_logging <- function(log_path = "logs/all_action_points.log",
                           append = FALSE,
                           with_timestamp = TRUE,
                           enforce_code = TRUE) {
-  
-  ## internal logger factory
   create_logger <- function(log_path,
                             append = FALSE,
                             with_timestamp = TRUE,
@@ -77,8 +75,7 @@ setup_logging <- function(log_path = "logs/all_action_points.log",
       }
       ts <- if (with_timestamp) paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ") else ""
       line <- paste0(ts, text)
-      writeLines(line, con = con)
-      flush(con)
+      writeLines(line, con = con); flush(con)
       invisible(line)
     }
     
@@ -86,9 +83,12 @@ setup_logging <- function(log_path = "logs/all_action_points.log",
                                    pattern = "\\b\\d{5}\\b",
                                    file_namer = function(d) sprintf("sublog_%s.log", d),
                                    overwrite = TRUE) {
+      # --- NEW: accept named character vectors gracefully
       if (is.null(names(dest_map)) || any(!names(dest_map) %in% as.character(0:9))) {
         stop("dest_map must be a named vector/list with names '0'..'9'")
       }
+      if (!is.list(dest_map)) dest_map <- as.list(dest_map)  # <-- key fix
+      
       if (!file.exists(log_path)) stop("Log file not found: ", log_path)
       
       lines <- readLines(log_path, warn = FALSE)
@@ -129,12 +129,6 @@ setup_logging <- function(log_path = "logs/all_action_points.log",
     )
   }
   
-  ## return created logger
   create_logger(log_path, append, with_timestamp, enforce_code)
 }
 
-# ✅ Usage:
-logger <- setup_logging()
-
-logger$write("01234 Action started")
-logger$close()

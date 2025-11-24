@@ -11,6 +11,8 @@ write_project_slices <- function(
   }
   
   collected_dirs <- character(0)
+  
+  # ---- per-project files ------------------------------------------------------
   for (i in seq_along(prep$split_list)) {
     info <- prep$split_list[[i]]
     d <- info$df
@@ -24,13 +26,23 @@ write_project_slices <- function(
     collected_dirs <- c(collected_dirs, info$pid_dir)
   }
   
-  # Composite write (skip for pilot adults per your rule)
+  # ---- composite (ALL) cleanup + write ---------------------------------------
+  # skip for pilot adults per your rule
   if (!(isTRUE(prep$pilot_mode) && identical(prep$sample_name, "adults"))) {
     comp_df <- if (!is.null(prep$composite_var) && exists(prep$composite_var, envir = .GlobalEnv))
       get(prep$composite_var, envir = .GlobalEnv) else NULL
     if (!is.null(comp_df)) {
       all_projects_dir <- file.path(prep$base_dir, "all_projects_backbone", prep$subfolder_main)
       .ensure_dir(all_projects_dir, dry_run)
+      
+      # NEW: delete old composite xlsx files for this (sample, suffix)
+      # Example names we generate: ALL_<date>[_PILOT]?_<sample>_<suffix>.xlsx
+      if (!dry_run) {
+        pat <- sprintf("^ALL_.*_%s_%s\\.xlsx$", prep$sample_name, prep$file_suffix)
+        olds <- list.files(all_projects_dir, pattern = pat, full.names = TRUE, ignore.case = TRUE)
+        if (length(olds)) file.remove(olds)
+      }
+      
       comp_base <- paste(c("ALL", prep$date_str, if (prep$pilot_mode) "PILOT" else NULL,
                            prep$sample_name, prep$file_suffix), collapse = "_")
       if (!dry_run) {

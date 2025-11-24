@@ -20,6 +20,9 @@
 # Performs consistency checks, fixes known entry errors, applies mappings,
 # logs “XXXXX” fallbacks, and exports cleaned CSVs for analysis.
 #
+# Also writes UNMAPPED-REMID warnings to the shared action log
+# (logs/all_action_points.log), so the first script can later split them
+# into project-specific log files.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # clean up R environment (safe in interactive sessions)
@@ -55,9 +58,55 @@ if (is.null(script_dir)) {
 in_path      <- file.path(script_dir, "raw_data")
 info_path    <- file.path(script_dir, "private_information")
 
-# optional log dir for Project 8 special-case notes
-log_dir <- file.path(script_dir, "01_project_data", "logs")
-if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+# === Shared logging (same as first script) ====================================
+# We append to logs/all_action_points.log (root). The first script later
+# removes *.log in project folders (NOT this file) and then splits this root log.
+log_root_dir <- file.path(script_dir, "logs")
+if (!dir.exists(log_root_dir)) dir.create(log_root_dir, recursive = TRUE, showWarnings = FALSE)
+shared_log_path <- file.path(log_root_dir, "all_action_points.log")
+
+# Try to use the same logger implementation as the first script.
+# Fallback to simple line-append if the function file isn't available.
+functions_dir <- file.path(script_dir, "functions")
+logger <- NULL
+try({
+  if (file.exists(file.path(functions_dir, "setup_logging.R"))) {
+    source(file.path(functions_dir, "setup_logging.R"))
+    logger <- setup_logging(shared_log_path)
+  }
+}, silent = TRUE)
+
+# Minimal fallback logger if setup_logging.R not available ---------------------
+.log_line <- function(text) {
+  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  line <- paste0("[", ts, "] ", text)
+  cat(line, "\n", file = shared_log_path, append = TRUE)
+}
+
+log_warn_unmapped <- function(project, sample, remid_raw, remid_canon, dataset_name, row_index, note = NULL) {
+  msg <- sprintf(
+    "UNMAPPED_REMID | project=%s | sample=%s | dataset=%s | row=%s | remid='%s' | canon='%s'%s",
+    as.character(project %||% ""), as.character(sample %||% ""), as.character(dataset_name %||% ""),
+    as.character(row_index %||% ""), as.character(remid_raw %||% ""), as.character(remid_canon %||% ""),
+    if (!is.null(note) && nzchar(note)) paste0(" | note=", note) else ""
+  )
+  if (!is.null(logger) && is.list(logger) && !is.null(logger$log)) {
+    # Best-effort call into your logger. Signature may differ, so we keep the message consolidated.
+    # Many implementations accept: logger$log(level, project, sample, data_type, message)
+    try(logger$log(level = "WARN", project = as.character(project %||% ""),
+                   sample = as.character(sample %||% ""), data_type = "translate_remids", message = msg),
+        silent = TRUE)
+  } else {
+    .log_line(msg)
+  }
+}
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
+
+# ===== (kept) project8/9 special CSV log for "XXXXX" fallbacks ================
+# (This stays where it was; it’s an additional, more detailed CSV log.)
+p8p9_csv_log_dir <- file.path(script_dir, "01_project_data", "logs")
+if (!dir.exists(p8p9_csv_log_dir)) dir.create(p8p9_csv_log_dir, recursive = TRUE, showWarnings = FALSE)
 
 file_children_parents <- "results-survey798916.csv"
 file_adults           <- "results-survey564757.csv"
@@ -89,6 +138,32 @@ require_cols <- function(df, cols, nm) {
     stop(sprintf("[%s] Missing required columns: %s", nm, paste(missing, collapse = ", ")))
   }
   invisible(TRUE)
+}
+
+# Detect a project column if present (robust; mirrors style used elsewhere) ----
+detect_project_col <- function(df) {
+  cand <- c("project", "Projekt...Project", "Projekt.", "Projekt", "projekt", "p", "proj", "Proj")
+  idx <- match(tolower(cand), tolower(names(df)))
+  idx <- idx[!is.na(idx)]
+  if (length(idx)) names(df)[idx[1]] else NULL
+}
+
+# Extract a best-effort project value for a given row --------------------------
+# If no explicit project column exists, returns NA (still logs; split later may not attach).
+get_project_value <- function(df, row_idx) {
+  pc <- detect_project_col(df)
+  if (is.null(pc)) return(NA)
+  val <- df[[pc]][row_idx]
+  if (is.null(val) || (length(val) == 1 && is.na(val))) return(NA)
+  # Try to keep a simple "first-digit" or cleaned scalar
+  v <- as.character(val)
+  v <- trimws(v)
+  if (grepl("^[0-9]+$", v)) return(v)
+  # Common variants like "Project 9", "9.", "P9"
+  if (grepl("([0-9]+)", v)) {
+    return(sub(".*?([0-9]+).*", "\\1", v))
+  }
+  v
 }
 
 # load data --------------------------------------------------------------------
@@ -126,7 +201,6 @@ map_ids <- dplyr::bind_rows(map_p8, map_p9) |>
 
 # fix known data-entry errors --------------------------------------------------
 # 1) Extend mapping with special cases (all map to vpid 99999)
-#    (Doc-only clarification per Point 15; logic intentionally unchanged.)
 special_map <- data.frame(
   Participant_ID = rep("99999", 8),
   Remote_ID      = c("99", "999", "9999", "99999", "999999", "9999999", "R70999", "10"),
@@ -203,9 +277,9 @@ flag_and_report_mismatches <- function(df, dataset_name) {
   eligible
 }
 
-
-# Unmapped check (Point 5 + canonical compare) ---------------------------------
-find_unmapped <- function(df, remote_ids_canon, eligible_rows) {
+# Unmapped check (returns rows + values; also logs into shared log) ------------
+# (Point 5 + canonical compare, extended to gather indices & project/sample)
+find_unmapped_rows <- function(df, remote_ids_canon, eligible_rows, dataset_name, sample_label) {
   remid_chr <- as.character(df$remid)
   check_chr <- as.character(df$remidcheck)
   
@@ -213,19 +287,47 @@ find_unmapped <- function(df, remote_ids_canon, eligible_rows) {
   key   <- ifelse(xmask & !is_blank(check_chr), check_chr, remid_chr)
   
   use_mask   <- eligible_rows & !is_blank(key)
-  candidates <- trimws(key[use_mask])
+  candidates <- trimws(key)
   
   # validate AFTER stripping all r/R: require digits-only canonical form
-  canon <- canon_remote(candidates)
-  keep  <- grepl("^[0-9]+$", canon)
-  candidates <- candidates[keep]
-  canon      <- canon[keep]
+  canon_all  <- canon_remote(candidates)
+  keep       <- grepl("^[0-9]+$", canon_all)
   
-  unmapped_canon <- setdiff(canon, as.character(remote_ids_canon))
-  # return ORIGINAL strings whose canonical form is unmapped
-  candidates[canon %in% unmapped_canon]
+  # row indices that are candidates
+  idx_all <- which(use_mask & keep)
+  
+  # which canonical forms are NOT in the mapping
+  canon_kept <- canon_all[idx_all]
+  unmapped_mask <- !canon_kept %in% as.character(remote_ids_canon)
+  idx_unmapped  <- idx_all[unmapped_mask]
+  
+  if (length(idx_unmapped) > 0) {
+    for (i in idx_unmapped) {
+      proj <- get_project_value(df, i)
+      log_warn_unmapped(
+        project    = proj,
+        sample     = sample_label,
+        remid_raw  = candidates[i],
+        remid_canon= canon_remote(candidates[i]),
+        dataset_name = dataset_name,
+        row_index  = i,
+        note       = "No mapping for canonical Remote_ID (digits only)."
+      )
+    }
+  }
+  
+  # Return a data.frame with details for error reporting if needed
+  if (length(idx_unmapped) == 0) {
+    return(data.frame(row_index=integer(0), entered=character(0), canonical=character(0), project=character(0)))
+  }
+  data.frame(
+    row_index = idx_unmapped,
+    entered   = candidates[idx_unmapped],
+    canonical = canon_remote(candidates[idx_unmapped]),
+    project   = vapply(idx_unmapped, function(i) as.character(get_project_value(df, i) %||% ""), character(1)),
+    stringsAsFactors = FALSE
+  )
 }
-
 
 # translate + log function (canonical join + richer logs) ----------------------
 translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
@@ -252,7 +354,7 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   df$remid[can_translate]      <- NA
   df$remidcheck[can_translate] <- NA
   
-  # log for 'XXXXX' fallbacks
+  # log for 'XXXXX' fallbacks (kept: CSV in 01_project_data/logs)
   x_rows <- which(xmask & eligible_rows)
   log_df <- NULL
   if (length(x_rows) > 0) {
@@ -278,13 +380,17 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
 # PROCESS: children/parents ----------------------------------------------------
 eligible_cp <- flag_and_report_mismatches(dat_children_parents, "children/parents")
 
-unmapped_children <- find_unmapped(dat_children_parents, map_ids$Remote_ID_canon, eligible_cp)
-if (length(unmapped_children) > 0) {
+unmapped_rows_children <- find_unmapped_rows(
+  dat_children_parents, map_ids$Remote_ID_canon, eligible_cp,
+  dataset_name = "children/parents", sample_label = "children_parents"
+)
+
+if (nrow(unmapped_rows_children) > 0) {
   if (interactive()) {
-    cat("\n⚠️ [children/parents] remids without mapping (n=", length(unmapped_children), "):\n", sep = "")
-    print(unmapped_children)
+    cat("\n⚠️ [children/parents] remids without mapping (n=", nrow(unmapped_rows_children), "):\n", sep = "")
+    print(unmapped_rows_children)
   } else {
-    message(sprintf("[children/parents] remids without mapping (n=%d).", length(unmapped_children)))
+    message(sprintf("[children/parents] remids without mapping (n=%d).", nrow(unmapped_rows_children)))
   }
   stop("⚠️ Unmapped remids detected (accepts digits or optional leading 'R'; uses remidcheck when 'XXXXX'). Please update the Excel mappings and re-run.")
 }
@@ -296,13 +402,17 @@ log_cp <- res_cp$log
 # PROCESS: adults --------------------------------------------------------------
 eligible_ad <- flag_and_report_mismatches(dat_adults, "adults")
 
-unmapped_adults <- find_unmapped(dat_adults, map_ids$Remote_ID_canon, eligible_ad)
-if (length(unmapped_adults) > 0) {
+unmapped_rows_adults <- find_unmapped_rows(
+  dat_adults, map_ids$Remote_ID_canon, eligible_ad,
+  dataset_name = "adults", sample_label = "adults"
+)
+
+if (nrow(unmapped_rows_adults) > 0) {
   if (interactive()) {
-    cat("\n⚠️ [adults] remids without mapping (n=", length(unmapped_adults), "):\n", sep = "")
-    print(unmapped_adults)
+    cat("\n⚠️ [adults] remids without mapping (n=", nrow(unmapped_rows_adults), "):\n", sep = "")
+    print(unmapped_rows_adults)
   } else {
-    message(sprintf("[adults] remids without mapping (n=%d).", length(unmapped_adults)))
+    message(sprintf("[adults] remids without mapping (n=%d).", nrow(unmapped_rows_adults)))
   }
   stop("⚠️ Unmapped remids detected (accepts digits or optional leading 'R'; uses remidcheck when 'XXXXX'). Please update the Excel mappings and re-run.")
 }
@@ -311,11 +421,11 @@ res_ad <- translate_and_log(dat_adults, map_ids, eligible_ad, "adults")
 dat_adults_out <- res_ad$df
 log_ad <- res_ad$log
 
-# Write Project 8/9 log for 'XXXXX' fallbacks ----------------------------------
+# Write Project 8/9 log for 'XXXXX' fallbacks (CSV; unchanged behavior) --------
 log_all <- dplyr::bind_rows(log_cp, log_ad)
 if (!is.null(log_all) && nrow(log_all) > 0) {
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  log_file <- file.path(log_dir, paste0("project8_xxxxx_fallback_log_", ts, ".csv"))
+  log_file <- file.path(p8p9_csv_log_dir, paste0("project8_xxxxx_fallback_log_", ts, ".csv"))
   write.table(log_all, file = log_file, sep = ";", dec = ".", row.names = FALSE, qmethod = "double")
   if (interactive()) {
     cat("\n⚠️ Project 8/9 'XXXXX' fallback log written to:\n", log_file, "\n")
@@ -332,6 +442,9 @@ write.table(dat_children_parents_out,
 write.table(dat_adults_out,
             file = file.path(in_path, out_adults),
             sep = ";", dec = ".", row.names = FALSE, qmethod = "double")
+
+# Close logger if available (harmless otherwise) -------------------------------
+try({ if (!is.null(logger) && !is.null(logger$close)) logger$close() }, silent = TRUE)
 
 if (interactive()) {
   cat("\n✅ Saved translated data to:\n",
