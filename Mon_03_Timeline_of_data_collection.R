@@ -1,458 +1,323 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Monitoring 2 — Visualize Backbone Progress
+# Monitoring 1 — Extract Sample Information (Patched: Option B for submitdates)
 # Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com)
-# Updated: 2025-10-29
-#
-# RUN MON_01 first!
+# Created: 2025-10-29
+# Patch date: 2025-11-25
 #
 # What this does
-#  - Reads the 3-sheet ID completeness report create by mon_01:
-#       1) complete datasets
-#       2) datasets missing questionnaire data  (=> cognitive present)
-#       3) datasets missing cognitive test data (=> questionnaires present)
-#  - Produces a progress plot (PNG) and a summary XLSX.
+# - Reads the 3-sheet ID completeness report create by mon_01:
+#   1) complete datasets
+#   2) datasets missing questionnaire data (=> cognitive present)
+#   3) datasets missing cognitive test data (=> questionnaires present)
+# - Produces a progress plot (PNG) and a summary XLSX.
 #
+# Patch summary (Option B):
+# - When attaching submit dates to IDs, pick the LAST non-NA value among duplicates
+#   for the same ID within a (sample|project) key. This prevents an early NA (e.g.,
+#   from cogtest) from masking a valid questionnaire date.
+# - Slightly more robust submitdate-sheet reading (tries "submitdates", then
+#   "submitdate", then sheet index 2).
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-if (requireNamespace("here", quietly = TRUE)) {
-  # one-time in this file: declare where this script lives (relative to project root)
-  here::i_am("Mon_02 Backbone progress visualization.R")
-  ROOT <- here::here()
-} else if (requireNamespace("rprojroot", quietly = TRUE)) {
-  ROOT <- rprojroot::find_root(
-    rprojroot::has_file(".Rproj") | rprojroot::has_file(".here") | rprojroot::has_dir(".git")
-  )
-} else {
-  ROOT <- getwd()
-}
+# Install/load packages --------------------------------------------------------
+suppressPackageStartupMessages({
+  if (!require("dplyr")) { install.packages("dplyr") }; library(dplyr)
+  if (!require("tidyr")) { install.packages("tidyr") }; library(tidyr)
+  if (!require("readxl")) { install.packages("readxl") }; library(readxl)
+  if (!require("openxlsx")) { install.packages("openxlsx") }; library(openxlsx)
+  if (!require("purrr")) { install.packages("purrr") }; library(purrr)
+  if (!require("stringr")) { install.packages("stringr") }; library(stringr)
+})
 
-library(colorspace)
-
-# ---- Setup ----
-auto_install <- FALSE
-pkgs <- c("readxl","dplyr","stringr","tidyr","ggplot2","forcats","purrr","writexl","tools")
-if (auto_install) {
-  to_get <- pkgs[!pkgs %in% installed.packages()[,"Package"]]
-  if (length(to_get)) install.packages(to_get)
-}
-invisible(lapply(pkgs, require, character.only = TRUE))
-
-# ---- Config ----
-out_dir  <- file.path(ROOT, "out")
-png_width <- 10; png_height <- 5; png_dpi <- 300
-
-# Toggle: one bar per project (default) vs per-sample bars
-per_sample_bars <- FALSE
-max_samples_per_project <- 2
-
-# Aesthetics
-outline_color <- "black"
-refline_color <- "grey60"
-axis_labels <- c(p2="p2", p3="p3", p4="p4", p5="p5", p6="p6", p7="p7", p8="p8", p9="p9")
-
-# ---- Targets from XLSX (replaces hardcoded total_targets) ----
-target_xlsx <- file.path(ROOT, "information", "2025-11-10_Target_Sample_Size_Projects.xlsx")
-if (!file.exists(target_xlsx)) stop("Target table not found: ", target_xlsx)
-
-read_targets_vanilla <- function(path){
-  df <- suppressMessages(readxl::read_excel(path, sheet = "Vanilla"))
-  names(df) <- tolower(names(df))
-  df %>%
-    dplyr::transmute(
-      project = as.integer(stringr::str_extract(as.character(project), "\\d+")),
-      target  = as.numeric(target)
-    ) %>%
-    dplyr::filter(!is.na(project))
-}
-targets_vanilla <- read_targets_vanilla(target_xlsx)
-# Named vector keyed by "p2","p3",...
-total_targets <- setNames(targets_vanilla$target, paste0("p", targets_vanilla$project))
-
-read_targets_split <- function(path){
-  df <- suppressMessages(readxl::read_excel(path, sheet = "P8_Split_P6.2_only"))
-  names(df) <- tolower(names(df))
-  tibble::tibble(project_raw = as.character(df$project), target = as.numeric(df$target)) %>%
-    dplyr::mutate(
-      prj_lower = tolower(project_raw),
-      project   = as.integer(stringr::str_extract(prj_lower, "\\d+")),
-      sample    = dplyr::case_when(
-        stringr::str_detect(prj_lower, "child") ~ "children",
-        stringr::str_detect(prj_lower, "adult") ~ "adults",
-        TRUE                                    ~ "ALL"
-      )
-    ) %>%
-    dplyr::filter(!is.na(project)) %>%
-    dplyr::select(project, sample, target)
-}
-targets_split <- read_targets_split(target_xlsx)
-
-# ---- Read latest report ----
-priv_dir <- file.path(ROOT, "private_information", "ids_in_all_projects")
-report_files <- list.files(priv_dir, pattern = "_id_completeness_report\\.xlsx$", full.names = TRUE)
-if (!length(report_files)) stop("No *_id_completeness_report.xlsx found in 'private_information'.")
-report_path <- sort(report_files, decreasing = TRUE)[1]
-datestamp <- sub("_id_completeness_report\\.xlsx$", "", basename(report_path))  # used for caption + filenames
-
-if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
-output_png  <- file.path(out_dir, sprintf("%s_project_progress.png", datestamp))
-output_xlsx <- file.path(out_dir, sprintf("%s_project_progress_summary.xlsx", datestamp))
-
-read_sheet_safe <- function(path, sheet){
-  df <- suppressMessages(readxl::read_excel(path, sheet = sheet))
-  if (!is.data.frame(df) || !nrow(df)) return(tibble::tibble())
-  names(df) <- tolower(names(df))
-  pid_col <- names(df)[stringr::str_detect(names(df), "^participant\\s*id$")]
-  if (!length(pid_col)) {
-    pid_col <- names(df)[stringr::str_detect(names(df), "id")]
-    if (!length(pid_col)) pid_col <- names(df)[ncol(df)]
+# -------------------- Helpers & Config --------------------
+get_script_dir <- function() {
+  cmd_args <- commandArgs(trailingOnly = FALSE)
+  i <- grep("^--file=", cmd_args)
+  if (length(i)) return(dirname(normalizePath(sub("^--file=", "", cmd_args[i]))))
+  if (!is.null(sys.frames()[[1]]$ofile)) return(dirname(normalizePath(sys.frames()[[1]]$ofile)))
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    ctx <- try(rstudioapi::getSourceEditorContext(), silent = TRUE)
+    if (!inherits(ctx, "try-error") && nzchar(ctx$path)) return(dirname(normalizePath(ctx$path)))
   }
-  tibble::tibble(
-    project = suppressWarnings(as.integer(df[["project"]])),
-    sample  = tolower(if ("sample" %in% names(df)) df[["sample"]] else ""),
-    pid     = df[[pid_col[1]]]
-  ) %>%
-    dplyr::filter(!is.na(project), project >= 2, project <= 9)
+  normalizePath(getwd())
 }
 
-sheet_complete <- read_sheet_safe(report_path, 1)   # fully complete
-sheet_miss_q   <- read_sheet_safe(report_path, 2)   # missing questionnaire  (=> cognitive present)
-sheet_miss_c   <- read_sheet_safe(report_path, 3)   # missing cognitive      (=> questionnaires present)
+SCRIPT_DIR <- get_script_dir()
+DATA_DIR   <- file.path(SCRIPT_DIR, "private_information", "ids_in_all_projects")
+PROJ_ROOT  <- file.path(SCRIPT_DIR, "01_project_data")
 
-count_by_ps <- function(df){
-  if (!nrow(df)) tibble::tibble(project=integer(), sample=character(), n=integer())
-  else dplyr::count(df, project, sample, name="n")
+if (!dir.exists(DATA_DIR)) stop("Directory not found: ", DATA_DIR)
+if (!dir.exists(PROJ_ROOT)) dir.create(PROJ_ROOT, recursive = TRUE, showWarnings = FALSE)
+
+TYPES       <- c("cogtest", "questionnaire", "questionnaire_p6")
+FILENAME_RE <- "^(.*?)_ids_in_all_projects_(cogtest|questionnaire|questionnaire_p6)\\.xlsx$"
+RE_COG      <- "^(?:psytool_info|cogtest)_([A-Za-z0-9_]+)_([1-9])$"
+RE_Q        <- "^(?:dat|questionnaire)_([A-Za-z0-9_]+)_([1-9])$"
+RE_QP6      <- "^(?:dat|questionnaire)_([A-Za-z0-9_]+)_p([1-9])$"
+
+normalize_sample <- function(s) {
+  s <- tolower(trimws(s))
+  # NOTE: This maps children_parents/parents to "children" on purpose so that
+  # questionnaire (children) and cogtest (children_parents) data for project 6
+  # share the same key and can be joined.
+  if (s %in% c("children_parents", "parents")) return("children")
+  s
 }
-n_complete <- count_by_ps(sheet_complete)
-n_miss_q   <- count_by_ps(sheet_miss_q)
-n_miss_c   <- count_by_ps(sheet_miss_c)
 
-# ---- Build counts (project vs sample mode) ----
-if (per_sample_bars) {
-  all_ps <- dplyr::bind_rows(n_complete[,1:2], n_miss_q[,1:2], n_miss_c[,1:2]) %>%
-    dplyr::distinct() %>% dplyr::arrange(project, sample) %>%
-    dplyr::group_by(project) %>% dplyr::slice_head(n = max_samples_per_project) %>% dplyr::ungroup()
+parse_date_tag <- function(tag) {
+  fmts <- c("%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%Y.%m.%d")
+  for (fmt in fmts) {
+    dt <- try(as.POSIXct(tag, format = fmt, tz = "UTC"), silent = TRUE)
+    if (!inherits(dt, "try-error") && !is.na(dt)) {
+      return(list(key = as.numeric(dt), norm = format(dt, "%Y-%m-%d")))
+    }
+  }
+  if (grepl("^[0-9]+$", tag)) return(list(key = as.numeric(tag), norm = tag))
+  list(key = NA_real_, norm = tag)
+}
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+# -------------------- Discover latest files --------------------
+files <- list.files(DATA_DIR, pattern = "_ids_in_all_projects_.*\\.xlsx$", full.names = TRUE)
+if (!length(files)) stop("No matching files in ", DATA_DIR)
+
+meta <- tibble(path = files, name = basename(files)) %>%
+  mutate(m = str_match(name, FILENAME_RE)) %>%
+  filter(!is.na(m[,1])) %>%
+  transmute(path, dtype = tolower(m[,3]), date_tag = m[,2]) %>%
+  rowwise() %>% mutate(parsed = list(parse_date_tag(date_tag)),
+                       date_key = parsed$key, date_norm = parsed$norm) %>%
+  ungroup()
+
+coverage <- meta %>%
+  group_by(date_norm) %>%
+  summarize(types_present = n_distinct(dtype),
+            max_key = max(coalesce(date_key, -Inf)), .groups = "drop") %>%
+  arrange(desc(types_present), desc(max_key))
+
+best_norm <- coverage$date_norm[1]
+
+chosen <- meta %>%
+  filter(date_norm == best_norm) %>%
+  group_by(dtype) %>%
+  slice_max(order_by = coalesce(date_key, -Inf), with_ties = FALSE) %>%
+  ungroup()
+
+if (!"cogtest" %in% chosen$dtype) {
+  newest_cog <- meta %>% filter(dtype == "cogtest") %>%
+    slice_max(order_by = coalesce(date_key, -Inf), with_ties = FALSE)
+  chosen <- bind_rows(chosen, newest_cog)
+}
+
+paths <- setNames(chosen$path, chosen$dtype)
+
+cog_date_tag <- chosen %>% filter(dtype == "cogtest") %>% pull(date_tag) %>% .[1]
+if (is.na(cog_date_tag)) cog_date_tag <- chosen %>% filter(dtype == "cogtest") %>% pull(date_norm) %>% .[1]
+
+# -------------------- Read IDs and submitdates --------------------
+read_if <- function(dtype) if (dtype %in% names(paths)) readxl::read_excel(paths[[dtype]]) else NULL
+
+# PATCH: more robust reading of submit date sheet
+read_submit_if <- function(dtype) {
+  if (!(dtype %in% names(paths))) return(NULL)
+  p <- paths[[dtype]]
+  # Try common sheet names first
+  for (nm in c("submitdates", "submitdate")) {
+    df <- try(readxl::read_excel(p, sheet = nm), silent = TRUE)
+    if (!inherits(df, "try-error") && !is.null(df)) return(df)
+  }
+  # Fallback to sheet index 2
+  df <- try(readxl::read_excel(p, sheet = 2), silent = TRUE)
+  if (inherits(df, "try-error")) return(NULL)
+  df
+}
+
+collect_ids_from_cols <- function(df, pattern, map_project = identity, sample_normalizer = normalize_sample) {
+  if (is.null(df)) return(list())
+  out <- list()
+  for (cn in names(df)) {
+    m <- str_match(cn, pattern)
+    if (is.na(m[1,1])) next
+    sample  <- sample_normalizer(m[1,2])
+    project <- as.integer(map_project(m[1,3]))
+    ids <- df[[cn]] %>% as.character() %>% trimws() %>% .[!is.na(.) & . != ""]
+    key <- paste(sample, project, sep = "|")
+    if (!length(ids)) next
+    out[[key]] <- unique(c(out[[key]] %||% character(), ids))
+  }
+  out
+}
+
+collect_dates_from_cols <- function(ids_df, dates_df, pattern, map_project = identity, sample_normalizer = normalize_sample) {
+  if (is.null(ids_df) || is.null(dates_df)) return(list())
+  out <- list()
+  cols <- intersect(names(ids_df), names(dates_df))
+  for (cn in cols) {
+    m <- str_match(cn, pattern)
+    if (is.na(m[1,1])) next
+    sample  <- sample_normalizer(m[1,2])
+    project <- as.integer(map_project(m[1,3]))
+    ids_col   <- ids_df[[cn]] %>% as.character()
+    dates_col <- dates_df[[cn]]
+    # Normalize dates to YYYY-MM-DD if possible
+    norm <- function(x) {
+      if (inherits(x, "Date"))    return(format(x, "%Y-%m-%d"))
+      if (inherits(x, "POSIXt"))  return(format(as.Date(x), "%Y-%m-%d"))
+      if (is.numeric(x)) {
+        d <- try(as.Date(x, origin = "1899-12-30"), silent = TRUE)
+        if (!inherits(d, "try-error")) return(format(d, "%Y-%m-%d"))
+      }
+      as.character(x)
+    }
+    dates_chr <- vapply(dates_col, norm, FUN.VALUE = character(1))
+    valid <- !is.na(ids_col) & ids_col != ""
+    ids_ok <- ids_col[valid]; dts_ok <- dates_chr[valid]
+    key <- paste(sample, project, sep = "|")
+    names(dts_ok) <- ids_ok
+    out[[key]] <- c(out[[key]] %||% c(), dts_ok)
+  }
+  out
+}
+
+cog_df  <- read_if("cogtest")
+q_df    <- read_if("questionnaire")
+qp6_df  <- read_if("questionnaire_p6")
+
+cog_sub <- read_submit_if("cogtest")
+q_sub   <- read_submit_if("questionnaire")
+qp6_sub <- read_submit_if("questionnaire_p6")
+
+cog_map <- collect_ids_from_cols(cog_df, RE_COG)
+q_map   <- collect_ids_from_cols(q_df, RE_Q)
+qp6_map <- collect_ids_from_cols(qp6_df, RE_QP6)
+
+cog_dates  <- collect_dates_from_cols(cog_df,  cog_sub,  RE_COG)
+q_dates    <- collect_dates_from_cols(q_df,    q_sub,    RE_Q)
+qp6_dates  <- collect_dates_from_cols(qp6_df,  qp6_sub,  RE_QP6)
+
+merge_maps <- function(a, b) {
+  keys <- union(names(a), names(b))
+  out <- vector("list", length(keys)); names(out) <- keys
+  for (k in keys) out[[k]] <- union(a[[k]] %||% character(), b[[k]] %||% character())
+  out
+}
+
+merge_date_maps <- function(a, b) {
+  keys <- union(names(a), names(b))
+  out <- setNames(vector("list", length(keys)), keys)
+  for (k in keys) {
+    out[[k]] <- c(a[[k]] %||% c(), b[[k]] %||% c())
+  }
+  out
+}
+
+q_all    <- merge_maps(q_map, qp6_map)
+dates_all <- merge_date_maps(cog_dates, merge_date_maps(q_dates, qp6_dates))
+
+valid_key <- function(k) {
+  parts <- strsplit(k, "\\|")[[1]]
+  if (length(parts) != 2) return(FALSE)
+  p <- suppressWarnings(as.integer(parts[2]))
+  !is.na(p) && p >= 1 && p <= 9
+}
+
+all_keys <- union(names(cog_map), names(q_all))
+all_keys <- all_keys[vapply(all_keys, valid_key, logical(1))]
+all_keys <- sort(all_keys)
+
+# PATCH (Option B): choose the LAST non-NA date where multiple entries exist
+attach_dates <- function(key, ids_vec) {
+  dmap <- dates_all[[key]] %||% c()
+  if (!length(dmap)) return(rep(NA_character_, length(ids_vec)))
+  # For each requested ID, take the last non-empty value among duplicates
+  vapply(ids_vec, function(idv) {
+    idx <- which(names(dmap) == idv)
+    if (!length(idx)) return(NA_character_)
+    vals <- dmap[idx]
+    vals <- vals[!is.na(vals) & vals != ""]
+    if (!length(vals)) return(NA_character_)
+    as.character(tail(vals, 1))
+  }, FUN.VALUE = character(1))
+}
+
+rows_complete   <- list(); rows_missing_q <- list(); rows_missing_c <- list()
+for (k in all_keys) {
+  parts   <- strsplit(k, "\\|")[[1]]
+  sample  <- parts[1]; project <- as.integer(parts[2])
+  cog_ids <- cog_map[[k]] %||% character()
+  q_ids   <- q_all[[k]] %||% character()
   
-  progress_counts <- all_ps %>%
-    dplyr::left_join(n_complete, by=c("project","sample")) %>% dplyr::rename(n_complete=n) %>%
-    dplyr::left_join(n_miss_q, by=c("project","sample"))   %>% dplyr::rename(n_miss_q =n) %>%
-    dplyr::left_join(n_miss_c, by=c("project","sample"))   %>% dplyr::rename(n_miss_c =n) %>%
-    dplyr::mutate(dplyr::across(c(n_complete,n_miss_q,n_miss_c), ~tidyr::replace_na(.,0L)))
-} else {
-  # aggregate per project first
-  progress_counts <- dplyr::full_join(
-    n_complete %>% dplyr::group_by(project) %>% dplyr::summarise(n_complete=sum(n), .groups="drop"),
-    n_miss_q   %>% dplyr::group_by(project) %>% dplyr::summarise(n_miss_q  =sum(n), .groups="drop"),
-    by="project"
-  ) %>%
-    dplyr::full_join(
-      n_miss_c %>% dplyr::group_by(project) %>% dplyr::summarise(n_miss_c=sum(n), .groups="drop"),
-      by="project"
-    ) %>%
-    dplyr::right_join(tibble::tibble(project=2:9), by="project") %>%
-    dplyr::mutate(dplyr::across(c(n_complete,n_miss_q,n_miss_c), ~tidyr::replace_na(.,0L)),
-                  sample="ALL")
+  complete   <- intersect(cog_ids, q_ids)
+  missing_q  <- setdiff(cog_ids, q_ids)
+  missing_c  <- setdiff(q_ids, cog_ids)
+  
+  if (length(complete))
+    rows_complete[[k]] <- tibble(sample, project,
+                                 id = sort(unique(complete)),
+                                 submitdate = attach_dates(k, sort(unique(complete))))
+  if (length(missing_q))
+    rows_missing_q[[k]] <- tibble(sample, project,
+                                  id = sort(unique(missing_q)),
+                                  submitdate = attach_dates(k, sort(unique(missing_q))))
+  if (length(missing_c))
+    rows_missing_c[[k]] <- tibble(sample, project,
+                                  id = sort(unique(missing_c)),
+                                  submitdate = attach_dates(k, sort(unique(missing_c))))
 }
 
-# ---- Layer definitions (correct mapping) ----
-# "cognitive tests missing"  := complete + MISSING COGNITIVE   (has questionnaires)  -> ORANGE
-# "questionnaires missing"   := complete + MISSING QUESTIONNAIRE (has cognitive)      -> BLUE
-progress_counts <- progress_counts %>%
-  dplyr::mutate(
-    n_has_questionnaire = n_complete + n_miss_c,  # <- used for "cognitive tests missing" overlay
-    n_has_cognitive     = n_complete + n_miss_q,  # <- used for "questionnaires missing" overlay
-    project_id          = paste0("p", project),
-    proj_target         = as.numeric(total_targets[project_id]),
-    sample_target       = proj_target
-  )
+df_complete <- if (length(rows_complete)) bind_rows(rows_complete) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
+df_miss_q   <- if (length(rows_missing_q)) bind_rows(rows_missing_q) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
+df_miss_c   <- if (length(rows_missing_c)) bind_rows(rows_missing_c) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
 
-# ---- Special rule: p6 forced visual 33% + label "TBA / ?" ----
-progress_counts <- progress_counts %>%
-  dplyr::mutate(force_33 = project == 6)
+# -------------------- Write OVERVIEW workbook (includes submitdate) --------------------
+overview_name <- sprintf("%s_id_completeness_report.xlsx", cog_date_tag)
+overview_path <- file.path(DATA_DIR, overview_name)
 
-# ---- Percent-of-target (base for label position is COMPLETE) ----
-pctify <- function(n, target) ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*n/target))
-
-progress_pct <- progress_counts %>%
-  dplyr::mutate(
-    pct_complete = pctify(n_complete,         sample_target),
-    pct_qmiss    = pctify(n_has_questionnaire, sample_target),  # cognitive tests missing (orange)
-    pct_cmiss    = pctify(n_has_cognitive,     sample_target)   # questionnaires missing (blue)
-  ) %>%
-  dplyr::mutate(
-    # For p6: force all layers to 33% visually; we still don't show % in label.
-    pct_complete = dplyr::if_else(force_33, 33, pct_complete),
-    pct_qmiss    = dplyr::if_else(force_33, 33, pct_qmiss),
-    pct_cmiss    = dplyr::if_else(force_33, 33, pct_cmiss)
-  )
-
-# ---- Plot data ----
-plot_df <- progress_pct %>%
-  dplyr::mutate(
-    project_lbl = factor(paste0("p", project),
-                         levels=paste0("p",2:9),
-                         labels=axis_labels[paste0("p",2:9)])
-  ) %>%
-  dplyr::arrange(project)
-
-plot_long <- plot_df %>%
-  tidyr::pivot_longer(
-    cols = c(pct_qmiss, pct_cmiss, pct_complete),
-    names_to = "layer", values_to = "pct"
-  ) %>%
-  dplyr::mutate(
-    x = factor(as.character(project_lbl), levels = axis_labels[paste0("p",2:9)]),
-    layer = factor(layer,
-                   levels = c("pct_qmiss","pct_cmiss","pct_complete"),
-                   labels = c("cognitive tests missing","questionnaires missing","complete"))
-  )
-
-# 40% opacity fills (hex alpha '66')
-layer_fills <- c(
-  "cognitive tests missing" = "#F7C97F",  # orange
-  "questionnaires missing"  = "#8CAED0",  # blue
-  "complete"                = "#6CAB5C"   # green
+openxlsx::write.xlsx(
+  list(
+    complete = df_complete,
+    missing_questionnaire = df_miss_q,
+    missing_cogtest = df_miss_c
+  ),
+  file = overview_path,
+  overwrite = TRUE
 )
 
-p <- ggplot(plot_long, aes(x=x, y=pct)) +
-  # 100% outlines
-  geom_col(data = plot_long %>% dplyr::distinct(x), aes(x=x, y=100),
-           inherit.aes=FALSE, fill=NA, color=outline_color, linewidth=0.9, width=0.7) +
-  # overlays
-  geom_col(aes(fill=layer), width=0.7, position=position_identity()) +
-  # guides
-  geom_hline(yintercept=c(25,50,75), linetype="dashed", linewidth=0.3, color=refline_color) +
-  coord_flip(clip="off") +
-  scale_fill_manual(values=layer_fills, name=NULL) +
-  scale_y_continuous(limits=c(0,110), breaks=c(0,25,50,75,100),
-                     labels=c("0","25","50","75","100"),
-                     expand=expansion(mult=c(0.02,0.12))) +
-  labs(
-    x = NULL,
-    y = 'Percent of target sample size',
-    title = 'Completed backbone datasets',
-    caption = paste0("Status: ", datestamp)   # lower-left caption
-  ) +
-  theme_classic(base_size = 12) +
-  theme(
-    panel.background       = element_rect(fill="white", color=NA),
-    plot.background        = element_rect(fill="white", color=NA),
-    axis.title.y           = element_blank(),
-    legend.position        = "bottom",
-    plot.caption.position  = "plot",
-    plot.caption           = element_text(hjust = 0, size = 8)  # left-aligned, smaller
-  )
-
-# ---- Numeric labels inside bars (based on COMPLETE) ----
-label_df <- plot_df %>%
-  dplyr::mutate(
-    label_total_complete = ifelse(force_33, NA_integer_, n_complete),
-    pct_for_label        = ifelse(force_33, NA_real_, pctify(n_complete, sample_target))
-  ) %>%
-  dplyr::transmute(
-    x = factor(as.character(project_lbl), levels = axis_labels[paste0("p",2:9)]),
-    # place label slightly to the RIGHT of the green (complete) fill
-    pct_pos = dplyr::case_when(
-      force_33             ~ 35,                              # p6: near 33% fill
-      is.na(pct_for_label) ~ 5,                               # unknown target -> near left edge
-      TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
-    ),
-    label = dplyr::case_when(
-      force_33             ~ "162 / ?",
-      is.na(sample_target) ~ sprintf("%d / ?", n_complete),
-      TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
-    )
-  )
-
-p <- p + geom_text(data = label_df, aes(x=x, y=pct_pos, label=label),
-                   inherit.aes = FALSE, hjust = 0, size = 3.4)
-
-# ---- Save plot ----
-ggsave(output_png, p, width = png_width, height = png_height, dpi = png_dpi)
-message("Saved plot: ", normalizePath(output_png))
-
-# ---- Summary table (printed + XLSX) ----
-summary_tbl <- progress_pct %>%
-  dplyr::transmute(
-    project_id = paste0("p", project),
-    n_complete,
-    n_questionnaires_missing = n_has_cognitive - n_complete,    # actually missing questionnaires
-    n_cognitive_missing      = n_has_questionnaire - n_complete,# actually missing cognitive tests
-    target = dplyr::if_else(is.na(sample_target), "?", as.character(sample_target)),
-    pct_complete = ifelse(is.na(sample_target) | force_33, NA, round(pctify(n_complete, sample_target),1)),
-    label_for_plot = dplyr::case_when(
-      force_33             ~ "162 / ?",
-      is.na(sample_target) ~ sprintf("%d / ?", n_complete),
-      TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pctify(n_complete, sample_target))
-    )
-  ) %>% dplyr::arrange(project_id)
-
-print(summary_tbl, n = Inf)
-writexl::write_xlsx(list(progress_summary = summary_tbl), path = output_xlsx)
-message("Saved table: ", normalizePath(output_xlsx))
-
-
-
-# ---- Second plot: split project 6 (infants/children) AND project 8 (children/adults) ----
-# Output name: same as original + "_split_p6_p8"
-output_png_split <- file.path(out_dir, sprintf("%s_project_progress_split_p6_p8.png", datestamp))
-
-# Helper: for split view
-# - p8 => keep "children"/"adults"
-# - p6 => map possible child labels to "children"; all other p6 -> "infants"
-# - all others => "ALL"
-collapse_with_split_p6_p8 <- function(df_counts){
-  if (!nrow(df_counts)) return(tibble::tibble(project=integer(), sample=character(), n=integer()))
-  df_counts %>%
-    dplyr::mutate(
-      sl = tolower(sample),
-      sample = dplyr::case_when(
-        project == 8 & stringr::str_detect(sl, "adult") ~ "adults",
-        project == 8 & stringr::str_detect(sl, "child") ~ "children",
-        project == 6 & stringr::str_detect(sl, "child") ~ "children",
-        project == 6                                    ~ "infants",
-        TRUE                                            ~ "ALL"
-      )
-    ) %>%
-    dplyr::group_by(project, sample) %>%
-    dplyr::summarise(n = sum(n), .groups = "drop")
+# -------------------- Write per-project workbooks (NO submitdate) --------------------
+write_project_workbook <- function(prj, df_complete, df_miss_q, df_miss_c) {
+  if (prj == 1) return(invisible(NULL))
+  sub_complete <- df_complete %>% filter(project == prj) %>% select(-submitdate)
+  sub_miss_q   <- df_miss_q   %>% filter(project == prj) %>% select(-submitdate)
+  sub_miss_c   <- df_miss_c   %>% filter(project == prj) %>% select(-submitdate)
+  
+  prj_dir  <- file.path(PROJ_ROOT, sprintf("%d_backbone", prj))
+  if (!dir.exists(prj_dir)) dir.create(prj_dir, recursive = TRUE, showWarnings = FALSE)
+  prj_name <- sprintf("%s_project_%d_id_completeness.xlsx", cog_date_tag, prj)
+  prj_path <- file.path(prj_dir, prj_name)
+  
+  wb <- createWorkbook()
+  addWorksheet(wb, "complete")
+  addWorksheet(wb, "missing_questionnaire")
+  addWorksheet(wb, "missing_cogtest")
+  writeData(wb, "complete", sub_complete)
+  writeData(wb, "missing_questionnaire", sub_miss_q)
+  writeData(wb, "missing_cogtest", sub_miss_c)
+  saveWorkbook(wb, prj_path, overwrite = TRUE)
+  invisible(prj_path)
 }
 
-n_complete_s <- collapse_with_split_p6_p8(n_complete)
-n_miss_q_s   <- collapse_with_split_p6_p8(n_miss_q)
-n_miss_c_s   <- collapse_with_split_p6_p8(n_miss_c)
+invisible(lapply(1:9, write_project_workbook, df_complete=df_complete, df_miss_q=df_miss_q, df_miss_c=df_miss_c))
 
-# Ensure rows for:
-# p2..p5, p7, p9 => "ALL"
-# p6 => "infants" and "children"
-# p8 => "children" and "adults"
-base_rows <- tibble::tibble(
-  project = c(2:5, 6, 6, 7, 8, 8, 9),
-  sample  = c(rep("ALL", 4), "infants", "children", "ALL", "children", "adults", "ALL")
-)
+cat("Overview (with submitdate):", overview_path, "\n")
 
-progress_counts_split <- base_rows %>%
-  dplyr::left_join(n_complete_s, by=c("project","sample")) %>% dplyr::rename(n_complete = n) %>%
-  dplyr::left_join(n_miss_q_s,   by=c("project","sample")) %>% dplyr::rename(n_miss_q  = n) %>%
-  dplyr::left_join(n_miss_c_s,   by=c("project","sample")) %>% dplyr::rename(n_miss_c  = n) %>%
-  dplyr::mutate(dplyr::across(c(n_complete, n_miss_q, n_miss_c), ~tidyr::replace_na(., 0L))) %>%
-  dplyr::mutate(
-    project_id          = paste0("p", project),
-    # Project-level targets (used as fallback)
-    proj_target         = as.numeric(total_targets[project_id]),
-    # Layer bases (same logic as original)
-    n_has_questionnaire = n_complete + n_miss_c,
-    n_has_cognitive     = n_complete + n_miss_q
-  ) %>%
-  # Join per-(project,sample) targets from the P8_Split_P6.2_only sheet
-  dplyr::left_join(targets_split, by = c("project","sample")) %>%
-  dplyr::rename(sample_target = target) %>%
-  # p6 infants uses project target; others use sample target when available, else project target
-  dplyr::mutate(
-    sample_target = dplyr::case_when(
-      project == 6 & sample == "infants"  ~ proj_target,
-      TRUE                                ~ dplyr::coalesce(sample_target, proj_target)
-    ),
-    # Only p6 infants are forced to 33%
-    force_33 = (project == 6 & sample == "infants")
-  )
-
-# Percent-of-targets (with p6-infants forced visuals)
-pctify <- function(n, target) ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*n/target))
-
-progress_pct_split <- progress_counts_split %>%
-  dplyr::mutate(
-    pct_complete = pctify(n_complete,          sample_target),
-    pct_qmiss    = pctify(n_has_questionnaire, sample_target),  # cognitive tests missing (orange)
-    pct_cmiss    = pctify(n_has_cognitive,     sample_target)   # questionnaires missing (blue)
-  ) %>%
-  dplyr::mutate(
-    pct_complete = dplyr::if_else(force_33, 33, pct_complete),
-    pct_qmiss    = dplyr::if_else(force_33, 33, pct_qmiss),
-    pct_cmiss    = dplyr::if_else(force_33, 33, pct_cmiss)
-  )
-
-# Axis labels: p2..p5, then "p6 infants", "p6 children", then p7, "p8 children", "p8 adults", p9
-axis_levels_split <- c(
-  axis_labels[paste0("p", 2:5)],
-  "p6 infants", "p6 children",
-  axis_labels["p7"],
-  "p8 children", "p8 adults",
-  axis_labels["p9"]
-) |> as.character()
-
-plot_df2 <- progress_pct_split %>%
-  dplyr::mutate(
-    project_lbl = dplyr::case_when(
-      project == 6 & sample == "infants"  ~ "p6 infants",
-      project == 6 & sample == "children" ~ "p6 children",
-      project == 8 & sample == "children" ~ "p8 children",
-      project == 8 & sample == "adults"   ~ "p8 adults",
-      TRUE                                ~ axis_labels[paste0("p", project)]
-    ) |> as.character()
-  ) %>%
-  dplyr::mutate(project_lbl = factor(project_lbl, levels = axis_levels_split)) %>%
-  dplyr::arrange(project, sample)
-
-plot_long2 <- plot_df2 %>%
-  tidyr::pivot_longer(
-    cols = c(pct_qmiss, pct_cmiss, pct_complete),
-    names_to = "layer", values_to = "pct"
-  ) %>%
-  dplyr::mutate(
-    x = factor(as.character(project_lbl), levels = axis_levels_split),
-    layer = factor(layer,
-                   levels = c("pct_qmiss","pct_cmiss","pct_complete"),
-                   labels = c("cognitive tests missing","questionnaires missing","complete"))
-  )
-
-p2 <- ggplot(plot_long2, aes(x = x, y = pct)) +
-  geom_col(data = plot_long2 %>% dplyr::distinct(x), aes(x = x, y = 100),
-           inherit.aes = FALSE, fill = NA, color = outline_color, linewidth = 0.9, width = 0.7) +
-  geom_col(aes(fill = layer), width = 0.7, position = position_identity()) +
-  geom_hline(yintercept = c(25, 50, 75), linetype = "dashed", linewidth = 0.3, color = refline_color) +
-  coord_flip(clip = "off") +
-  scale_fill_manual(values = layer_fills, name = NULL) +
-  scale_y_continuous(limits = c(0, 110), breaks = c(0,25,50,75,100),
-                     labels = c("0","25","50","75","100"),
-                     expand = expansion(mult = c(0.02, 0.12))) +
-  labs(
-    x = NULL,
-    y = "Percent of target sample size",
-    title = "Completed backbone datasets (p6 infants/children + p8 children/adults)",
-    caption = paste0("Status: ", datestamp)
-  ) +
-  theme_classic(base_size = 12) +
-  theme(
-    panel.background      = element_rect(fill="white", color=NA),
-    plot.background       = element_rect(fill="white", color=NA),
-    axis.title.y          = element_blank(),
-    legend.position       = "bottom",
-    plot.caption.position = "plot",
-    plot.caption          = element_text(hjust = 0, size = 8)
-  )
-
-# Labels based on COMPLETE; only p6 infants shows the forced 33%-style label
-label_df2 <- plot_df2 %>%
-  dplyr::mutate(
-    label_total_complete = ifelse(force_33, NA_integer_, n_complete),
-    pct_for_label        = ifelse(force_33, NA_real_, pctify(n_complete, sample_target))
-  ) %>%
-  dplyr::transmute(
-    x = factor(as.character(project_lbl), levels = axis_levels_split),
-    pct_pos = dplyr::case_when(
-      force_33             ~ 35,
-      is.na(pct_for_label) ~ 5,
-      TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
-    ),
-    label = dplyr::case_when(
-      force_33             ~ "162 / ?",
-      is.na(sample_target) ~ sprintf("%d / ?", n_complete),
-      TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
-    )
-  )
-
-p2 <- p2 + geom_text(data = label_df2, aes(x = x, y = pct_pos, label = label),
-                     inherit.aes = FALSE, hjust = 0, size = 3.4)
-
-ggsave(output_png_split, p2, width = png_width, height = png_height, dpi = png_dpi)
-message("Saved plot (p6+p8 split): ", normalizePath(output_png_split))
+# -------------------- Optional: drop obvious placeholder IDs before writing ----
+# If you decide to exclude placeholder/test IDs (e.g., 0, 1, 1001, 69999), you
+# can uncomment the lines below before writing the workbooks.
+# is_placeholder_id <- function(x) {
+#   # Treat non-digits or known sentinel-like numbers as placeholders
+#   !grepl("^[0-9]+$", x) | x %in% c("0","1","1001","69999")
+# }
+# df_complete <- df_complete %>% filter(!is_placeholder_id(id))
+# df_miss_q   <- df_miss_q   %>% filter(!is_placeholder_id(id))
+# df_miss_c   <- df_miss_c   %>% filter(!is_placeholder_id(id))
