@@ -1,323 +1,468 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Monitoring 1 — Extract Sample Information (Patched: Option B for submitdates)
-# Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com)
-# Created: 2025-10-29
-# Patch date: 2025-11-25
+# Monitoring 3 — Timeline of Data Collection (with projections)
+# Authors: Saskia Wilken
+# Created: 2025-11-10
 #
 # What this does
-# - Reads the 3-sheet ID completeness report create by mon_01:
-#   1) complete datasets
-#   2) datasets missing questionnaire data (=> cognitive present)
-#   3) datasets missing cognitive test data (=> questionnaires present)
-# - Produces a progress plot (PNG) and a summary XLSX.
+# - Reads the latest *_id_completeness_report.xlsx and the Target_Sample_Size_Projects.xlsx
+# - Uses the "submitdate" alongside id + sample to build per-project timelines
+# - Produces two kinds of timeline plots (absolute & percent as stacked subplots):
+#     1) Vanilla layout (one line per project p2..p9)
+#     2) Split layout (p8 children & adults separated; others aggregated)
+# - For each layout it saves:
+#     A) Empirical timeline only
+#     B) Empirical timeline + per-project linear regression with 95% CI (Newey–West) and horizon = 2x current duration
+# - Saves one PNG and one XLSX per output (=> 4 PNG, 4 XLSX) to ROOT/out/timeline
 #
-# Patch summary (Option B):
-# - When attaching submit dates to IDs, pick the LAST non-NA value among duplicates
-#   for the same ID within a (sample|project) key. This prevents an early NA (e.g.,
-#   from cogtest) from masking a valid questionnaire date.
-# - Slightly more robust submitdate-sheet reading (tries "submitdates", then
-#   "submitdate", then sheet index 2).
+# Notes
+# - Each project/group has its own color (legend).
+# - X axis spans from first to last observed submitdate (or to the prediction horizon for _and-prediction).
+# - Points ("knots") mark observation dates; lines connect between them.
+# - Percent uses the appropriate target (vanilla = project target; split = p8 per-sample target, others project target).
+# - p6 special 33% visual rule from Mon_02 is NOT applied here; this script reflects empirical counts over time.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# Install/load packages --------------------------------------------------------
-suppressPackageStartupMessages({
-  if (!require("dplyr")) { install.packages("dplyr") }; library(dplyr)
-  if (!require("tidyr")) { install.packages("tidyr") }; library(tidyr)
-  if (!require("readxl")) { install.packages("readxl") }; library(readxl)
-  if (!require("openxlsx")) { install.packages("openxlsx") }; library(openxlsx)
-  if (!require("purrr")) { install.packages("purrr") }; library(purrr)
-  if (!require("stringr")) { install.packages("stringr") }; library(stringr)
-})
-
-# -------------------- Helpers & Config --------------------
-get_script_dir <- function() {
-  cmd_args <- commandArgs(trailingOnly = FALSE)
-  i <- grep("^--file=", cmd_args)
-  if (length(i)) return(dirname(normalizePath(sub("^--file=", "", cmd_args[i]))))
-  if (!is.null(sys.frames()[[1]]$ofile)) return(dirname(normalizePath(sys.frames()[[1]]$ofile)))
-  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    ctx <- try(rstudioapi::getSourceEditorContext(), silent = TRUE)
-    if (!inherits(ctx, "try-error") && nzchar(ctx$path)) return(dirname(normalizePath(ctx$path)))
-  }
-  normalizePath(getwd())
+# ---- Locate ROOT ----
+if (requireNamespace("here", quietly = TRUE)) {
+  here::i_am("Mon_03 Timeline of data collection.R")
+  ROOT <- here::here()
+} else if (requireNamespace("rprojroot", quietly = TRUE)) {
+  ROOT <- rprojroot::find_root(
+    rprojroot::has_file(".Rproj") | rprojroot::has_file(".here") | rprojroot::has_dir(".git")
+  )
+} else {
+  ROOT <- getwd()
 }
 
-SCRIPT_DIR <- get_script_dir()
-DATA_DIR   <- file.path(SCRIPT_DIR, "private_information", "ids_in_all_projects")
-PROJ_ROOT  <- file.path(SCRIPT_DIR, "01_project_data")
-
-if (!dir.exists(DATA_DIR)) stop("Directory not found: ", DATA_DIR)
-if (!dir.exists(PROJ_ROOT)) dir.create(PROJ_ROOT, recursive = TRUE, showWarnings = FALSE)
-
-TYPES       <- c("cogtest", "questionnaire", "questionnaire_p6")
-FILENAME_RE <- "^(.*?)_ids_in_all_projects_(cogtest|questionnaire|questionnaire_p6)\\.xlsx$"
-RE_COG      <- "^(?:psytool_info|cogtest)_([A-Za-z0-9_]+)_([1-9])$"
-RE_Q        <- "^(?:dat|questionnaire)_([A-Za-z0-9_]+)_([1-9])$"
-RE_QP6      <- "^(?:dat|questionnaire)_([A-Za-z0-9_]+)_p([1-9])$"
-
-normalize_sample <- function(s) {
-  s <- tolower(trimws(s))
-  # NOTE: This maps children_parents/parents to "children" on purpose so that
-  # questionnaire (children) and cogtest (children_parents) data for project 6
-  # share the same key and can be joined.
-  if (s %in% c("children_parents", "parents")) return("children")
-  s
+# ---- Packages ----
+auto_install <- FALSE
+pkgs <- c("readxl","dplyr","tidyr","stringr","ggplot2","forcats","lubridate",
+          "writexl","purrr","scales","colorspace","broom","patchwork","tools",
+          "sandwich","lmtest")
+if (auto_install) {
+  to_get <- pkgs[!pkgs %in% installed.packages()[,"Package"]]
+  if (length(to_get)) install.packages(to_get)
 }
+invisible(lapply(pkgs, require, character.only = TRUE))
+if (!requireNamespace("patchwork", quietly = TRUE)) install.packages("patchwork")
+library(patchwork)
 
-parse_date_tag <- function(tag) {
-  fmts <- c("%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%Y.%m.%d")
-  for (fmt in fmts) {
-    dt <- try(as.POSIXct(tag, format = fmt, tz = "UTC"), silent = TRUE)
-    if (!inherits(dt, "try-error") && !is.na(dt)) {
-      return(list(key = as.numeric(dt), norm = format(dt, "%Y-%m-%d")))
-    }
-  }
-  if (grepl("^[0-9]+$", tag)) return(list(key = as.numeric(tag), norm = tag))
-  list(key = NA_real_, norm = tag)
+# ---- Config ----
+png_width <- 12; png_height <- 8; png_dpi <- 300
+out_dir   <- file.path(ROOT, "out", "timeline")
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+# Target table path
+target_xlsx <- file.path(ROOT, "information", "2025-11-10_Target_Sample_Size_Projects.xlsx")
+if (!file.exists(target_xlsx)) stop("Target table not found: ", target_xlsx)
+
+# ---- Targets (Vanilla + Split) ----
+read_targets_vanilla <- function(path){
+  df <- suppressMessages(readxl::read_excel(path, sheet = "Vanilla"))
+  names(df) <- tolower(names(df))
+  df %>%
+    dplyr::transmute(
+      project = suppressWarnings(as.integer(stringr::str_extract(as.character(project), "\\d+"))),
+      target  = suppressWarnings(as.numeric(target))
+    ) %>%
+    dplyr::filter(!is.na(project), !is.na(target), project >= 2, project <= 9)
 }
-
-`%||%` <- function(x, y) if (is.null(x)) y else x
-
-# -------------------- Discover latest files --------------------
-files <- list.files(DATA_DIR, pattern = "_ids_in_all_projects_.*\\.xlsx$", full.names = TRUE)
-if (!length(files)) stop("No matching files in ", DATA_DIR)
-
-meta <- tibble(path = files, name = basename(files)) %>%
-  mutate(m = str_match(name, FILENAME_RE)) %>%
-  filter(!is.na(m[,1])) %>%
-  transmute(path, dtype = tolower(m[,3]), date_tag = m[,2]) %>%
-  rowwise() %>% mutate(parsed = list(parse_date_tag(date_tag)),
-                       date_key = parsed$key, date_norm = parsed$norm) %>%
-  ungroup()
-
-coverage <- meta %>%
-  group_by(date_norm) %>%
-  summarize(types_present = n_distinct(dtype),
-            max_key = max(coalesce(date_key, -Inf)), .groups = "drop") %>%
-  arrange(desc(types_present), desc(max_key))
-
-best_norm <- coverage$date_norm[1]
-
-chosen <- meta %>%
-  filter(date_norm == best_norm) %>%
-  group_by(dtype) %>%
-  slice_max(order_by = coalesce(date_key, -Inf), with_ties = FALSE) %>%
-  ungroup()
-
-if (!"cogtest" %in% chosen$dtype) {
-  newest_cog <- meta %>% filter(dtype == "cogtest") %>%
-    slice_max(order_by = coalesce(date_key, -Inf), with_ties = FALSE)
-  chosen <- bind_rows(chosen, newest_cog)
+read_targets_split <- function(path){
+  sheets <- tryCatch(readxl::excel_sheets(path), error = function(e) character())
+  sheet_name <- if ("P8_Split_P6.2_only" %in% sheets) "P8_Split_P6.2_only"
+  else if ("Proj_8_Split" %in% sheets) "Proj_8_Split" else "P8_Split_P6.2_only"
+  df <- suppressMessages(readxl::read_excel(path, sheet = sheet_name))
+  names(df) <- tolower(names(df))
+  tibble::tibble(project_raw = as.character(df$project), target = suppressWarnings(as.numeric(df$target))) %>%
+    dplyr::mutate(
+      prj_lower = tolower(project_raw),
+      project   = suppressWarnings(as.integer(stringr::str_extract(prj_lower, "\\d+"))),
+      sample    = dplyr::case_when(
+        stringr::str_detect(prj_lower, "child") ~ "children",
+        stringr::str_detect(prj_lower, "adult") ~ "adults",
+        TRUE                                    ~ "ALL"
+      )
+    ) %>%
+    dplyr::filter(!is.na(project), !is.na(target)) %>%
+    dplyr::select(project, sample, target)
 }
+targets_vanilla <- read_targets_vanilla(target_xlsx)
+total_targets   <- setNames(targets_vanilla$target, paste0("p", targets_vanilla$project))
+targets_split   <- read_targets_split(target_xlsx)
 
-paths <- setNames(chosen$path, chosen$dtype)
-
-cog_date_tag <- chosen %>% filter(dtype == "cogtest") %>% pull(date_tag) %>% .[1]
-if (is.na(cog_date_tag)) cog_date_tag <- chosen %>% filter(dtype == "cogtest") %>% pull(date_norm) %>% .[1]
-
-# -------------------- Read IDs and submitdates --------------------
-read_if <- function(dtype) if (dtype %in% names(paths)) readxl::read_excel(paths[[dtype]]) else NULL
-
-# PATCH: more robust reading of submit date sheet
-read_submit_if <- function(dtype) {
-  if (!(dtype %in% names(paths))) return(NULL)
-  p <- paths[[dtype]]
-  # Try common sheet names first
-  for (nm in c("submitdates", "submitdate")) {
-    df <- try(readxl::read_excel(p, sheet = nm), silent = TRUE)
-    if (!inherits(df, "try-error") && !is.null(df)) return(df)
-  }
-  # Fallback to sheet index 2
-  df <- try(readxl::read_excel(p, sheet = 2), silent = TRUE)
-  if (inherits(df, "try-error")) return(NULL)
-  df
+max_target_vanilla <- suppressWarnings(max(as.numeric(total_targets), na.rm = TRUE))
+if (!is.finite(max_target_vanilla)) max_target_vanilla <- NA_real_
+max_target_split <- {
+  tt <- suppressWarnings(as.numeric(targets_split$target))
+  proj <- suppressWarnings(as.numeric(total_targets))
+  suppressWarnings(max(c(tt, proj), na.rm = TRUE))
 }
+if (!is.finite(max_target_split)) max_target_split <- max_target_vanilla
 
-collect_ids_from_cols <- function(df, pattern, map_project = identity, sample_normalizer = normalize_sample) {
-  if (is.null(df)) return(list())
-  out <- list()
-  for (cn in names(df)) {
-    m <- str_match(cn, pattern)
-    if (is.na(m[1,1])) next
-    sample  <- sample_normalizer(m[1,2])
-    project <- as.integer(map_project(m[1,3]))
-    ids <- df[[cn]] %>% as.character() %>% trimws() %>% .[!is.na(.) & . != ""]
-    key <- paste(sample, project, sep = "|")
-    if (!length(ids)) next
-    out[[key]] <- unique(c(out[[key]] %||% character(), ids))
-  }
-  out
-}
+# ---- Read latest ID completeness report (ONLY 'complete') ----
+priv_dir <- file.path(ROOT, "private_information", "ids_in_all_projects")
+report_files <- list.files(priv_dir, pattern = "_id_completeness_report\\.xlsx$", full.names = TRUE)
+if (!length(report_files)) stop("No *_id_completeness_report.xlsx found in 'private_information'.")
+report_path <- sort(report_files, decreasing = TRUE)[1]
 
-collect_dates_from_cols <- function(ids_df, dates_df, pattern, map_project = identity, sample_normalizer = normalize_sample) {
-  if (is.null(ids_df) || is.null(dates_df)) return(list())
-  out <- list()
-  cols <- intersect(names(ids_df), names(dates_df))
-  for (cn in cols) {
-    m <- str_match(cn, pattern)
-    if (is.na(m[1,1])) next
-    sample  <- sample_normalizer(m[1,2])
-    project <- as.integer(map_project(m[1,3]))
-    ids_col   <- ids_df[[cn]] %>% as.character()
-    dates_col <- dates_df[[cn]]
-    # Normalize dates to YYYY-MM-DD if possible
-    norm <- function(x) {
-      if (inherits(x, "Date"))    return(format(x, "%Y-%m-%d"))
-      if (inherits(x, "POSIXt"))  return(format(as.Date(x), "%Y-%m-%d"))
-      if (is.numeric(x)) {
-        d <- try(as.Date(x, origin = "1899-12-30"), silent = TRUE)
-        if (!inherits(d, "try-error")) return(format(d, "%Y-%m-%d"))
-      }
-      as.character(x)
-    }
-    dates_chr <- vapply(dates_col, norm, FUN.VALUE = character(1))
-    valid <- !is.na(ids_col) & ids_col != ""
-    ids_ok <- ids_col[valid]; dts_ok <- dates_chr[valid]
-    key <- paste(sample, project, sep = "|")
-    names(dts_ok) <- ids_ok
-    out[[key]] <- c(out[[key]] %||% c(), dts_ok)
-  }
-  out
-}
+# ---- *** FIX: Use the report filename date for naming outputs *** ----
+datestamp_last <- sub("_id_completeness_report\\.xlsx$", "", basename(report_path))
 
-cog_df  <- read_if("cogtest")
-q_df    <- read_if("questionnaire")
-qp6_df  <- read_if("questionnaire_p6")
-
-cog_sub <- read_submit_if("cogtest")
-q_sub   <- read_submit_if("questionnaire")
-qp6_sub <- read_submit_if("questionnaire_p6")
-
-cog_map <- collect_ids_from_cols(cog_df, RE_COG)
-q_map   <- collect_ids_from_cols(q_df, RE_Q)
-qp6_map <- collect_ids_from_cols(qp6_df, RE_QP6)
-
-cog_dates  <- collect_dates_from_cols(cog_df,  cog_sub,  RE_COG)
-q_dates    <- collect_dates_from_cols(q_df,    q_sub,    RE_Q)
-qp6_dates  <- collect_dates_from_cols(qp6_df,  qp6_sub,  RE_QP6)
-
-merge_maps <- function(a, b) {
-  keys <- union(names(a), names(b))
-  out <- vector("list", length(keys)); names(out) <- keys
-  for (k in keys) out[[k]] <- union(a[[k]] %||% character(), b[[k]] %||% character())
-  out
-}
-
-merge_date_maps <- function(a, b) {
-  keys <- union(names(a), names(b))
-  out <- setNames(vector("list", length(keys)), keys)
-  for (k in keys) {
-    out[[k]] <- c(a[[k]] %||% c(), b[[k]] %||% c())
-  }
-  out
-}
-
-q_all    <- merge_maps(q_map, qp6_map)
-dates_all <- merge_date_maps(cog_dates, merge_date_maps(q_dates, qp6_dates))
-
-valid_key <- function(k) {
-  parts <- strsplit(k, "\\|")[[1]]
-  if (length(parts) != 2) return(FALSE)
-  p <- suppressWarnings(as.integer(parts[2]))
-  !is.na(p) && p >= 1 && p <= 9
-}
-
-all_keys <- union(names(cog_map), names(q_all))
-all_keys <- all_keys[vapply(all_keys, valid_key, logical(1))]
-all_keys <- sort(all_keys)
-
-# PATCH (Option B): choose the LAST non-NA date where multiple entries exist
-attach_dates <- function(key, ids_vec) {
-  dmap <- dates_all[[key]] %||% c()
-  if (!length(dmap)) return(rep(NA_character_, length(ids_vec)))
-  # For each requested ID, take the last non-empty value among duplicates
-  vapply(ids_vec, function(idv) {
-    idx <- which(names(dmap) == idv)
-    if (!length(idx)) return(NA_character_)
-    vals <- dmap[idx]
-    vals <- vals[!is.na(vals) & vals != ""]
-    if (!length(vals)) return(NA_character_)
-    as.character(tail(vals, 1))
-  }, FUN.VALUE = character(1))
-}
-
-rows_complete   <- list(); rows_missing_q <- list(); rows_missing_c <- list()
-for (k in all_keys) {
-  parts   <- strsplit(k, "\\|")[[1]]
-  sample  <- parts[1]; project <- as.integer(parts[2])
-  cog_ids <- cog_map[[k]] %||% character()
-  q_ids   <- q_all[[k]] %||% character()
+read_sheet_timeline <- function(path, sheet){
+  df <- suppressMessages(readxl::read_excel(path, sheet = sheet))
+  if (!is.data.frame(df) || !nrow(df)) return(tibble::tibble())
+  nms <- tolower(names(df)); names(df) <- nms
   
-  complete   <- intersect(cog_ids, q_ids)
-  missing_q  <- setdiff(cog_ids, q_ids)
-  missing_c  <- setdiff(q_ids, cog_ids)
+  pid_col <- names(df)[stringr::str_detect(names(df), "^participant\\s*id$")]
+  if (!length(pid_col)) {
+    pid_col <- names(df)[stringr::str_detect(names(df), "id")]
+    if (!length(pid_col)) pid_col <- names(df)[ncol(df)]
+  }
+  submit_col <- names(df)[stringr::str_detect(names(df), "submit")]
+  if (!length(submit_col)) submit_col <- names(df)[stringr::str_detect(names(df), "date")]
+  if (!length(submit_col)) return(tibble::tibble())
   
-  if (length(complete))
-    rows_complete[[k]] <- tibble(sample, project,
-                                 id = sort(unique(complete)),
-                                 submitdate = attach_dates(k, sort(unique(complete))))
-  if (length(missing_q))
-    rows_missing_q[[k]] <- tibble(sample, project,
-                                  id = sort(unique(missing_q)),
-                                  submitdate = attach_dates(k, sort(unique(missing_q))))
-  if (length(missing_c))
-    rows_missing_c[[k]] <- tibble(sample, project,
-                                  id = sort(unique(missing_c)),
-                                  submitdate = attach_dates(k, sort(unique(missing_c))))
+  tibble::tibble(
+    project    = suppressWarnings(as.integer(df[["project"]])),
+    sample     = tolower(if ("sample" %in% names(df)) df[["sample"]] else ""),
+    pid        = df[[pid_col[1]]],
+    submitdate = suppressWarnings(lubridate::as_date(df[[submit_col[1]]]))
+  ) %>% dplyr::filter(!is.na(project), project >= 2, project <= 9, !is.na(submitdate))
+}
+sheet_complete <- read_sheet_timeline(report_path, "complete")
+if (!nrow(sheet_complete)) stop("No rows in 'complete' sheet with submitdate found.")
+timeline_raw <- sheet_complete %>%
+  dplyr::mutate(sample = ifelse(is.na(sample) | sample == "", "ALL", sample)) %>%
+  dplyr::group_by(project, sample, pid) %>%
+  dplyr::summarise(submitdate = min(submitdate, na.rm = TRUE), .groups="drop") %>%
+  dplyr::filter(!is.na(submitdate))
+
+first_date <- min(timeline_raw$submitdate, na.rm = TRUE)
+last_date  <- max(timeline_raw$submitdate, na.rm = TRUE)
+
+# ---- Colors ----
+vanilla_colors <- c(
+  "p2"="#1B9E77","p3"="#D95F02","p4"="#7570B3",
+  "p5"="#E7298A","p6"="#66A61E","p7"="#E6AB02",
+  "p8"="#000000","p9"="#7A7A7A"
+)
+color_map <- vanilla_colors
+
+color_map_split <- c(
+  color_map,
+  "p8 children"="#000000",
+  "p8 adults"  ="#A6761D",
+  "p6 children"= unname(vanilla_colors["p6"])
+)
+# guard against stray spaces
+names(color_map_split) <- stringr::str_squish(names(color_map_split))
+
+# ---- Helpers: cumulative and percent ----
+cum_by_date <- function(df, group_vars, date_col = "submitdate"){
+  df %>%
+    dplyr::mutate(date = lubridate::as_date(.data[[date_col]])) %>%
+    dplyr::filter(!is.na(date)) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_vars)), date) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_vars))) %>%
+    tidyr::complete(
+      date = seq(min(date, na.rm = TRUE), max(date, na.rm = TRUE), by = "day"),
+      fill = list(n = 0)
+    ) %>%
+    dplyr::arrange(dplyr::across(dplyr::all_of(group_vars)), date) %>%
+    dplyr::mutate(cum_n = cumsum(n)) %>%
+    dplyr::ungroup()
+}
+add_percent_vanilla <- function(df_cum){
+  df_cum %>%
+    dplyr::mutate(
+      project_id = paste0("p", project),
+      target = suppressWarnings(as.numeric(total_targets[project_id])),
+      pct = ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*cum_n/target))
+    )
+}
+add_percent_split <- function(df_cum){
+  df_cum %>%
+    dplyr::mutate(project_id = paste0("p", project)) %>%
+    dplyr::left_join(targets_split, by = c("project","sample")) %>%
+    dplyr::mutate(
+      proj_target   = suppressWarnings(as.numeric(total_targets[project_id])),
+      sample_target = dplyr::coalesce(target, proj_target)
+    ) %>%
+    dplyr::select(-target) %>%
+    dplyr::mutate(
+      pct    = ifelse(is.na(sample_target) | sample_target <= 0, NA_real_, pmin(100, 100*cum_n/sample_target)),
+      target = sample_target
+    )
 }
 
-df_complete <- if (length(rows_complete)) bind_rows(rows_complete) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
-df_miss_q   <- if (length(rows_missing_q)) bind_rows(rows_missing_q) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
-df_miss_c   <- if (length(rows_missing_c)) bind_rows(rows_missing_c) else tibble(sample=character(), project=integer(), id=character(), submitdate=character())
+# ---- Build series ----
+vanilla_cum <- timeline_raw %>%
+  dplyr::mutate(sample = "ALL") %>%
+  cum_by_date(group_vars = c("project", "sample")) %>%
+  add_percent_vanilla() %>%
+  dplyr::mutate(label = paste0("p", project))
 
-# -------------------- Write OVERVIEW workbook (includes submitdate) --------------------
-overview_name <- sprintf("%s_id_completeness_report.xlsx", cog_date_tag)
-overview_path <- file.path(DATA_DIR, overview_name)
-
-openxlsx::write.xlsx(
-  list(
-    complete = df_complete,
-    missing_questionnaire = df_miss_q,
-    missing_cogtest = df_miss_c
+split_cum <- timeline_raw %>%
+  dplyr::mutate(sample = dplyr::case_when(
+    project == 8 & stringr::str_detect(sample, "adult") ~ "adults",
+    project == 8 & stringr::str_detect(sample, "child") ~ "children",
+    project == 6                                       ~ "children",
+    TRUE                                               ~ "ALL"
+  )) %>%
+  cum_by_date(group_vars = c("project", "sample")) %>%
+  add_percent_split() %>%
+  dplyr::mutate(label = dplyr::case_when(
+    project == 8 & sample == "children" ~ "p8 children",
+    project == 8 & sample == "adults"   ~ "p8 adults",
+    project == 6 & sample == "children" ~ "p6 children",
+    TRUE                                ~ paste0("p", project)
   ),
-  file = overview_path,
-  overwrite = TRUE
+  label = stringr::str_squish(label))  # remove hidden spaces
+
+# ---- Regression (linear) + 95% Newey–West CI (mean fit) ----
+fit_project_lm <- function(df_grp){
+  if (nrow(df_grp) < 2 || max(df_grp$cum_n, na.rm = TRUE) == 0) return(NULL)
+  df_grp <- df_grp %>% dplyr::mutate(tnum = as.numeric(date))
+  mod <- try(stats::lm(cum_n ~ tnum, data = df_grp), silent = TRUE)
+  if (inherits(mod, "try-error")) return(NULL)
+  
+  # Automatic NW bandwidth; HAC covariance for coefficients
+  bw  <- try(sandwich::bwNeweyWest(mod), silent = TRUE)
+  if (inherits(bw, "try-error") || !is.finite(bw)) bw <- 0
+  Vnw <- sandwich::NeweyWest(mod, lag = bw, prewhite = FALSE, adjust = TRUE)
+  
+  list(model = mod, Vnw = Vnw, df = stats::df.residual(mod), bw = bw)
+}
+predict_lm_ci_nw <- function(fit, date_seq){
+  newd <- tibble::tibble(date = date_seq, tnum = as.numeric(date_seq))
+  # Design matrix matches cum_n ~ tnum (intercept + slope)
+  Xnew <- stats::model.matrix(~ tnum, data = newd)
+  beta <- stats::coef(fit$model)
+  fitv <- as.numeric(Xnew %*% beta)
+  
+  # SE_mean = sqrt(diag(X Vnw X'))
+  Vnw  <- fit$Vnw
+  XV   <- Xnew %*% Vnw
+  se_m <- sqrt(pmax(0, diag(XV %*% t(Xnew))))
+  tval <- stats::qt(0.975, df = fit$df)
+  
+  tibble::tibble(
+    date = date_seq,
+    fit  = pmax(0, fitv),
+    lwr  = pmax(0, fitv - tval * se_m),
+    upr  = pmax(0, fitv + tval * se_m)
+  )
+}
+
+# ---- X-axis ticks: fixed origin (01.08.2024), 4-month steps ----
+mk_four_month_breaks <- function(start_origin = as.Date("2024-08-01"),
+                                 last_needed_date) {
+  s <- as.Date(start_origin)
+  e <- as.Date(last_needed_date)
+  seq(s, e, by = "4 months")
+}
+
+# ---- Plot helper ----
+plot_timeline <- function(df, layout = c("vanilla","split"), with_pred = FALSE,
+                          abs_cap = c("max","zoom"),
+                          pred_end = as.Date(NA)){
+  layout   <- match.arg(layout)
+  abs_cap  <- match.arg(abs_cap)
+  has_pred <- isTRUE(with_pred)
+  
+  # colors + y ceiling
+  if (layout == "vanilla") {
+    df <- df %>% dplyr::mutate(col_lab = label)
+    col_map <- color_map
+    y_abs_limit <- if (abs_cap=="max") max_target_vanilla else {
+      df %>% dplyr::group_by(col_lab) %>% dplyr::slice_max(date, n = 1, with_ties = FALSE) %>%
+        dplyr::ungroup() %>% dplyr::summarise(mx = max(cum_n, na.rm = TRUE)) %>% dplyr::pull(mx)
+    }
+    legend_order <- c("p2","p3","p4","p5","p6","p7","p8","p9")
+    legend_order <- legend_order[legend_order %in% unique(df$col_lab)]
+  } else {
+    df <- df %>% dplyr::mutate(col_lab = label)
+    col_map <- color_map_split
+    y_abs_limit <- if (abs_cap=="max") max_target_split else {
+      df %>% dplyr::group_by(col_lab) %>% dplyr::slice_max(date, n = 1, with_ties = FALSE) %>%
+        dplyr::ungroup() %>% dplyr::summarise(mx = max(cum_n, na.rm = TRUE)) %>% dplyr::pull(mx)
+    }
+    legend_order <- c("p2","p3","p4","p5","p6 children","p7","p8 adults","p8 children","p9")
+    legend_order <- legend_order[legend_order %in% unique(df$col_lab)]
+  }
+  if (!is.finite(y_abs_limit) || is.na(y_abs_limit)) y_abs_limit <- NA_real_
+  
+  # X range and breaks
+  dmax_emp <- max(df$date, na.rm = TRUE)
+  ref_date <- as.Date("2027-12-31")
+  if (has_pred && !is.na(pred_end)) {
+    dmax <- max(dmax_emp, pred_end, ref_date)
+  } else {
+    dmax <- dmax_emp
+  }
+  dmin <- as.Date("2024-08-01")
+  breaks <- mk_four_month_breaks(dmin, dmax)
+  
+  # Prediction series (truncate at first target/100% hit; end on ball)
+  pred_df <- NULL; balls_abs <- NULL; balls_pct <- NULL
+  if (has_pred) {
+    # Optional rule: hide p6 regression in vanilla (as requested earlier)
+    if (layout == "vanilla") df <- df %>% dplyr::filter(col_lab != "p6")
+    pred_df <- df %>% dplyr::group_by(col_lab) %>% dplyr::group_split()
+    pred_df <- purrr::map_dfr(pred_df, function(grp){
+      lab <- unique(grp$col_lab)
+      dsub <- grp %>% dplyr::select(date, cum_n, target) %>% dplyr::distinct()
+      if (!nrow(dsub) || all(is.na(dsub$cum_n))) return(NULL)
+      fitinfo <- fit_project_lm(dsub); if (is.null(fitinfo)) return(NULL)
+      end_date <- dmax
+      dseq <- seq(min(dsub$date, na.rm = TRUE), end_date, by = "day")
+      preds <- predict_lm_ci_nw(fitinfo, dseq) %>%
+        dplyr::mutate(target = dsub$target[1], col_lab = lab)
+      tgt <- preds$target[1]
+      hit_idx_abs <- if (!is.na(tgt) && is.finite(tgt) && tgt > 0) which(preds$fit >= tgt)[1] else NA_integer_
+      if (!is.na(hit_idx_abs)) preds <- preds[1:hit_idx_abs, , drop = FALSE]
+      preds <- preds %>%
+        dplyr::mutate(
+          pct_fit = ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*fit/target)),
+          pct_lwr = ifelse(is.na(target) | target <= 0, NA_real_, pmax(0, pmin(100, 100*lwr/target))),
+          pct_upr = ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*upr/target))
+        )
+      preds$finished_abs <- FALSE
+      if (!is.na(hit_idx_abs)) preds$finished_abs[nrow(preds)] <- TRUE
+      hit_idx_pct <- which(preds$pct_fit >= 100)[1]
+      preds$finished_pct <- FALSE
+      if (!is.na(hit_idx_pct)) preds$finished_pct[hit_idx_pct] <- TRUE
+      preds
+    })
+    balls_abs <- pred_df %>% dplyr::filter(finished_abs)
+    balls_pct <- pred_df %>% dplyr::filter(finished_pct)
+  }
+  
+  # Aesthetics
+  line_size <- 1.1
+  pred_size <- 0.9
+  ball_size <- 2.8
+  rib_alpha <- 0.18
+  
+  # Titles / captions
+  main_title <- "Sample size over time via complete backbone datasets"
+  perc_sub_emp  <- "Top: absolute | Bottom: percent of target sample size"
+  perc_sub_pred <- paste0(
+    perc_sub_emp,
+    " \u2022 Shaded: 95% Newey\u2013West CI = \u0177\u0302 \u00B1 t\u2080.\u2089\u2087\u2085,df \u221A(x\u2032 V\u2099\u2093 x)"
+  )
+  
+  # Vline at 31.12.2027 only for prediction plots
+  vline_abs <- if (has_pred) ggplot2::geom_vline(xintercept = as.numeric(ref_date),
+                                                 linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
+  vline_pct <- if (has_pred) ggplot2::geom_vline(xintercept = as.numeric(ref_date),
+                                                 linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
+  
+  # Absolute panel
+  y_top <- y_abs_limit
+  if (has_pred && is.finite(y_top)) y_top <- y_top + 1  # tiny headroom so endpoint balls aren’t clipped
+  p_abs <- ggplot2::ggplot() +
+    ggplot2::geom_line(data = df, ggplot2::aes(x = date, y = cum_n, color = col_lab), linewidth = line_size) +
+    vline_abs +
+    ggplot2::scale_x_date(breaks = breaks, labels = scales::label_date(format = "%d.%m.%Y"),
+                          expand = ggplot2::expansion(mult = c(0, 0.01))) +
+    ggplot2::scale_y_continuous(limits = c(0, y_top), expand = ggplot2::expansion(mult = c(0, 0))) +
+    ggplot2::labs(x = NULL, y = "Cumulative sample size per project", title = main_title) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "right", legend.box = "vertical") +
+    ggplot2::scale_color_manual(values = col_map, name = NULL,
+                                limits = legend_order, breaks = legend_order, drop = FALSE,
+                                guide = ggplot2::guide_legend(ncol = 1))
+  if (has_pred && nrow(pred_df)) {
+    p_abs <- p_abs +
+      ggplot2::geom_ribbon(data = pred_df, ggplot2::aes(x = date, ymin = lwr, ymax = upr, fill = col_lab),
+                           alpha = rib_alpha, inherit.aes = FALSE) +
+      ggplot2::geom_line(data = pred_df, ggplot2::aes(x = date, y = fit, color = col_lab),
+                         linewidth = pred_size, linetype = "solid") +
+      ggplot2::scale_fill_manual(values = col_map, guide = "none",
+                                 limits = legend_order, breaks = legend_order, drop = FALSE)
+    if (nrow(balls_abs)) {
+      p_abs <- p_abs + ggplot2::geom_point(data = balls_abs,
+                                           ggplot2::aes(x = date, y = fit, color = col_lab), size = ball_size)
+    }
+  }
+  
+  # Percent panel
+  p_pct <- ggplot2::ggplot() +
+    ggplot2::geom_line(data = df, ggplot2::aes(x = date, y = pct, color = col_lab), linewidth = line_size) +
+    vline_pct +
+    ggplot2::scale_x_date(breaks = breaks, labels = scales::label_date(format = "%d.%m.%Y"),
+                          expand = ggplot2::expansion(mult = c(0, 0.01))) +
+    ggplot2::scale_y_continuous(limits = c(0, 100), breaks = c(0,25,50,75,100)) +
+    ggplot2::labs(x = NULL, y = "Percent of target sample size",
+                  subtitle = if (has_pred) perc_sub_pred else perc_sub_emp) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "right", legend.box = "vertical") +
+    ggplot2::scale_color_manual(values = col_map, name = NULL,
+                                limits = legend_order, breaks = legend_order, drop = FALSE,
+                                guide = ggplot2::guide_legend(ncol = 1))
+  if (has_pred && nrow(pred_df)) {
+    p_pct <- p_pct +
+      ggplot2::geom_ribbon(data = pred_df, ggplot2::aes(x = date, ymin = pct_lwr, ymax = pct_upr, fill = col_lab),
+                           alpha = rib_alpha, inherit.aes = FALSE) +
+      ggplot2::geom_line(data = pred_df, ggplot2::aes(x = date, y = pct_fit, color = col_lab),
+                         linewidth = pred_size, linetype = "solid") +
+      ggplot2::scale_fill_manual(values = col_map, guide = "none",
+                                 limits = legend_order, breaks = legend_order, drop = FALSE)
+    if (nrow(balls_pct)) {
+      p_pct <- p_pct + ggplot2::geom_point(data = balls_pct,
+                                           ggplot2::aes(x = date, y = pct_fit, color = col_lab), size = ball_size)
+    }
+  }
+  
+  (p_abs + ggplot2::theme(legend.position = "right")) /
+    (p_pct + ggplot2::theme(legend.position = "none")) +
+    patchwork::plot_layout(heights = c(1,1), guides = "collect")
+}
+
+# ---- Exports ----
+vanilla_export <- vanilla_cum %>% dplyr::transmute(date, project, label, cum_n, target, pct)
+split_export   <- split_cum   %>% dplyr::transmute(date, project, sample, label, cum_n, target, pct)
+
+file_base_vanilla <- file.path(out_dir, sprintf("%s_timeline_data_collection", datestamp_last))
+file_base_split   <- file.path(out_dir, sprintf("%s_timeline_data_collection_split", datestamp_last))
+
+# Empirical (zoomed) only
+p_vanilla_zoom <- plot_timeline(vanilla_cum, layout = "vanilla", with_pred = FALSE, abs_cap = "zoom")
+ggplot2::ggsave(paste0(file_base_vanilla, "_zoomed.png"), p_vanilla_zoom, width = png_width, height = png_height, dpi = png_dpi)
+writexl::write_xlsx(list(timeline_vanilla = vanilla_export), path = paste0(file_base_vanilla, "_zoomed.xlsx"))
+
+p_split_zoom <- plot_timeline(split_cum, layout = "split", with_pred = FALSE, abs_cap = "zoom")
+ggplot2::ggsave(paste0(file_base_split, "_zoomed.png"), p_split_zoom, width = png_width, height = png_height, dpi = png_dpi)
+writexl::write_xlsx(list(timeline_split = split_export), path = paste0(file_base_split, "_zoomed.xlsx"))
+
+# Prediction (max-cap) only, horizon to 31.12.2027, with vline & endpoint balls on target
+pred_end_date <- as.Date("2027-12-31")
+p_vanilla_pred <- plot_timeline(vanilla_cum, layout = "vanilla", with_pred = TRUE, abs_cap = "max", pred_end = pred_end_date)
+ggplot2::ggsave(paste0(file_base_vanilla, "_and-prediction.png"), p_vanilla_pred, width = png_width, height = png_height, dpi = png_dpi)
+
+p_split_pred <- plot_timeline(split_cum, layout = "split", with_pred = TRUE, abs_cap = "max", pred_end = pred_end_date)
+ggplot2::ggsave(paste0(file_base_split, "_and-prediction.png"), p_split_pred, width = png_width, height = png_height, dpi = png_dpi)
+
+# Rate summary (XLSX only; slopes/day at project level)
+rate_tbl <- vanilla_cum %>%
+  dplyr::group_by(label) %>%
+  dplyr::group_modify(~{
+    df <- .x %>% dplyr::arrange(date)
+    if (nrow(df) < 2) return(tibble::tibble(rate_per_day = NA_real_))
+    df <- df %>% dplyr::mutate(tnum = as.numeric(date))
+    fit <- try(stats::lm(cum_n ~ tnum, data = df), silent = TRUE)
+    if (inherits(fit, "try-error")) tibble::tibble(rate_per_day = NA_real_)
+    else tibble::tibble(rate_per_day = as.numeric(coef(fit)[["tnum"]]))
+  }) %>% dplyr::ungroup()
+rate_summary <- rate_tbl %>% dplyr::summarise(mean_rate = mean(rate_per_day, na.rm = TRUE),
+                                              sd_rate   = sd(rate_per_day, na.rm = TRUE))
+min_row <- rate_tbl %>% dplyr::slice_min(rate_per_day, n = 1, with_ties = FALSE)
+max_row <- rate_tbl %>% dplyr::slice_max(rate_per_day, n = 1, with_ties = FALSE)
+writexl::write_xlsx(
+  list(rates = rate_tbl, summary = rate_summary, slowest = min_row, fastest = max_row),
+  path = file.path(out_dir, sprintf("%s_data_collection_rates.xlsx", datestamp_last))
 )
 
-# -------------------- Write per-project workbooks (NO submitdate) --------------------
-write_project_workbook <- function(prj, df_complete, df_miss_q, df_miss_c) {
-  if (prj == 1) return(invisible(NULL))
-  sub_complete <- df_complete %>% filter(project == prj) %>% select(-submitdate)
-  sub_miss_q   <- df_miss_q   %>% filter(project == prj) %>% select(-submitdate)
-  sub_miss_c   <- df_miss_c   %>% filter(project == prj) %>% select(-submitdate)
-  
-  prj_dir  <- file.path(PROJ_ROOT, sprintf("%d_backbone", prj))
-  if (!dir.exists(prj_dir)) dir.create(prj_dir, recursive = TRUE, showWarnings = FALSE)
-  prj_name <- sprintf("%s_project_%d_id_completeness.xlsx", cog_date_tag, prj)
-  prj_path <- file.path(prj_dir, prj_name)
-  
-  wb <- createWorkbook()
-  addWorksheet(wb, "complete")
-  addWorksheet(wb, "missing_questionnaire")
-  addWorksheet(wb, "missing_cogtest")
-  writeData(wb, "complete", sub_complete)
-  writeData(wb, "missing_questionnaire", sub_miss_q)
-  writeData(wb, "missing_cogtest", sub_miss_c)
-  saveWorkbook(wb, prj_path, overwrite = TRUE)
-  invisible(prj_path)
-}
-
-invisible(lapply(1:9, write_project_workbook, df_complete=df_complete, df_miss_q=df_miss_q, df_miss_c=df_miss_c))
-
-cat("Overview (with submitdate):", overview_path, "\n")
-
-# -------------------- Optional: drop obvious placeholder IDs before writing ----
-# If you decide to exclude placeholder/test IDs (e.g., 0, 1, 1001, 69999), you
-# can uncomment the lines below before writing the workbooks.
-# is_placeholder_id <- function(x) {
-#   # Treat non-digits or known sentinel-like numbers as placeholders
-#   !grepl("^[0-9]+$", x) | x %in% c("0","1","1001","69999")
-# }
-# df_complete <- df_complete %>% filter(!is_placeholder_id(id))
-# df_miss_q   <- df_miss_q   %>% filter(!is_placeholder_id(id))
-# df_miss_c   <- df_miss_c   %>% filter(!is_placeholder_id(id))
+message("Saved outputs in: ", normalizePath(out_dir))

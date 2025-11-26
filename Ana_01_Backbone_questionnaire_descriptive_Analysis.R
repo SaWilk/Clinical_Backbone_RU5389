@@ -1,12 +1,13 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# FOR: Separate Backbone Data by Project  — Cleaning & Export Pipeline
+# FOR: Separate Backbone Data by Project — Cleaning & Export Pipeline
 # Authors: Saskia Wilken (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com))
 # First edited: 2025-11-07 (SW)
 #
 # Description:
 # Reads questionnaire data, filters bad rows, reverse-codes, exports per project,
-# produces demographics/health plots (bars + histograms), collapses multiple-
-# choice job/ownpsychdiagn into single plots, writes sanity logs, and keeps keys.
+# produces simple demographics plots (age density, education overlay, % women),
+# writes sanity logs, and keeps keys.
+# (Legacy helpers kept but not called.)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ---- Setup -------------------------------------------------------------------
@@ -20,8 +21,30 @@ ensure_packages <- function(pkgs) {
 ensure_packages(c(
   "readxl", "writexl", "janitor", "stringr", "dplyr", "tidyr",
   "purrr", "lubridate", "tibble", "glue", "fs", "jsonlite", "readr",
-  "ggplot2", "forcats"
+  "ggplot2", "forcats", "cluster", "tidyselect"
 ))
+
+# ---- Console clear -----------------------------------------------------------
+clear_console <- function() {
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    cat("\014"); return(invisible(TRUE))
+  }
+  if (.Platform$OS.type == "windows") {
+    try(system("cls", intern = TRUE), silent = TRUE)
+  } else {
+    try(system("clear", intern = TRUE), silent = TRUE)
+  }
+  invisible(TRUE)
+}
+# clear immediately when sourcing
+clear_console()
+
+# Project colors (as provided). We'll ignore the "* children" entries when plotting.
+vanilla_colors <- c(
+  "p2"="#1B9E77","p3"="#D95F02","p4"="#7570B3", "p5"="#E7298A",
+  "p6 children"="#66A61E","p7"="#E6AB02", "p8 children"="#000000",
+  "p8 adults" ="#A6761D", "p9"="#7A7A7A"
+)
 
 # ---- Paths & Logging ---------------------------------------------------------
 
@@ -122,6 +145,13 @@ normalize_vpid <- function(x) {
   x %>% as.character() %>% stringr::str_to_lower() %>% stringr::str_replace_all("[^a-z0-9]", "")
 }
 
+# ---- Project column detection ------------------------------------------------
+get_project_col <- function(df) {
+  if ("project" %in% names(df)) return("project")
+  if ("p" %in% names(df)) return("p")
+  return(NULL)
+}
+
 # ---- IO helpers --------------------------------------------------------------
 
 read_questionnaire <- function(filepath) {
@@ -182,36 +212,48 @@ read_groupings_for_sample <- function(sample, filepath = NULL) {
     )
   }
   
-  id_candidates <- c("vp", "vpid", "participant", "participant_id", "participantid", "vp_id", "vp-id")
-  group_candidates <- c("group", "grp", "status", "diagnosis", "dx", "health_status")
+  id_candidates <- c("vp","vpid","participant","participant_id","participantid","vp_id","vp-id")
+  group_candidates <- c("group","grp","status","diagnosis","dx","health_status")
   
   out <- purrr::map_dfr(keep, function(sh) {
-    df <- suppressMessages(readxl::read_excel(filepath, sheet = sh)) %>%
+    df_sh <- suppressMessages(readxl::read_excel(filepath, sheet = sh)) %>%
       janitor::clean_names()
     
-    id_col <- intersect(names(df), id_candidates) |> purrr::pluck(1, .default = NA_character_)
-    if (is.na(id_col)) {
-      log_msg("Sheet '", sh, "' has no recognizable ID column — skipped.")
-      return(NULL)
-    }
-    grp_col <- intersect(names(df), group_candidates) |> purrr::pluck(1, .default = NA_character_)
-    if (is.na(grp_col)) {
-      log_msg("Sheet '", sh, "' has no recognizable group column — skipped.")
-      return(NULL)
+    # Mode A: explicit ID + group column
+    id_col  <- intersect(names(df_sh), id_candidates) |> purrr::pluck(1, .default = NA_character_)
+    grp_col <- intersect(names(df_sh), group_candidates) |> purrr::pluck(1, .default = NA_character_)
+    
+    if (!is.na(id_col) && !is.na(grp_col)) {
+      p_val <- sub(glue::glue("^(p[^_]+)_{sample}$"), "\\1", sh)
+      return(
+        df_sh %>%
+          dplyr::transmute(
+            p = p_val,
+            vp_join = normalize_vpid(.data[[id_col]]),
+            group = standardize_group(.data[[grp_col]])
+          ) %>%
+          dplyr::filter(!is.na(vp_join) & !is.na(group))
+      )
     }
     
-    p_val <- sub(glue::glue("^(p[^_]+)_{sample}$"), "\\1", sh)
+    # Mode B: two columns "Patient"/"Control" with vpid values in rows
+    pat_col <- intersect(names(df_sh), c("patient","patients")) |> purrr::pluck(1, .default = NA_character_)
+    ctr_col <- intersect(names(df_sh), c("control","controls","hc")) |> purrr::pluck(1, .default = NA_character_)
+    if (!is.na(pat_col) || !is.na(ctr_col)) {
+      p_val <- sub(glue::glue("^(p[^_]+)_{sample}$"), "\\1", sh)
+      rows_pat <- if (!is.na(pat_col)) tibble::tibble(vp_join = normalize_vpid(df_sh[[pat_col]]), group = "patient") else tibble::tibble()
+      rows_ctr <- if (!is.na(ctr_col)) tibble::tibble(vp_join = normalize_vpid(df_sh[[ctr_col]]), group = "HC") else tibble::tibble()
+      bind <- dplyr::bind_rows(rows_pat, rows_ctr) %>%
+        dplyr::filter(!is.na(vp_join) & vp_join != "")
+      if (nrow(bind)) bind$p <- p_val
+      return(bind)
+    }
     
-    df %>%
-      dplyr::transmute(
-        p = p_val,
-        vp_join = normalize_vpid(.data[[id_col]]),
-        group = standardize_group(.data[[grp_col]])
-      ) %>%
-      dplyr::filter(!is.na(vp_join) & !is.na(group))
+    log_msg("Sheet '", sh, "' has no recognizable ID/group nor Patient/Control columns — skipped.")
+    NULL
   })
   
-  if (nrow(out) == 0) {
+  if (is.null(out) || nrow(out) == 0) {
     log_msg("Groupings for '", sample, "' contained no usable rows after cleaning.")
     return(NULL)
   }
@@ -221,9 +263,11 @@ read_groupings_for_sample <- function(sample, filepath = NULL) {
   out
 }
 
+# NOTE: accept 'project' or 'p' without renaming
 attach_groupings <- function(df, sample, id_guess = c("vp","vpid","participant","participant_id","participantid")) {
-  if (!"p" %in% names(df)) {
-    log_msg("No 'p' column in data — cannot attach groupings. Returning original df.")
+  proj_col <- get_project_col(df)
+  if (is.null(proj_col)) {
+    log_msg("No project column ('project' or 'p') in data — cannot attach groupings. Returning original df.")
     return(df)
   }
   grp <- read_groupings_for_sample(sample)
@@ -232,15 +276,16 @@ attach_groupings <- function(df, sample, id_guess = c("vp","vpid","participant",
   id_in_df <- intersect(names(df), id_guess)
   if (!length(id_in_df)) {
     log_msg("No recognizable participant ID column in df — joining by project only (may be too coarse).")
-    df2 <- df %>%
-      dplyr::left_join(grp %>% dplyr::select(p, group) %>% dplyr::distinct(), by = "p")
+    by_map <- setNames("p", proj_col)
+    df2 <- df %>% dplyr::left_join(grp %>% dplyr::select(p, group) %>% dplyr::distinct(), by = by_map)
     return(df2)
   }
   
   id_col <- id_in_df[1]
+  by_map <- setNames("p", proj_col)
   df %>%
     dplyr::mutate(.vp_join = normalize_vpid(.data[[id_col]])) %>%
-    dplyr::left_join(grp, by = c("p", ".vp_join" = "vp_join")) %>%
+    dplyr::left_join(grp, by = c(by_map, ".vp_join" = "vp_join")) %>%
     dplyr::select(-.vp_join)
 }
 
@@ -302,19 +347,16 @@ build_keys <- function(item_info) {
   items_by_ho <- ii %>% dplyr::group_by(higher_order_subscale) %>%
     dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
   
-  leaf <- ii %>%
-    dplyr::group_by(scale, higher_order_subscale, subscale) %>%
+  leaf <- ii %>% dplyr::group_by(scale, higher_order_subscale, subscale) %>%
     dplyr::summarise(items = list(unique(item_norm)), .groups = "drop")
   
-  ho_level <- leaf %>%
-    dplyr::group_by(scale, higher_order_subscale) %>%
+  ho_level <- leaf %>% dplyr::group_by(scale, higher_order_subscale) %>%
     dplyr::summarise(
       subscales = list(tibble::tibble(subscale = subscale, items = items)),
       .groups = "drop"
     )
   
-  nested <- ho_level %>%
-    dplyr::group_by(scale) %>%
+  nested <- ho_level %>% dplyr::group_by(scale) %>%
     dplyr::summarise(
       higher_order = list(tibble::tibble(
         higher_order_subscale = higher_order_subscale,
@@ -414,19 +456,20 @@ export_per_project <- function(df_clean, df_discard, sample) {
   readr::write_csv(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")))
   readr::write_csv(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")))
   
-  if (!"p" %in% names(df_clean)) {
-    log_msg("Column 'p' not found — skipping per-project split.")
+  proj_col <- get_project_col(df_clean)
+  if (is.null(proj_col)) {
+    log_msg("No project column ('project' or 'p') — skipping per-project split.")
     return(invisible(NULL))
   }
   
-  df_split <- split(df_clean, df_clean$p)
+  df_split <- split(df_clean, df_clean[[proj_col]])
   purrr::iwalk(df_split, function(dd, proj) {
     safe_proj <- gsub("[^A-Za-z0-9_-]+", "_", proj)
     filepath <- fs::path(out_dir, glue::glue("{sample}_project-{safe_proj}_clean.csv"))
     readr::write_csv(dd, filepath)
   })
   
-  log_msg(glue::glue("Exported {length(df_split)} project-level files for sample '{sample}'."))
+  log_msg(glue::glue("Exported {length(df_split)} project-level files for sample '{sample}' (by column '{proj_col}')."))
 }
 
 save_keys <- function(keys, sample) {
@@ -441,26 +484,30 @@ save_keys <- function(keys, sample) {
 
 safe_var <- function(x) gsub("[^A-Za-z0-9_-]+", "_", x)
 
+# FIXED: no tidyselect misuse; guard all columns safely
 label_demographics_health <- function(df) {
   out <- df
   
-  out <- out %>%
-    dplyr::mutate(
-      dplyr::across(
-        c(
-          tidyselect::any_of("gender"),
-          tidyselect::starts_with("parentsgender"),
-          tidyselect::starts_with("siblingsgender"),
-          tidyselect::starts_with("cildrengender"),
-          tidyselect::starts_with("childrengender"),
-          tidyselect::matches("^children(gender)?", ignore.case = TRUE)
-        ),
-        ~ factor(as.character(.x),
-                 levels = c("1","2","3","0","-oth-"),
-                 labels = c("female","male","nonbinary","no gender","other"))
+  # Gender-like columns
+  gender_cols <- intersect(
+    c("gender",
+      grep("^parentsgender|^siblingsgender|^cildrengender|^childrengender|^children(gender)?",
+           names(out), value = TRUE, ignore.case = TRUE)),
+    names(out)
+  )
+  if (length(gender_cols)) {
+    out <- out %>%
+      dplyr::mutate(
+        dplyr::across(
+          dplyr::all_of(gender_cols),
+          ~ factor(as.character(.x),
+                   levels = c("1","2","3","0","-oth-"),
+                   labels = c("female","male","nonbinary","no gender","other"))
+        )
       )
-    )
+  }
   
+  # Education
   if ("education" %in% names(out)) {
     out <- out %>%
       dplyr::mutate(
@@ -473,8 +520,7 @@ label_demographics_health <- function(df) {
                                       "General Qualification for University Entrance",
                                       "apprentice",
                                       "applied science (Fachhochschulabschluss)",
-                                      "diploma","bachelor","master","PhD","other")
-        )
+                                      "diploma","bachelor","master","PhD","other"))
       ) %>%
       dplyr::mutate(
         education = forcats::fct_relevel(
@@ -489,40 +535,127 @@ label_demographics_health <- function(df) {
       )
   }
   
+  # Marital status
   if ("maritalstat" %in% names(out)) {
     out <- out %>%
       dplyr::mutate(
         maritalstat = factor(as.character(maritalstat),
                              levels = c("0","1","2","3","4"),
-                             labels = c("single","relationship","married","divorced","widowed")
+                             labels = c("single","relationship","married","divorced","widowed"))
+      )
+  }
+  
+  # Eyesight / hearing (optional)
+  sens_cols <- intersect(c("eyesight","hearing"), names(out))
+  if (length(sens_cols)) {
+    out <- out %>%
+      dplyr::mutate(
+        dplyr::across(
+          dplyr::all_of(sens_cols),
+          ~ factor(as.character(.x),
+                   levels = c("0","1","2"),
+                   labels = c("normal","corrected","not corrected"))
         )
       )
   }
   
-  out <- out %>%
-    dplyr::mutate(
-      dplyr::across(
-        tidyselect::any_of(c("eyesight","hearing")),
-        ~ factor(as.character(.x),
-                 levels = c("0","1","2"),
-                 labels = c("normal","corrected","not corrected"))
-      )
+  # Binary health/contact flags (optional)
+  bin_candidates <- c("psychomedication","othermedication","ownpsychdisorder")
+  bin_candidates <- union(bin_candidates, grep("contact", names(out), value = TRUE))
+  bin_cols <- intersect(bin_candidates, names(out))
+  if (length(bin_cols)) {
+    out <- out %>% dplyr::mutate(
+      dplyr::across(dplyr::all_of(bin_cols),
+                    ~ factor(as.character(.x), levels = c("0","1"), labels = c("no","yes")))
     )
+  }
   
-  out <- out %>%
-    dplyr::mutate(
-      dplyr::across(
-        c(
-          tidyselect::any_of(c("psychomedication","othermedication","ownpsychdisorder")),
-          tidyselect::contains("contact")
-        ),
-        ~ factor(as.character(.x), levels = c("0","1"), labels = c("no","yes"))
-      )
-    )
   out
 }
 
-# -------- Multiple-choice helpers (robust to different naming styles) ---------
+# ---- Central enrichment (single source of truth) -----------------------------
+
+enrich_demographics_and_health_fields <- function(df, sample) {
+  d <- label_demographics_health(df)
+  
+  # Canonical age_years (DOB or numeric years)
+  parse_date_safely <- function(x) suppressWarnings(as.Date(x))
+  dob  <- if ("age" %in% names(d)) parse_date_safely(d$age) else as.Date(NA)
+  subm <- if ("submitdate" %in% names(d)) parse_date_safely(d$submitdate) else as.Date(NA)
+  age_num <- if ("age" %in% names(d)) suppressWarnings(as.numeric(d$age)) else rep(NA_real_, nrow(d))
+  looks_like_years <- !all(is.na(age_num)) && stats::median(age_num, na.rm = TRUE) <= 120
+  
+  d <- d %>%
+    dplyr::mutate(
+      age_years = dplyr::case_when(
+        looks_like_years ~ as.integer(floor(age_num)),
+        !is.na(dob) & !is.na(subm) ~ as.integer(floor(lubridate::interval(dob, subm) / lubridate::years(1))),
+        !is.na(dob) ~ as.integer(floor(lubridate::interval(dob, Sys.Date()) / lubridate::years(1))),
+        TRUE ~ NA_integer_
+      ),
+      height = suppressWarnings(as.numeric(.data[["height"]])),
+      weight = suppressWarnings(as.numeric(.data[["weight"]]))
+    )
+  
+  # sensible thresholds + sanity log
+  get_id_vec <- function(z) {
+    if ("vpid" %in% names(z)) z$vpid
+    else if ("vp" %in% names(z)) z$vp
+    else if ("participantid" %in% names(z)) z$participantid
+    else rep(NA_character_, nrow(z))
+  }
+  proj_col <- get_project_col(d)
+  
+  if (tolower(sample) %in% c("adults","adolescents")) {
+    age_bad    <- !is.na(d$age_years) & d$age_years < 5L
+    height_bad <- !is.na(d$height)    & d$height > 250
+    weight_bad <- !is.na(d$weight)    & d$weight < 35
+    
+    rep_rows <- function(idx, var, values, rule) {
+      if (any(idx, na.rm = TRUE)) {
+        tibble::tibble(
+          vpid = get_id_vec(d)[idx],
+          p    = if (!is.null(proj_col)) d[[proj_col]][idx] else NA_character_,
+          value = values[idx]
+        ) %>% log_sanity(sample, ., var, rule)
+      }
+    }
+    rep_rows(age_bad,    "age",    d$age_years, "below sensible threshold 5 years")
+    rep_rows(height_bad, "height", d$height,    "above sensible threshold 250 cm")
+    rep_rows(weight_bad, "weight", d$weight,    "below sensible threshold 35 kg")
+    
+    d <- d %>%
+      dplyr::mutate(
+        age_years = dplyr::if_else(age_bad,    as.integer(NA), age_years),
+        height    = dplyr::if_else(height_bad, NA_real_,       height),
+        weight    = dplyr::if_else(weight_bad, NA_real_,       weight)
+      )
+  }
+  
+  # minimal recodes used downstream
+  if ("gender" %in% names(d)) {
+    g <- as.character(d$gender)
+    g[!(g %in% c("female","male"))] <- NA_character_
+    d$gender <- factor(g, levels = c("female","male"))
+  }
+  if ("education" %in% names(d)) {
+    e <- as.character(d$education)
+    e[e %in% c("other","missing")] <- NA_character_
+    lev <- setdiff(levels(d$education), c("other","missing"))
+    d$education <- factor(e, levels = lev, ordered = TRUE)
+  }
+  if ("maritalstat" %in% names(d)) {
+    # keep 'divorced' (we collapse to 'single' only in the plot)
+    m <- as.character(d$maritalstat)
+    ord <- c("single","relationship","married","divorced","widowed")
+    d$maritalstat <- factor(m, levels = ord, ordered = TRUE)
+  }
+  
+  d
+}
+
+
+# -------- Multiple-choice helpers (legacy; used by old plotting) --------------
 
 pick_first_existing_col <- function(df, candidates) {
   for (nm in candidates) if (nm %in% names(df)) return(nm)
@@ -638,187 +771,204 @@ log_sanity <- function(sample, df_rows, var, rule_desc) {
   invisible(TRUE)
 }
 
-# Main plotting for demographics & health -------------------------------------
+# ===================== SIMPLE PLOTS (USED) ====================================
 
-plot_demographics_and_health <- function(df, ii_all, sample, questionnaire_path) {
-  # Reset sanity log
-  if (fs::file_exists(SANITY_LOG_FILE)) fs::file_delete(SANITY_LOG_FILE)
-  fs::file_create(SANITY_LOG_FILE) |> suppressWarnings()
-  
-  ii_dh <- ii_all %>%
-    dplyr::mutate(item_norm = normalize_id(.data$item),
-                  scale = as.character(.data$scale)) %>%
-    dplyr::filter(tolower(scale) %in% c("demographics","health"))
-  if (nrow(ii_dh) == 0) {
-    log_msg("No Item Information rows for scales 'demographics'/'health' — skipping plots.")
-    return(invisible(NULL))
+percent_nonmissing <- function(x) {
+  n <- length(x); nn <- sum(!is.na(x))
+  if (n == 0) return(NA_real_)
+  100 * nn / n
+}
+
+percent_nonmissing_report <- function(df_ready, proj_col) {
+  vars <- c("age_years", "education", "gender")
+  present <- intersect(vars, names(df_ready))
+  if (!length(present)) return(invisible(NULL))
+  log_msg("Non-missing coverage (%):")
+  for (v in present) {
+    p <- percent_nonmissing(df_ready[[v]])
+    log_msg(glue::glue("  • {v}: {sprintf('%.1f', p)}% non-missing (overall)"))
   }
-  col_map <- tibble::tibble(orig = names(df), item_norm = normalize_id(names(df)))
-  cols <- col_map %>%
-    dplyr::inner_join(ii_dh %>% dplyr::select(item_norm), by = "item_norm") %>%
-    dplyr::pull(orig) %>% unique()
-  if (!length(cols)) {
-    log_msg("No matching demographics/health columns found in data — skipping plots.")
-    return(invisible(NULL))
-  }
-  date_str <- extract_date_string(questionnaire_path)
-  out_dir  <- fs::path(DIR_ANALYSIS_BASE, paste0(date_str, "_", sample))
-  if (fs::dir_exists(out_dir)) {
-    old_files <- fs::dir_ls(out_dir, type = "file", glob = "*")
-    if (length(old_files)) fs::file_delete(old_files)
-  } else {
-    fs::dir_create(out_dir)
-  }
-  sub <- df %>%
-    dplyr::select(dplyr::any_of(c("submitdate","vpid","vp","participantid","p","age","height","weight", cols)))
-  
-  sub <- label_demographics_health(sub)
-  
-  if ("age" %in% names(sub)) sub <- sub %>% dplyr::rename(date_birth = age)
-  sub <- sub %>%
-    dplyr::mutate(
-      quest_date = suppressWarnings(as.Date(submitdate)),
-      date_birth = suppressWarnings(as.Date(date_birth)),
-      age_years_raw = dplyr::if_else(
-        !is.na(date_birth) & !is.na(quest_date),
-        as.integer(floor(lubridate::interval(date_birth, quest_date) / lubridate::years(1))),
-        as.integer(NA)
-      )
-    )
-  
-  get_id_vec <- function(d) {
-    if ("vpid" %in% names(d)) d$vpid
-    else if ("vp" %in% names(d)) d$vp
-    else if ("participantid" %in% names(d)) d$participantid
-    else rep(NA_character_, nrow(d))
-  }
-  
-  if (tolower(sample) %in% c("adults","adolescents")) {
-    height_num <- suppressWarnings(as.numeric(sub$height))
-    weight_num <- suppressWarnings(as.numeric(sub$weight))
-    age_bad    <- !is.na(sub$age_years_raw) & sub$age_years_raw < 5L
-    height_bad <- !is.na(height_num) & height_num > 250
-    weight_bad <- !is.na(weight_num) & weight_num < 35
-    rep_rows <- function(idx, var, values, rule) {
-      if (any(idx, na.rm = TRUE)) {
-        tibble::tibble(
-          vpid = get_id_vec(sub)[idx],
-          p = if ("p" %in% names(sub)) sub$p[idx] else NA_character_,
-          value = values[idx]
-        ) %>% log_sanity(sample, ., var, rule)
+  if (!is.null(proj_col)) {
+    split_df <- split(df_ready, df_ready[[proj_col]])
+    for (proj in names(split_df)) {
+      d <- split_df[[proj]]
+      for (v in present) {
+        p <- percent_nonmissing(d[[v]])
+        log_msg(glue::glue("    - {proj}: {v}: {sprintf('%.1f', p)}% non-missing"))
       }
     }
-    rep_rows(age_bad,    "age",    sub$age_years_raw, "below sensible threshold 5 years")
-    rep_rows(height_bad, "height", height_num,        "above sensible threshold 250 cm")
-    rep_rows(weight_bad, "weight", weight_num,        "below sensible threshold 35 kg")
-    sub <- sub %>%
-      dplyr::mutate(
-        age_years = dplyr::if_else(age_bad, as.integer(NA), age_years_raw),
-        height    = dplyr::if_else(height_bad, NA_real_, height_num),
-        weight    = dplyr::if_else(weight_bad, NA_real_, weight_num)
-      )
-  } else {
-    sub <- sub %>%
-      dplyr::mutate(
-        age_years = age_years_raw,
-        height = suppressWarnings(as.numeric(height)),
-        weight = suppressWarnings(as.numeric(weight))
-      )
+  }
+  invisible(TRUE)
+}
+
+plot_simple_demographics <- function(df_ready, sample, questionnaire_path) {
+  proj_col <- get_project_col(df_ready)
+  if (is.null(proj_col)) { log_msg("Simple plots skipped: no project column ('project' or 'p')."); return(invisible(NULL)) }
+  date_str <- extract_date_string(questionnaire_path)
+  out_dir  <- fs::path(DIR_ANALYSIS_BASE, paste0(date_str, "_", sample), "simple_plots")
+  fs::dir_create(out_dir)
+  
+  to_palette_key <- function(x) {
+    x_chr <- as.character(x)
+    ifelse(x_chr == "8", "p8 adults", paste0("p", x_chr))
   }
   
-  save_plot <- function(p, fname) {
-    f <- fs::path(out_dir, fname)
-    ggplot2::ggsave(filename = f, plot = p, width = 7, height = 5, dpi = 150, limitsize = FALSE)
-    log_msg("Saved: ", f)
-  }
-  N_total <- nrow(sub)
+  # 0) coverage
+  percent_nonmissing_report(df_ready, proj_col)
   
-  # Histograms
-  hist_vars <- intersect(c("age_years","height","weight"), names(sub))
-  for (v in hist_vars) {
-    vec <- sub[[v]]
-    n_non_na <- sum(!is.na(vec))
-    mean_val <- suppressWarnings(mean(vec, na.rm = TRUE))
-    median_val <- suppressWarnings(stats::median(vec, na.rm = TRUE))
-    df_v <- tibble::tibble(value = vec)
-    p <- ggplot2::ggplot(df_v, ggplot2::aes(x = value)) +
-      ggplot2::geom_histogram(bins = 30, na.rm = TRUE) +
-      ggplot2::labs(title = paste0(sample, " — Histogram of ", v), x = v, y = "Count") +
-      ggplot2::geom_vline(xintercept = median_val, linetype = "solid") +
-      ggplot2::geom_vline(xintercept = mean_val,   linetype = "dashed") +
-      ggplot2::annotate("text", x = Inf, y = Inf,
-                        label = paste0("N=", n_non_na, "  mean=", sprintf("%.2f", mean_val),
-                                       "  median=", sprintf("%.2f", median_val)),
-                        hjust = 1.05, vjust = 1.5, size = 3)
-    save_plot(p, paste0("hist_", safe_var(v), ".png"))
-  }
+  # 1) Age density overlay (percentage; alpha = 0.2)
+  if ("age_years" %in% names(df_ready)) {
+    d_age <- df_ready %>% dplyr::filter(!is.na(age_years), !is.na(.data[[proj_col]]))
+    if (nrow(d_age)) {
+      pal_keys <- to_palette_key(d_age[[proj_col]])
+      pal <- vanilla_colors[unique(pal_keys)]; pal <- pal[!is.na(pal)]
+      use_manual <- length(pal) > 0
+      p_age <- ggplot2::ggplot(d_age, ggplot2::aes(x = age_years, color = pal_keys, fill = pal_keys)) +
+        ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
+        ggplot2::labs(title = paste0(sample, " — Age distribution by project"), x = "Age (years)", y = "Percentage") +
+        { if (use_manual) ggplot2::scale_color_manual(values = pal, drop = FALSE) else ggplot2::scale_color_discrete() } +
+        { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+        ggplot2::theme_bw(base_size = 13) +
+        ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.title = ggplot2::element_blank())
+      ggplot2::ggsave(fs::path(out_dir, "age_density_percentage.png"), p_age, width = 8, height = 5.2, dpi = 150)
+      log_msg("Saved: ", fs::path(out_dir, "age_density_percentage.png"))
+    } else { log_msg("Age plot: no complete rows (age_years + project).") }
+  } else { log_msg("Age plot: 'age_years' not in data.") }
   
-  # Categorical bars (exclude job/ownpsychdiagn variants + gender_other etc.)
-  vars_for_bars <- setdiff(cols, c("age","height","weight","submitdate"))
-  # Exclude job bracket & underscore forms
-  ex_job <- grepl("^job\\[[^\\]]+\\]$", vars_for_bars, ignore.case = TRUE) |
-    grepl("^job_\\d+_?$",        vars_for_bars, ignore.case = TRUE) |
-    grepl("^job_(other)$",       vars_for_bars, ignore.case = TRUE) |
-    grepl("^job\\[other\\]$",    vars_for_bars, ignore.case = TRUE)
-  # Exclude ownpsychdiagn bracket & underscore forms
-  ex_diag <- grepl("^ownpsychdiagn(osis)?\\[[^\\]]+\\]$", vars_for_bars, ignore.case = TRUE) |
-    grepl("^ownpsychdiagn(osis)?_[A-Za-z]+_?$",  vars_for_bars, ignore.case = TRUE) |
-    grepl("^ownpsychdiagn(osis)?_(other)$",      vars_for_bars, ignore.case = TRUE) |
-    grepl("^ownpsychdiagn(osis)?\\[other\\]$",   vars_for_bars, ignore.case = TRUE)
-  # Exclude gender_other (and variants), [other] free-text, and explicit otherdrug/psychodrug
-  ex_misc <- grepl("gender[_]?other", vars_for_bars, ignore.case = TRUE) |
-    grepl("\\[other\\]$|_other$", vars_for_bars, ignore.case = TRUE) |
-    grepl("otherdrug|psychodrug", vars_for_bars, ignore.case = TRUE)
+  # 2) Education "density" overlay (ordinal → integer ranks; alpha = 0.2)
+  if ("education" %in% names(df_ready)) {
+    d_edu <- df_ready %>% dplyr::filter(!is.na(education), !is.na(.data[[proj_col]]))
+    if (nrow(d_edu)) {
+      # drop two lowest categories
+      drop_levels <- c("no school diploma", "primary school")
+      d_edu <- d_edu %>%
+        dplyr::mutate(education = droplevels(forcats::fct_drop(education, only = drop_levels))) %>%
+        dplyr::filter(!is.na(education))
+      if (nrow(d_edu)) {
+        edu_levels <- levels(d_edu$education)
+        d_edu <- d_edu %>% dplyr::mutate(edu_rank = as.integer(education))
+        pal_keys <- to_palette_key(d_edu[[proj_col]])
+        pal <- vanilla_colors[unique(pal_keys)]; pal <- pal[!is.na(pal)]
+        use_manual <- length(pal) > 0
+        
+        p_edu_den <- ggplot2::ggplot(d_edu, ggplot2::aes(x = edu_rank, color = pal_keys, fill = pal_keys)) +
+          ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
+          ggplot2::scale_x_continuous(breaks = seq_along(edu_levels), labels = edu_levels,
+                                      expand = ggplot2::expansion(mult = c(0.02, 0.02))) +
+          ggplot2::labs(title = paste0(sample, " — Education (ordinal) density by project"),
+                        x = "Education", y = "Percentage") +
+          { if (use_manual) ggplot2::scale_color_manual(values = pal, drop = FALSE) else ggplot2::scale_color_discrete() } +
+          { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+          ggplot2::theme_bw(base_size = 13) +
+          ggplot2::theme(panel.grid.minor = ggplot2::element_blank(),
+                         axis.text.x = ggplot2::element_text(angle = 25, hjust = 1),
+                         legend.title = ggplot2::element_blank())
+        ggplot2::ggsave(fs::path(out_dir, "education_density_percentage.png"), p_edu_den, width = 9.5, height = 6.4, dpi = 150)
+        log_msg("Saved: ", fs::path(out_dir, "education_density_percentage.png"))
+      } else { log_msg("Education density: no rows after dropping low levels.") }
+    } else { log_msg("Education density: no complete rows (education + project).") }
+  } else { log_msg("Education density: 'education' not in data.") }
   
-  vars_for_bars <- vars_for_bars[!(ex_job | ex_diag | ex_misc)]
+  # 3) % Women bars (solid)
+  if ("gender" %in% names(df_ready)) {
+    d_g <- df_ready %>% dplyr::filter(!is.na(.data[[proj_col]])) %>%
+      dplyr::mutate(gender = as.character(gender)) %>%
+      dplyr::filter(gender %in% c("female", "male"))
+    if (nrow(d_g)) {
+      women_pct <- d_g %>%
+        dplyr::group_by(.data[[proj_col]]) %>%
+        dplyr::summarise(N = dplyr::n(),
+                         n_female = sum(gender == "female"),
+                         pct_female = ifelse(N > 0, 100 * n_female / N, NA_real_),
+                         .groups = "drop") %>%
+        dplyr::mutate(palette_key = to_palette_key(.data[[proj_col]]))
+      pal <- vanilla_colors[unique(women_pct$palette_key)]; pal <- pal[!is.na(pal)]
+      use_manual <- length(pal) > 0
+      women_pct[[proj_col]] <- factor(women_pct[[proj_col]], levels = women_pct[[proj_col]])
+      p_w <- ggplot2::ggplot(women_pct, ggplot2::aes(x = .data[[proj_col]], y = pct_female, fill = palette_key)) +
+        ggplot2::geom_col(width = 0.75) +
+        ggplot2::geom_text(ggplot2::aes(label = sprintf("%.1f%%", pct_female)), vjust = -0.3, size = 3) +
+        ggplot2::labs(title = paste0(sample, " — % Women by project"), x = "Project", y = "Percentage women") +
+        { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+        ggplot2::theme_bw(base_size = 13) +
+        ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.position = "none")
+      ggplot2::ggsave(fs::path(out_dir, "women_percentage_by_project.png"), p_w, width = 8, height = 5.2, dpi = 150)
+      log_msg("Saved: ", fs::path(out_dir, "women_percentage_by_project.png"))
+    } else { log_msg("Women plot: no rows with usable gender + project.") }
+  } else { log_msg("Women plot: 'gender' not in data.") }
   
-  # Belt & suspenders: remove anything starting with job/ownpsychdiagn anyway
-  vars_for_bars <- vars_for_bars[!grepl("^job($|\\[|_)", vars_for_bars, ignore.case = TRUE)]
-  vars_for_bars <- vars_for_bars[!grepl("^ownpsychdiagn(osis)?($|\\[|_)", vars_for_bars, ignore.case = TRUE)]
+  # 4) % Single bars (collapse divorced → single)
+  if ("maritalstat" %in% names(df_ready)) {
+    d_m <- df_ready %>% dplyr::filter(!is.na(.data[[proj_col]]), !is.na(maritalstat))
+    if (nrow(d_m)) {
+      d_m <- d_m %>%
+        dplyr::mutate(mstat = as.character(maritalstat),
+                      mstat = dplyr::if_else(mstat == "divorced", "single", mstat),
+                      is_single = mstat == "single")
+      single_pct <- d_m %>%
+        dplyr::group_by(.data[[proj_col]]) %>%
+        dplyr::summarise(N = dplyr::n(),
+                         n_single = sum(is_single, na.rm = TRUE),
+                         pct_single = ifelse(N > 0, 100 * n_single / N, NA_real_),
+                         .groups = "drop") %>%
+        dplyr::mutate(palette_key = to_palette_key(.data[[proj_col]]))
+      pal <- vanilla_colors[unique(single_pct$palette_key)]; pal <- pal[!is.na(pal)]
+      use_manual <- length(pal) > 0
+      single_pct[[proj_col]] <- factor(single_pct[[proj_col]], levels = single_pct[[proj_col]])
+      p_s <- ggplot2::ggplot(single_pct, ggplot2::aes(x = .data[[proj_col]], y = pct_single, fill = palette_key)) +
+        ggplot2::geom_col(width = 0.75) +
+        ggplot2::geom_text(ggplot2::aes(label = sprintf("%.1f%%", pct_single)), vjust = -0.3, size = 3) +
+        ggplot2::labs(title = paste0(sample, " — % Single (divorced → single) by project"),
+                      x = "Project", y = "Percentage single") +
+        { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+        ggplot2::theme_bw(base_size = 13) +
+        ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.position = "none")
+      ggplot2::ggsave(fs::path(out_dir, "single_percentage_by_project.png"), p_s, width = 8, height = 5.2, dpi = 150)
+      log_msg("Saved: ", fs::path(out_dir, "single_percentage_by_project.png"))
+    } else { log_msg("Single plot: no usable rows (maritalstat + project).") }
+  } else { log_msg("Single plot: 'maritalstat' not in data.") }
   
-  if (length(vars_for_bars)) {
-    for (v in vars_for_bars) {
-      x <- sub[[v]]
-      xf <- if (is.factor(x)) x else factor(as.character(x))
-      xf <- forcats::fct_explicit_na(xf, na_level = "missing")
-      df_v <- tibble::tibble(value = xf)
-      n_non_na <- sum(!is.na(x))
-      p <- ggplot2::ggplot(df_v, ggplot2::aes(x = value)) +
-        ggplot2::geom_bar(na.rm = TRUE) +
-        ggplot2::geom_text(
-          ggplot2::aes(label = paste0(sprintf("%.1f", 100*after_stat(count)/N_total), "%")),
-          stat = "count", vjust = -0.2, size = 3
-        ) +
-        ggplot2::labs(title = paste0(sample, " — ", v), x = v, y = "Count") +
-        ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1)) +
-        ggplot2::annotate("text", x = Inf, y = Inf,
-                          label = paste0("N=", n_non_na),
-                          hjust = 1.1, vjust = 1.5, size = 3)
-      save_plot(p, paste0("bar_", safe_var(v), ".png"))
-    }
-  } else {
-    log_msg("No variables to bar-plot after exclusions.")
-  }
+  # 5) Height density overlay (percentage; alpha = 0.2)
+  if ("height" %in% names(df_ready)) {
+    d_h <- df_ready %>% dplyr::filter(!is.na(height), !is.na(.data[[proj_col]]))
+    if (nrow(d_h)) {
+      pal_keys <- to_palette_key(d_h[[proj_col]])
+      pal <- vanilla_colors[unique(pal_keys)]; pal <- pal[!is.na(pal)]
+      use_manual <- length(pal) > 0
+      p_h <- ggplot2::ggplot(d_h, ggplot2::aes(x = height, color = pal_keys, fill = pal_keys)) +
+        ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
+        ggplot2::labs(title = paste0(sample, " — Height distribution by project"), x = "Height (cm)", y = "Percentage") +
+        { if (use_manual) ggplot2::scale_color_manual(values = pal, drop = FALSE) else ggplot2::scale_color_discrete() } +
+        { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+        ggplot2::theme_bw(base_size = 13) +
+        ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.title = ggplot2::element_blank())
+      ggplot2::ggsave(fs::path(out_dir, "height_density_percentage.png"), p_h, width = 8, height = 5.2, dpi = 150)
+      log_msg("Saved: ", fs::path(out_dir, "height_density_percentage.png"))
+    } else { log_msg("Height density: no complete rows (height + project).") }
+  } else { log_msg("Height density: 'height' not in data.") }
   
-  # Multiple-choice aggregates (single plots)
-  job_count <- compute_job_count(sub)
-  plot_mc_counts(
-    job_count,
-    title   = paste0(sample, " — Current occupation (multiple responses)"),
-    out_file = fs::path(out_dir, "bar_job_multiple_choice.png"),
-    N_total = N_total
-  )
-  
-  diag_count <- compute_diag_count(sub)
-  plot_mc_counts(
-    diag_count,
-    title    = paste0(sample, " — Own psychological diagnosis (multiple responses)"),
-    out_file = fs::path(out_dir, "bar_ownpsychdiagnosis_multiple_choice.png"),
-    N_total  = N_total
-  )
+  # 6) Weight density overlay (percentage; alpha = 0.2)
+  if ("weight" %in% names(df_ready)) {
+    d_w <- df_ready %>% dplyr::filter(!is.na(weight), !is.na(.data[[proj_col]]))
+    if (nrow(d_w)) {
+      pal_keys <- to_palette_key(d_w[[proj_col]])
+      pal <- vanilla_colors[unique(pal_keys)]; pal <- pal[!is.na(pal)]
+      use_manual <- length(pal) > 0
+      p_wt <- ggplot2::ggplot(d_w, ggplot2::aes(x = weight, color = pal_keys, fill = pal_keys)) +
+        ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
+        ggplot2::labs(title = paste0(sample, " — Weight distribution by project"), x = "Weight (kg)", y = "Percentage") +
+        { if (use_manual) ggplot2::scale_color_manual(values = pal, drop = FALSE) else ggplot2::scale_color_discrete() } +
+        { if (use_manual) ggplot2::scale_fill_manual(values = pal, drop = FALSE) else ggplot2::scale_fill_discrete() } +
+        ggplot2::theme_bw(base_size = 13) +
+        ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.title = ggplot2::element_blank())
+      ggplot2::ggsave(fs::path(out_dir, "weight_density_percentage.png"), p_wt, width = 8, height = 5.2, dpi = 150)
+      log_msg("Saved: ", fs::path(out_dir, "weight_density_percentage.png"))
+    } else { log_msg("Weight density: no complete rows (weight + project).") }
+  } else { log_msg("Weight density: 'weight' not in data.") }
   
   invisible(TRUE)
 }
+
 
 # ---- One-sample driver ------------------------------------------
 
@@ -827,7 +977,7 @@ process_sample <- function(sample,
                            iteminfo_path = NULL,
                            scoring_df = NULL,
                            drop_criteria_fun = remove_flagged_rows) {
-  
+  clear_console()
   log_msg("\n--- Processing sample: ", sample, " ---")
   
   if (is.null(questionnaire_path)) questionnaire_path <- latest_questionnaire_for_sample(sample)
@@ -860,29 +1010,30 @@ process_sample <- function(sample,
     orig      = names(q_clean0),
     item_norm = normalize_id(names(q_clean0))
   ) %>%
-    dplyr::inner_join(ii %>% dplyr::select(item_norm, scale, reverse_coded),
-                      by = "item_norm") %>%
+    dplyr::inner_join(ii %>% dplyr::select(item_norm, scale, reverse_coded), by = "item_norm") %>%
     dplyr::distinct(orig, .keep_all = TRUE)
   
   minmax <- scoring_df %>% dplyr::select(scale, min, max)
-  col_meta <- col_map %>%
-    dplyr::left_join(minmax, by = "scale") %>%
-    dplyr::select(orig, reverse_coded, min, max)
+  col_meta <- col_map %>% dplyr::left_join(minmax, by = "scale") %>% dplyr::select(orig, reverse_coded, min, max)
   
   q_final <- reverse_code_wide(q_clean0, unique(col_map$orig), col_meta)
   q_final <- q_final %>% dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
   q_final <- attach_groupings(q_final, sample)
   
-  plot_demographics_and_health(q_final, ii_all, sample, questionnaire_path)
+  # Enriched master (used for simple plots & exports)
+  q_ready <- enrich_demographics_and_health_fields(q_final, sample)
   
+  # >>> SIMPLE PLOTS ONLY
+  plot_simple_demographics(q_ready, sample, questionnaire_path)
+  
+  # Keys & exports
   keys <- build_keys(ii)
   save_keys(keys, sample)
-  
-  export_per_project(q_final, q_discard, sample)
+  export_per_project(q_ready, q_discard, sample)
   
   log_msg("--- Done sample: ", sample, " ---\n")
   invisible(list(
-    data_clean = q_final,
+    data_clean = q_ready,
     data_discarded = q_discard,
     keys = keys
   ))
@@ -893,8 +1044,12 @@ process_sample <- function(sample,
 ALL_SAMPLES <- c("adolescents", "adults", "children_p6", "children_parents", "parents_p6")
 SAMPLES_TO_PROCESS <- c("adults")
 
-SCORING <- read_scoring(latest_scoring())
+SCORING_PATH <- latest_scoring()
+if (is.na(SCORING_PATH)) {
+  stop(glue::glue(
+    "No scoring file found in '{DIR_INFO}'. Expected something like 'YYYY-MM-DD_Scoring.xlsx'."
+  ))
+}
+SCORING <- read_scoring(SCORING_PATH)
 
 results <- purrr::map(SAMPLES_TO_PROCESS, ~ process_sample(.x, scoring_df = SCORING))
-
-log_msg("\nPipeline finished.\n")

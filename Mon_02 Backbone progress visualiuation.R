@@ -418,7 +418,7 @@ p2 <- ggplot(plot_long2, aes(x = x, y = pct)) +
   labs(
     x = NULL,
     y = "Percent of target sample size",
-    title = "Completed backbone datasets (p6 infants/children + p8 children/adults)",
+    title = "Completed backbone datasets",
     caption = paste0("Status: ", datestamp)
   ) +
   theme_classic(base_size = 12) +
