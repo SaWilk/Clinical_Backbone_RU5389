@@ -24,7 +24,20 @@ copy_psytool_files <- function(
   }
   
   valid_samples <- c("adults", "adolescents", "children", "children_parents", "adults_remote")
-  sample_root <- function(sample) file.path(base_dir, "raw_data", "psytoolkit", sample, "experiment_data")
+  sample_root <- function(sample) {
+    root <- file.path(base_dir, "raw_data", "psytoolkit")
+    # prefer timestamped folders like PsyToolkitData_RU5389_BB_adults_YYYY_MM_DD_HH_MM
+    pat  <- paste0("^PsyToolkitData_.*_", sample, "_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+    hits <- list.dirs(root, full.names = FALSE, recursive = FALSE)
+    hits <- hits[grepl(pat, hits, ignore.case = TRUE)]
+    if (length(hits)) {
+      # pick the lexicographically last (newest) folder
+      best <- hits[order(hits, decreasing = TRUE)][1]
+      return(file.path(root, best, "experiment_data"))
+    }
+    # fallback to old static layout if the timestamped one doesn’t exist
+    file.path(root, sample, "experiment_data")
+  }
   
   # ---------- metadata ----------
   meta_df <- NULL

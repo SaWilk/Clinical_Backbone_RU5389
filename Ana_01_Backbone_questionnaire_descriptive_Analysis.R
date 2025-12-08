@@ -7,7 +7,6 @@
 # Reads questionnaire data, filters bad rows, reverse-codes, exports per project,
 # produces simple demographics plots (age density, education overlay, % women),
 # writes sanity logs, and keeps keys.
-# (Legacy helpers kept but not called.)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ---- Setup -------------------------------------------------------------------
@@ -65,7 +64,7 @@ script_dir <- function() {
 
 ROOT <- script_dir()
 
-DIR_QUESTIONNAIRES <- fs::path(ROOT, "01_project_data", "all_projects_backbone", "questionnaires")
+DIR_QUESTIONNAIRES  <- fs::path(ROOT, "01_project_data", "all_projects_backbone", "questionnaires")
 DIR_INFO            <- fs::path(ROOT, "information")
 DIR_EXPORT          <- fs::path(ROOT, "02_cleaned")
 DIR_KEYS            <- fs::path(DIR_EXPORT, "keys")
@@ -73,6 +72,7 @@ DIR_LOGS            <- fs::path(ROOT, "logs")
 DIR_PRIVATE         <- fs::path(ROOT, "private_information")
 DIR_ANALYSIS_BASE   <- fs::path(ROOT, "out", "internal_data_analysis", "demographics_and_health")
 SANITY_LOG_FILE     <- fs::path(DIR_LOGS, "sanity_check_backbone_data_log.txt")
+DIR_FUNCTIONS       <- fs::path(ROOT, "functions")
 
 fs::dir_create(DIR_EXPORT)
 fs::dir_create(DIR_KEYS)
@@ -88,6 +88,27 @@ log_msg <- function(..., .sep = "", .newline = TRUE) {
   cat(msg, file = logfile, append = TRUE)
 }
 
+## Source required functions ---------------------------------------------------
+source(file.path(DIR_FUNCTIONS, "plot_density_by_project.R"))
+source(file.path(DIR_FUNCTIONS, "write_excel_friendly_csv.R"))
+source(file.path(DIR_FUNCTIONS, "normalize_id.R"))
+source(file.path(DIR_FUNCTIONS, "get_project_col.R"))
+source(file.path(DIR_FUNCTIONS, "extract_date_string.R"))
+source(file.path(DIR_FUNCTIONS, "latest_questionnaire_for_sample.R"))
+source(file.path(DIR_FUNCTIONS, "safe_var.R"))
+
+# --- Normalizers --------------------------------------------------------------
+
+# "8", "p8", "P8 adults", "8_adolescents" -> "p8"
+normalize_project_key <- function(x) {
+  x0  <- x %>% as.character() %>% stringr::str_trim() %>% stringr::str_to_lower()
+  num <- stringr::str_match(x0, "p?\\s*(\\d+)")[,2]
+  ifelse(is.na(num), NA_character_, paste0("p", num))
+}
+
+# collapse to letters only for fuzzy contains comparisons: "P8 Adults" -> "adults"
+norm_token <- function(x) gsub("[^a-z]", "", tolower(paste(x)))
+
 # ---- Filename helpers --------------------------------------------------------
 
 normalize_sample_case <- function(sample) {
@@ -99,12 +120,6 @@ extract_date <- function(x) {
   suppressWarnings(lubridate::ymd(d))
 }
 
-extract_date_string <- function(path) {
-  b <- basename(path)
-  d <- stringr::str_match(b, "ALL_(\\d{4}-\\d{2}-\\d{2})_")[,2]
-  ifelse(is.na(d), format(Sys.Date(), "%Y-%m-%d"), d)
-}
-
 latest_file_by_pattern <- function(dir, pattern) {
   files_all <- fs::dir_ls(dir, type = "file", fail = FALSE)
   files <- files_all[grepl(pattern, basename(files_all))]
@@ -114,9 +129,9 @@ latest_file_by_pattern <- function(dir, pattern) {
   files[1]
 }
 
-latest_questionnaire_for_sample <- function(sample) {
-  patt <- glue::glue("^ALL_\\d{{4}}-\\d{{2}}-\\d{{2}}_{sample}_questionnaire\\.xlsx$")
-  latest_file_by_pattern(DIR_QUESTIONNAIRES, patt)
+latest_questionnaire_for_sample <- function(sample) { 
+  patt <- glue::glue("^ALL_\\d{{4}}-\\d{{2}}-\\d{{2}}_{sample}_questionnaire\\.xlsx$") 
+  latest_file_by_pattern(DIR_QUESTIONNAIRES, patt) 
 }
 
 latest_iteminfo_for_sample <- function(sample) {
@@ -137,19 +152,8 @@ latest_groupings_file <- function() {
 
 # ---- Normalization helpers ---------------------------------------------------
 
-normalize_id <- function(x) {
-  x %>% as.character() %>% stringr::str_to_lower() %>% stringr::str_replace_all("[^a-z0-9]", "")
-}
-
 normalize_vpid <- function(x) {
   x %>% as.character() %>% stringr::str_to_lower() %>% stringr::str_replace_all("[^a-z0-9]", "")
-}
-
-# ---- Project column detection ------------------------------------------------
-get_project_col <- function(df) {
-  if ("project" %in% names(df)) return("project")
-  if ("p" %in% names(df)) return("p")
-  return(NULL)
 }
 
 # ---- IO helpers --------------------------------------------------------------
@@ -196,56 +200,86 @@ read_groupings_for_sample <- function(sample, filepath = NULL) {
   log_msg("Reading groupings workbook: ", filepath)
   
   sheets <- readxl::excel_sheets(filepath)
-  rx <- glue::glue("^p[^_]+_{sample}$")
-  keep <- sheets[grepl(rx, sheets)]
-  if (!length(keep)) {
-    log_msg("No sheets matching sample '", sample, "' in groupings file — skipping.")
+  
+  # Parse each sheet into: p_join ("p#") + suffix token (sample-ish label, maybe empty)
+  parsed <- purrr::map_dfr(sheets, function(sh) {
+    sh_raw <- sh
+    sh_l   <- tolower(sh_raw)
+    m      <- stringr::str_match(sh_l, "^\\s*(p?\\s*(\\d+))\\s*([\\s_-].*)?$")
+    # If no leading project number, ignore the sheet
+    if (all(is.na(m))) return(NULL)
+    num <- m[,3]
+    suf <- m[,4]
+    tibble::tibble(
+      sheet = sh_raw,
+      .p_join = paste0("p", num),
+      suffix_norm = norm_token(ifelse(is.na(suf), "", suf))
+    )
+  })
+  
+  if (!nrow(parsed)) {
+    log_msg("Groupings workbook has no 'p#' sheets — skipping.")
     return(NULL)
   }
+  
+  # Prefer sheets whose suffix mentions the current sample; else allow suffix-less
+  sample_norm <- norm_token(sample)
+  parsed <- parsed %>%
+    dplyr::mutate(
+      score = dplyr::case_when(
+        suffix_norm == "" ~ 1L,                             # neutral
+        grepl(sample_norm, suffix_norm, fixed = TRUE) ~ 2L, # preferred (matches sample)
+        TRUE ~ 0L                                           # other sample; still allowed if nothing else exists
+      )
+    )
+  
+  # We'll read all sheets, but the "score" will help when there are duplicates
+  id_candidates    <- c("vp","vp id","vpid","vp_id","vp-id","participant","participant id",
+                        "participant_id","participantid","subject","subject id","subject_id","vpid_clean")
+  group_candidates <- c("group","grp","status","diagnosis","dx","health_status","arm")
   
   standardize_group <- function(x) {
     x0 <- x %>% as.character() %>% stringr::str_trim() %>% stringr::str_to_lower()
     dplyr::case_when(
-      x0 %in% c("hc", "healthy", "control", "healthy control", "healthy_control", "healthy-control") ~ "HC",
-      x0 %in% c("patient", "pt", "case", "clinical") ~ "patient",
+      x0 %in% c("hc","healthy","control","healthy control","healthy_control","healthy-control","controls") ~ "HC",
+      x0 %in% c("patient","pt","case","clinical","patients") ~ "patient",
       TRUE ~ NA_character_
     )
   }
   
-  id_candidates <- c("vp","vpid","participant","participant_id","participantid","vp_id","vp-id")
-  group_candidates <- c("group","grp","status","diagnosis","dx","health_status")
-  
-  out <- purrr::map_dfr(keep, function(sh) {
-    df_sh <- suppressMessages(readxl::read_excel(filepath, sheet = sh)) %>%
-      janitor::clean_names()
+  # Read, clean, and tag each sheet
+  all_rows <- purrr::map_dfr(parsed$sheet, function(sh) {
+    meta <- parsed[parsed$sheet == sh, , drop = FALSE]
+    df_sh <- suppressMessages(readxl::read_excel(filepath, sheet = sh)) %>% janitor::clean_names()
     
     # Mode A: explicit ID + group column
-    id_col  <- intersect(names(df_sh), id_candidates) |> purrr::pluck(1, .default = NA_character_)
-    grp_col <- intersect(names(df_sh), group_candidates) |> purrr::pluck(1, .default = NA_character_)
+    id_col  <- intersect(names(df_sh), janitor::make_clean_names(id_candidates)) |> purrr::pluck(1, .default = NA_character_)
+    grp_col <- intersect(names(df_sh), janitor::make_clean_names(group_candidates)) |> purrr::pluck(1, .default = NA_character_)
     
     if (!is.na(id_col) && !is.na(grp_col)) {
-      p_val <- sub(glue::glue("^(p[^_]+)_{sample}$"), "\\1", sh)
-      return(
-        df_sh %>%
-          dplyr::transmute(
-            p = p_val,
-            vp_join = normalize_vpid(.data[[id_col]]),
-            group = standardize_group(.data[[grp_col]])
-          ) %>%
-          dplyr::filter(!is.na(vp_join) & !is.na(group))
-      )
+      out <- df_sh %>%
+        dplyr::transmute(
+          .p_join  = meta$.p_join[1],
+          vp_join  = normalize_vpid(.data[[id_col]]),
+          group    = standardize_group(.data[[grp_col]]),
+          .score   = meta$score[1]
+        ) %>%
+        dplyr::filter(!is.na(vp_join) & !is.na(group))
+      return(out)
     }
     
     # Mode B: two columns "Patient"/"Control" with vpid values in rows
     pat_col <- intersect(names(df_sh), c("patient","patients")) |> purrr::pluck(1, .default = NA_character_)
     ctr_col <- intersect(names(df_sh), c("control","controls","hc")) |> purrr::pluck(1, .default = NA_character_)
     if (!is.na(pat_col) || !is.na(ctr_col)) {
-      p_val <- sub(glue::glue("^(p[^_]+)_{sample}$"), "\\1", sh)
       rows_pat <- if (!is.na(pat_col)) tibble::tibble(vp_join = normalize_vpid(df_sh[[pat_col]]), group = "patient") else tibble::tibble()
       rows_ctr <- if (!is.na(ctr_col)) tibble::tibble(vp_join = normalize_vpid(df_sh[[ctr_col]]), group = "HC") else tibble::tibble()
       bind <- dplyr::bind_rows(rows_pat, rows_ctr) %>%
         dplyr::filter(!is.na(vp_join) & vp_join != "")
-      if (nrow(bind)) bind$p <- p_val
+      if (nrow(bind)) {
+        bind$.p_join <- meta$.p_join[1]
+        bind$.score  <- meta$score[1]
+      }
       return(bind)
     }
     
@@ -253,41 +287,89 @@ read_groupings_for_sample <- function(sample, filepath = NULL) {
     NULL
   })
   
-  if (is.null(out) || nrow(out) == 0) {
+  if (!nrow(all_rows)) {
     log_msg("Groupings for '", sample, "' contained no usable rows after cleaning.")
     return(NULL)
   }
   
-  out <- dplyr::distinct(out, p, vp_join, .keep_all = TRUE)
+  # If the same (.p_join, vp_join) appears multiple times (e.g., 'p8 adults' and plain 'p8'),
+  # keep the highest score (prefer sample-matching over neutral over other)
+  out <- all_rows %>%
+    dplyr::arrange(dplyr::desc(.score)) %>%
+    dplyr::distinct(.p_join, vp_join, .keep_all = TRUE) %>%
+    dplyr::select(.p_join, vp_join, group)
+  
   log_msg("Loaded ", nrow(out), " group mappings for sample '", sample, "'.")
   out
 }
 
+
 # NOTE: accept 'project' or 'p' without renaming
-attach_groupings <- function(df, sample, id_guess = c("vp","vpid","participant","participant_id","participantid")) {
+attach_groupings <- function(df, sample,
+                             id_guess = c("vp","vp id","vpid","vp_id","vp-id",
+                                          "participant","participant id","participant_id","participantid",
+                                          "subject","subject_id","subject id")) {
   proj_col <- get_project_col(df)
   if (is.null(proj_col)) {
     log_msg("No project column ('project' or 'p') in data — cannot attach groupings. Returning original df.")
+    if (!"group" %in% names(df)) df$group <- NA_character_
     return(df)
   }
-  grp <- read_groupings_for_sample(sample)
-  if (is.null(grp)) return(df)
   
-  id_in_df <- intersect(names(df), id_guess)
-  if (!length(id_in_df)) {
-    log_msg("No recognizable participant ID column in df — joining by project only (may be too coarse).")
-    by_map <- setNames("p", proj_col)
-    df2 <- df %>% dplyr::left_join(grp %>% dplyr::select(p, group) %>% dplyr::distinct(), by = by_map)
-    return(df2)
+  grp <- read_groupings_for_sample(sample)
+  if (is.null(grp)) {
+    if (!"group" %in% names(df)) df$group <- NA_character_
+    return(df)
   }
   
-  id_col <- id_in_df[1]
-  by_map <- setNames("p", proj_col)
-  df %>%
-    dplyr::mutate(.vp_join = normalize_vpid(.data[[id_col]])) %>%
-    dplyr::left_join(grp, by = c(by_map, ".vp_join" = "vp_join")) %>%
-    dplyr::select(-.vp_join)
+  # Harmonize project keys on both sides
+  df$.p_join  <- normalize_project_key(df[[proj_col]])
+  
+  # Try several ID columns; pick the join with most matches
+  df_nms_norm <- gsub("[^a-z0-9]+", "", tolower(names(df)))
+  cand_norm   <- gsub("[^a-z0-9]+", "", tolower(id_guess))
+  id_in_df    <- names(df)[df_nms_norm %in% cand_norm]
+  
+  best <- NULL; best_n <- -1; best_id <- NA_character_
+  
+  for (id_col in id_in_df) {
+    tmp <- df %>%
+      dplyr::mutate(.vp_join = normalize_vpid(.data[[id_col]])) %>%
+      dplyr::left_join(grp, by = c(".p_join", ".vp_join" = "vp_join"))
+    nmatch <- sum(!is.na(tmp$group))
+    if (nmatch > best_n) {
+      best <- tmp
+      best_n <- nmatch
+      best_id <- id_col
+    }
+  }
+  
+  df_out <-
+    if (!is.null(best)) {
+      best
+    } else {
+      df %>%
+        dplyr::left_join(grp %>% dplyr::distinct(.p_join, group), by = ".p_join")
+    }
+  
+  # Safety net: if still empty, do project-only again (no harm if already done)
+  if (!"group" %in% names(df_out) || all(is.na(df_out$group))) {
+    df_out <- df_out %>%
+      dplyr::left_join(grp %>% dplyr::distinct(.p_join, group), by = ".p_join")
+  }
+  
+  if (!"group" %in% names(df_out)) df_out$group <- NA_character_
+  df_out <- df_out %>%
+    dplyr::mutate(group = as.character(.data$group)) %>%
+    dplyr::select(-dplyr::any_of(c(".p_join", ".vp_join")))
+  
+  matched <- sum(!is.na(df_out$group))
+  log_msg(glue::glue("Grouping for '{sample}': matched {matched}/{nrow(df_out)} rows ",
+                     if (!is.na(best_id)) glue::glue("(via '{best_id}')") else "(project-only)"))
+  df_out
 }
+
+
 
 # ---- Validation & keys -------------------------------------------------------
 
@@ -447,14 +529,88 @@ reverse_code_wide <- function(df, item_cols, col_meta) {
     )
 }
 
+# ---- CAPE-specific helper: fill distress when freq = min ---------------------
+
+impute_cape_distress_from_frequency <- function(df, item_info, scoring_df) {
+  # Only proceed if CAPE is in the scoring file
+  if (!"CAPE" %in% scoring_df$scale) return(df)
+  
+  cape_row <- scoring_df %>% dplyr::filter(.data$scale == "CAPE") %>% dplyr::slice(1)
+  cape_min <- cape_row$min
+  if (is.na(cape_min)) return(df)
+  
+  # Limit to CAPE items in the item information actually used in this sample
+  if (!"scale" %in% names(item_info) || !"subscale" %in% names(item_info)) return(df)
+  ii_cape <- item_info %>%
+    dplyr::filter(.data$scale == "CAPE")
+  if (!nrow(ii_cape)) return(df)
+  
+  # Make sure we have item_norm; if not, create it as in other helpers
+  if (!"item_norm" %in% names(ii_cape)) {
+    ii_cape <- ii_cape %>%
+      dplyr::mutate(item_norm = normalize_id(.data$item))
+  }
+  
+  # Map item_norm -> actual column names in df
+  col_map <- tibble::tibble(
+    orig      = names(df),
+    item_norm = normalize_id(names(df))
+  )
+  
+  ii_cape_mapped <- ii_cape %>%
+    dplyr::inner_join(col_map, by = "item_norm")
+  if (!nrow(ii_cape_mapped)) return(df)
+  
+  # Identify frequency vs distress items and their shared numeric code ([nnn])
+  freq_tbl <- ii_cape_mapped %>%
+    dplyr::filter(tolower(.data$subscale) == "frequency") %>%
+    dplyr::mutate(code = stringr::str_extract(.data$item, "\\[(\\d+)\\]"))
+  
+  distr_tbl <- ii_cape_mapped %>%
+    dplyr::filter(tolower(.data$subscale) == "distress") %>%
+    dplyr::mutate(code = stringr::str_extract(.data$item, "\\[(\\d+)\\]"))
+  
+  pairs <- freq_tbl %>%
+    dplyr::select(code, freq_col = orig) %>%
+    dplyr::inner_join(
+      distr_tbl %>% dplyr::select(code, distr_col = orig),
+      by = "code"
+    )
+  
+  if (!nrow(pairs)) return(df)
+  
+  # For each freq–distress pair, fill missing distress when freq == cape_min
+  for (i in seq_len(nrow(pairs))) {
+    fcol <- pairs$freq_col[i]
+    dcol <- pairs$distr_col[i]
+    if (!(fcol %in% names(df)) || !(dcol %in% names(df))) next
+    
+    # ensure numeric
+    df[[fcol]] <- suppressWarnings(as.numeric(df[[fcol]]))
+    df[[dcol]] <- suppressWarnings(as.numeric(df[[dcol]]))
+    
+    idx <- !is.na(df[[fcol]]) & df[[fcol]] == cape_min & is.na(df[[dcol]])
+    if (any(idx)) {
+      df[[dcol]][idx] <- cape_min
+      log_msg("CAPE: filled ", sum(idx),
+              " distress values in '", dcol,
+              "' where freq '", fcol,
+              "' was at minimum (", cape_min, ").")
+    }
+  }
+  
+  df
+}
+
+
 # ---- Export helpers ----------------------------------------------------------
 
-export_per_project <- function(df_clean, df_discard, sample) {
+export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
-  readr::write_csv(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")))
-  readr::write_csv(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")))
+  write.csv(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")), delim)
+  write.csv(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")),     delim)
   
   proj_col <- get_project_col(df_clean)
   if (is.null(proj_col)) {
@@ -465,12 +621,13 @@ export_per_project <- function(df_clean, df_discard, sample) {
   df_split <- split(df_clean, df_clean[[proj_col]])
   purrr::iwalk(df_split, function(dd, proj) {
     safe_proj <- gsub("[^A-Za-z0-9_-]+", "_", proj)
-    filepath <- fs::path(out_dir, glue::glue("{sample}_project-{safe_proj}_clean.csv"))
-    readr::write_csv(dd, filepath)
+    filepath  <- fs::path(out_dir, glue::glue("{sample}_project-{safe_proj}_clean.csv"))
+    write_excel_friendly_csv(dd, filepath, delim)
   })
   
-  log_msg(glue::glue("Exported {length(df_split)} project-level files for sample '{sample}' (by column '{proj_col}')."))
+  log_msg(glue::glue("Exported {length(df_split)} CSVs with BOM + sep='{delim}' for '{sample}'."))
 }
+
 
 save_keys <- function(keys, sample) {
   path_rds  <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.rds"))
@@ -481,8 +638,6 @@ save_keys <- function(keys, sample) {
 }
 
 # ---- Demographics & Health utilities -----------------------------------------
-
-safe_var <- function(x) gsub("[^A-Za-z0-9_-]+", "_", x)
 
 # FIXED: no tidyselect misuse; guard all columns safely
 label_demographics_health <- function(df) {
@@ -1015,10 +1170,20 @@ process_sample <- function(sample,
   
   minmax <- scoring_df %>% dplyr::select(scale, min, max)
   col_meta <- col_map %>% dplyr::left_join(minmax, by = "scale") %>% dplyr::select(orig, reverse_coded, min, max)
+  col_meta <- col_map %>%
+    dplyr::left_join(minmax, by = "scale") %>%
+    dplyr::select(orig, reverse_coded, min, max)
   
   q_final <- reverse_code_wide(q_clean0, unique(col_map$orig), col_meta)
-  q_final <- q_final %>% dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
+  
+  # NEW: CAPE rule – if freq is at minimum and distress is missing,
+  #       set distress to minimum for CAPE items
+  q_final <- impute_cape_distress_from_frequency(q_final, ii, scoring_df)
+  
+  q_final <- q_final %>%
+    dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
   q_final <- attach_groupings(q_final, sample)
+  
   
   # Enriched master (used for simple plots & exports)
   q_ready <- enrich_demographics_and_health_fields(q_final, sample)

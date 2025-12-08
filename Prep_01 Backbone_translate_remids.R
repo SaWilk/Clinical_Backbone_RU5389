@@ -30,7 +30,7 @@ rm(list = ls())
 if (interactive()) cat("\014")  # clear console only in interactive contexts
 
 # install & load required packages --------------------------------------------
-pkg <- c("dplyr", "readxl", "rstudioapi")
+pkg <- c("dplyr", "readxl", "rstudioapi", "readr")
 to_install <- pkg[!sapply(pkg, require, character.only = TRUE)]
 if (length(to_install)) install.packages(to_install, dependencies = TRUE)
 invisible(lapply(pkg, library, character.only = TRUE))
@@ -167,9 +167,9 @@ get_project_value <- function(df, row_idx) {
 }
 
 # load data --------------------------------------------------------------------
-dat_children_parents <- read.csv(file.path(in_path, file_children_parents),
+dat_children_parents <- readr::read_csv(file.path(in_path, file_children_parents),
                                  sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
-dat_adults <- read.csv(file.path(in_path, file_adults),
+dat_adults <- readr::read_csv(file.path(in_path, file_adults),
                        sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
 
 # enforce required columns (Points 1 & 9) --------------------------------------

@@ -24,6 +24,7 @@ if (!require("readxl"))    { install.packages("readxl")}; library(readxl)
 if (!require("purrr")){ install.packages("purrr")}; library(purrr)
 if (!require("stringr")){ install.packages("stringr")}; library(stringr)
 if (!require("rlang")){ install.packages("rlang")}; library(rlang)
+if (!require("readr")){ install.packages("readr")}; library(readr)
 
 
 # Ensure proper number display -------------------------------------------------
@@ -69,14 +70,33 @@ if (!dir.exists(discarded_path)) {
 }
 
 # ---------- shared helpers ----------
-safe_read_csv <- function(path, sep = NULL) {
-  if (!file.exists(path)) stop("Missing file: ", path)
-  if (is.null(sep)) {
-    read.csv(path)
-  } else {
-    read.csv(path, sep = sep)
+# robust CSV reader for both ';' (questionnaires) and ',' (PsyToolkit)
+safe_read_csv <- function(path, tz = "Europe/Berlin") {
+  stopifnot(file.exists(path))
+  first <- readr::read_lines(path, n_max = 1)
+  delim <- ifelse(stringr::str_count(first, ";") > stringr::str_count(first, ","), ";", ",")
+  df <- readr::read_delim(
+    path, delim = delim,
+    na = c("", "NA", "NaN", "null", "0"),
+    locale = readr::locale(tz = tz, decimal_mark = ".", grouping_mark = ","),
+    trim_ws = TRUE, show_col_types = FALSE
+  )
+  # strip BOM + normalize names
+  nm <- names(df); nm[1] <- sub("^\ufeff", "", nm[1]); nm <- gsub("\\s+", "_", trimws(nm)); names(df) <- nm
+  # parse TIME_* if present with the exact pattern we saw: %Y-%m-%d-%H-%M
+  parse_hyphen_dt <- function(x) {
+    y <- trimws(as.character(x)); y[y %in% c("", "NA","NaN","null")] <- NA
+    suppressWarnings(as.POSIXct(y, format = "%Y-%m-%d-%H-%M", tz = tz))
   }
+  if ("TIME_start" %in% names(df)) {
+    df$TIME_start <- parse_hyphen_dt(df$TIME_start)
+  }
+  if ("TIME_end" %in% names(df)) {
+    df$TIME_end <- parse_hyphen_dt(df$TIME_end)
+  }
+  df
 }
+
 
 .detect_script_dir <- function() {
   args <- commandArgs(trailingOnly = FALSE)
@@ -164,11 +184,11 @@ file_children_p6       <- "results-survey518972.csv"
 
 ## Load data -------------------------------------------------------------------
 # Questionnaires
-dat_adults           <- safe_read_csv(file.path(name, in_path, file_adults),           sep = ";")
-dat_adolescents      <- safe_read_csv(file.path(name, in_path, file_adolescents),      sep = ";")
-dat_children_parents <- safe_read_csv(file.path(name, in_path, file_children_parents), sep = ";")
-dat_parents_p6       <- safe_read_csv(file.path(name, in_path, file_parents_p6),       sep = ";")
-dat_children_p6      <- safe_read_csv(file.path(name, in_path, file_children_p6),      sep = ";")
+dat_adults           <- safe_read_csv(file.path(name, in_path, file_adults))
+dat_adolescents      <- safe_read_csv(file.path(name, in_path, file_adolescents))
+dat_children_parents <- safe_read_csv(file.path(name, in_path, file_children_parents))
+dat_parents_p6       <- safe_read_csv(file.path(name, in_path, file_parents_p6))
+dat_children_p6      <- safe_read_csv(file.path(name, in_path, file_children_p6))
 
 # Get metadata
 quest_info <- file.info(file.path(name, in_path, file_adults))
@@ -180,19 +200,32 @@ quest_info[5, ]   <- c(file.info(file.path(name, in_path, file_children_p6)),   
 
 # Data Overview
 file_general <- "results-survey415148.csv"
-dat_general  <- safe_read_csv(file.path(name, in_path, file_general), sep = ";")
+dat_general  <- safe_read_csv(file.path(name, in_path, file_general))
 
 # PsyToolkit Tests
 file_psytool_info <- "data.csv"
-psytool_info_adults      <- safe_read_csv(file.path(name, psytool_path, "adults",      file_psytool_info))
-psytool_info_children    <- safe_read_csv(file.path(name, psytool_path, "children",    file_psytool_info))
-psytool_info_adolescents <- safe_read_csv(file.path(name, psytool_path, "adolescents", file_psytool_info))
+
+psytool_folder_name_adults = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_adults_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+psytool_folder_name_children = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_children_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+psytool_folder_name_adolescents = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_adolescents_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+
+# Build full paths to the data.csv that actually exist
+cog_paths <- c(
+  if (length(psytool_folder_name_adults)) 
+    file.path(name, psytool_path, psytool_folder_name_adults, file_psytool_info) else NA_character_,
+  if (length(psytool_folder_name_adolescents)) 
+    file.path(name, psytool_path, psytool_folder_name_adolescents, file_psytool_info) else NA_character_,
+  if (length(psytool_folder_name_children)) 
+    file.path(name, psytool_path, psytool_folder_name_children, file_psytool_info) else NA_character_
+)
 
 # Get metadata
-cogtest_info <- file.info(file.path(name, psytool_path, "adults", file_psytool_info))
-cogtest_info$sample <- "adults"
-cogtest_info[2, ]   <- c(file.info(file.path(name, psytool_path, "adolescents", file_psytool_info)), "adolescents")
-cogtest_info[3, ]   <- c(file.info(file.path(name, psytool_path, "children",    file_psytool_info)), "children_parents")
+cogtest_info <- file.info(cog_paths)
+cogtest_info$sample <- c("adults","adolescents","children_parents")[seq_len(nrow(cogtest_info))]
+
+psytool_info_adults      <- safe_read_csv(cog_paths[1])
+psytool_info_children    <- safe_read_csv(cog_paths[3])
+psytool_info_adolescents <- safe_read_csv(cog_paths[2])
 
 # Get item info
 
@@ -230,76 +263,161 @@ dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)]  <- 2
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)] <- 9
 
 # Remove empty Rows ------------------------------------------------------------
+# ---------- NA & factor SAFE helpers ----------
+.as_num <- function(x) {
+  if (is.factor(x)) {
+    suppressWarnings(as.numeric(as.character(x)))
+  } else {
+    suppressWarnings(as.numeric(x))
+  }
+}
+
+.pid_eq <- function(df, project_col, PROJECT) {
+  if (!project_col %in% names(df)) return(rep(FALSE, nrow(df)))
+  lab <- df[[project_col]]
+  if (is.factor(lab)) lab <- as.character(lab)
+  lab <- trimws(as.character(lab))
+  dig <- gsub("\\D+", "", lab)
+  dig == as.character(PROJECT)
+}
+
+.comp_is_cogn <- function(df, link_col) {
+  if (!link_col %in% names(df)) return(rep(FALSE, nrow(df)))
+  comp <- df[[link_col]]
+  if (is.factor(comp)) comp <- as.character(comp)
+  comp <- tolower(trimws(as.character(comp)))
+  !is.na(comp) & comp == "cogn"
+}
+
+.lp_is_below <- function(df, last_page, thr) {
+  if (!last_page %in% names(df)) return(rep(FALSE, nrow(df)))
+  lp <- .as_num(df[[last_page]])
+  !is.na(lp) & lp < thr
+}
+
+# Build mask: project == PROJECT & (comp == "cogn" OR lastpage < thr)
+.drop_mask <- function(df, PROJECT, project_col, link_col, last_page, thr) {
+  .pid_eq(df, project_col, PROJECT) &
+    ( .comp_is_cogn(df, link_col) | .lp_is_below(df, last_page, thr) )
+}
+
+# tiny diag helper
+.diag <- function(tag, df, mask) {
+  cat(sprintf("%s: n=%d | drop=%d | keep=%d\n",
+              tag, nrow(df), sum(mask, na.rm = TRUE), nrow(df) - sum(mask, na.rm = TRUE)))
+}
+
+# ---------- Remove empty Rows (robust) ----------
 LAST_P_EMPTY <- 7
-# Project 3
+
+## Project 3
 PROJECT <- 3
-# adult
-empty_ad_3  <- dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ]
-dat_adults  <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ]
-# children
-empty_ch_3  <- dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
-dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
+mask_ad_3 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_3 <- dat_adults[ which(mask_ad_3), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_3), , drop = FALSE ]
+.diag("P3 adults", dat_adults, mask_ad_3)
 
-# Project 4
+mask_ch_3 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ch_3 <- dat_children_parents[ which(mask_ch_3), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ -which(mask_ch_3), , drop = FALSE ]
+.diag("P3 children", dat_children_parents, mask_ch_3)
+
+## Project 4
 PROJECT <- 4
-# children
-empty_ch_4  <- dat_children_parents[which(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
-dat_children_parents <- dat_children_parents[!(dat_children_parents[[last_page]] < LAST_P_EMPTY & dat_children_parents[[project_col]] == PROJECT), ]
-# adult
-empty_ad_4  <- dat_adults[which(dat_adults[[last_page]] < LAST_P_EMPTY & dat_adults[[project_col]] == PROJECT), ]
-dat_adults  <- dat_adults[!(dat_adults[[project_col]] == PROJECT & dat_adults[[last_page]] < LAST_P_EMPTY), ]
+mask_ch_4 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ch_4 <- dat_children_parents[ which(mask_ch_4), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ -which(mask_ch_4), , drop = FALSE ]
+.diag("P4 children", dat_children_parents, mask_ch_4)
 
-# Project 6
-LAST_P_EMPTY <- 3 # different questionnaire
-# children
-empty_ch_6  <- dat_children_p6[which(dat_children_p6[[last_page]] < LAST_P_EMPTY), ]
-dat_children_p6 <- dat_children_p6[!(dat_children_p6[[last_page]] < LAST_P_EMPTY), ]
-# parents
-empty_p_6   <- dat_parents_p6[which(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ]
-dat_parents_p6   <- dat_parents_p6[!(dat_parents_p6[[last_page]] < LAST_P_EMPTY), ]
+mask_ad_4 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_4 <- dat_adults[ which(mask_ad_4), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_4), , drop = FALSE ]
+.diag("P4 adults", dat_adults, mask_ad_4)
 
-# Project 7
+## Project 6 (different questionnaire; no project split for _p6 forms)
+LAST_P_EMPTY <- 3
+mask_ch_6 <- .lp_is_below(dat_children_p6, last_page, LAST_P_EMPTY)
+empty_ch_6 <- dat_children_p6[ which(mask_ch_6), , drop = FALSE ]
+dat_children_p6 <- dat_children_p6[ -which(mask_ch_6), , drop = FALSE ]
+.diag("P6 children_p6", dat_children_p6, mask_ch_6)
+
+mask_p_6 <- .lp_is_below(dat_parents_p6, last_page, LAST_P_EMPTY)
+empty_p_6 <- dat_parents_p6[ which(mask_p_6), , drop = FALSE ]
+dat_parents_p6 <- dat_parents_p6[ -which(mask_p_6), , drop = FALSE ]
+.diag("P6 parents_p6", dat_parents_p6, mask_p_6)
+
+## Project 7
 PROJECT <- 7
-LAST_P_EMPTY <- 7 # back to original questionnaire
-# adult
-empty_ad_7 <- dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
-                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ]
-# adolescent
-empty_adlsc_7 <- dat_adolescents[which((dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY) & dat_adolescents[[project_col]] == PROJECT), ]
-dat_adolescents <- dat_adolescents[!(dat_adolescents[[project_col]] == PROJECT &
-                                       (dat_adolescents[[link_col]] == "cogn" | dat_adolescents[[last_page]] < LAST_P_EMPTY)), ]
+LAST_P_EMPTY <- 7
 
-# Project 8
+mask_ad_7 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_7 <- dat_adults[ which(mask_ad_7), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_7), , drop = FALSE ]
+.diag("P7 adults", dat_adults, mask_ad_7)
+
+mask_adlsc_7 <- .drop_mask(dat_adolescents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_adlsc_7 <- dat_adolescents[ which(mask_adlsc_7), , drop = FALSE ]
+dat_adolescents <- dat_adolescents[ -which(mask_adlsc_7), , drop = FALSE ]
+.diag("P7 adolescents", dat_adolescents, mask_adlsc_7)
+
+## Project 8
 PROJECT <- 8
-# adult
-empty_ad_8 <- dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
-                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ]
-# children
-empty_ch_8 <- dat_children_parents[which((dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY) & dat_children_parents[[project_col]] == PROJECT), ]
-dat_children_parents <- dat_children_parents[!(dat_children_parents[[project_col]] == PROJECT &
-                                                 (dat_children_parents[[link_col]] == "cogn" | dat_children_parents[[last_page]] < LAST_P_EMPTY)), ]
+mask_ad_8 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_8 <- dat_adults[ which(mask_ad_8), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_8), , drop = FALSE ]
+.diag("P8 adults", dat_adults, mask_ad_8)
 
-# Project 9
+mask_ch_8 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ch_8 <- dat_children_parents[ which(mask_ch_8), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ -which(mask_ch_8), , drop = FALSE ]
+.diag("P8 children", dat_children_parents, mask_ch_8)
+
+## Project 9
 PROJECT <- 9
-empty_ad_9 <- dat_adults[which((dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY) & dat_adults[[project_col]] == PROJECT), ]
-dat_adults <- dat_adults[!(dat_adults[[project_col]] == PROJECT &
-                             (dat_adults[[link_col]] == "cogn" | dat_adults[[last_page]] < LAST_P_EMPTY)), ]
+mask_ad_9 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_9 <- dat_adults[ which(mask_ad_9), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_9), , drop = FALSE ]
+.diag("P9 adults", dat_adults, mask_ad_9)
+# ---- collect "empty" rows in the old shape so the next code stays flush ----
 
-# Put them into a list
-ads <- list(empty_ad_3, empty_ad_7, empty_ad_8, empty_ad_9)
-ch  <- list(empty_ch_3, empty_ch_8)
+# helper: an empty data.frame with the same columns as a template df
+.empty_like <- function(df) df[0, , drop = FALSE]
+
+# Ensure each per-project "empty_*" object exists (even if 0 rows)
+if (!exists("empty_ad_3"))      empty_ad_3      <- .empty_like(dat_adults)
+if (!exists("empty_ch_3"))      empty_ch_3      <- .empty_like(dat_children_parents)
+if (!exists("empty_ch_4"))      empty_ch_4      <- .empty_like(dat_children_parents)
+if (!exists("empty_ad_4"))      empty_ad_4      <- .empty_like(dat_adults)
+if (!exists("empty_ch_6"))      empty_ch_6      <- .empty_like(dat_children_p6)
+if (!exists("empty_p_6"))       empty_p_6       <- .empty_like(dat_parents_p6)
+if (!exists("empty_ad_7"))      empty_ad_7      <- .empty_like(dat_adults)
+if (!exists("empty_adlsc_7"))   empty_adlsc_7   <- .empty_like(dat_adolescents)
+if (!exists("empty_ad_8"))      empty_ad_8      <- .empty_like(dat_adults)
+if (!exists("empty_ch_8"))      empty_ch_8      <- .empty_like(dat_children_parents)
+if (!exists("empty_ad_9"))      empty_ad_9      <- .empty_like(dat_adults)
+
+# Recreate the legacy lists the downstream code expects
+ads <- list(empty_ad_3, empty_ad_4, empty_ad_7, empty_ad_8, empty_ad_9)
+ch  <- list(empty_ch_3, empty_ch_4, empty_ch_8)
 
 # Keep only the non-empty ones
-ads_non_empty <- ads[lengths(ads) > 0]
-chs_non_empty <- ch[lengths(ch)   > 0]
+ads_non_empty <- ads[vapply(ads, nrow, integer(1)) > 0]
+chs_non_empty <- ch[vapply(ch,  nrow, integer(1)) > 0]
 
-# Bind them together (if any left)
-all_empty_ad <- if (length(ads_non_empty) > 0) do.call(rbind, ads_non_empty) else data.frame()
-all_empty_ch <- if (length(chs_non_empty) > 0) do.call(rbind, chs_non_empty)  else data.frame()
+# Bind them together (preserve columns; if none, create a truly empty like-template)
+all_empty_ad <- if (length(ads_non_empty) > 0) {
+  dplyr::bind_rows(ads_non_empty)
+} else {
+  .empty_like(dat_adults)
+}
 
-# Saving it so I can write to disk later on in the script
+all_empty_ch <- if (length(chs_non_empty) > 0) {
+  dplyr::bind_rows(chs_non_empty)
+} else {
+  .empty_like(dat_children_parents)
+}
+
+# Tag reason so later write-out works the same
 all_empty_ad$.__reason__.   <- "empty"
 all_empty_ch$.__reason__.   <- "empty"
 empty_adlsc_7$.__reason__.  <- "empty"
@@ -434,6 +552,40 @@ dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), 
 PROJECT = 9;
 dat_adults = dat_adults %>%
   filter(!(vpid == 90002 & lastpage == 11))
+
+# Remove all rows with zero non-admin answers
+drop_answer_empty <- function(df, admin_like = c(
+  "vpid","vp_id","id","project","p","proj","comp","submitdate","startdate",
+  "datestamp","remid","remidcheck","warning","consent","end","seed","startlanguage"
+)) {
+  admin_rx <- paste0("^(?:", paste(admin_like, collapse="|"), ")$", collapse="")
+  is_admin <- tolower(names(df)) %in% tolower(admin_like)
+  # consider non-admin, numeric/character with actual values
+  sub <- df[!is_admin]
+  if (!ncol(sub)) return(df)
+  non_empty <- rowSums(!vapply(sub, function(x) {
+    if (is.character(x)) is.na(x) | trimws(x) == "" else is.na(x)
+  }, logical(nrow(df)))) > 0
+  df[non_empty, , drop = FALSE]
+}
+
+dat_adults <- drop_answer_empty(dat_adults)
+dat_adults <- drop_answer_empty(dat_children)
+dat_adults <- drop_answer_empty(dat_adults)
+
+# move to other sample
+
+# --- Move from Adults -> Adolescents (Questionnaires + Cogtests) ---
+ids <- 70090L
+
+# Questionnaires (key: vpid)
+dat_adolescents <- dplyr::bind_rows(dat_adolescents, dplyr::filter(dat_adults, vpid %in% ids))
+dat_adults      <- dplyr::filter(dat_adults, !vpid %in% ids)
+
+# Cogtests / PsyToolkit (key: id)
+psytool_info_adolescents <- dplyr::bind_rows(psytool_info_adolescents, dplyr::filter(psytool_info_adults, id %in% ids))
+psytool_info_adults      <- dplyr::filter(psytool_info_adults, !id %in% ids)
+
 
 # Auto-remove and check for remaining duplicates
 # Adults
