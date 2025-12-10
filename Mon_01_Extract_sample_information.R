@@ -19,6 +19,10 @@
 #   "submitdate", then sheet index 2).
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# Clean up R environment -------------------------------------------------------
+rm(list = ls())
+cat("\014")
+
 # Install/load packages --------------------------------------------------------
 suppressPackageStartupMessages({
   if (!require("dplyr")) { install.packages("dplyr") }; library(dplyr)

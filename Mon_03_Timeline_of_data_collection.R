@@ -22,9 +22,13 @@
 # - p6 special 33% visual rule from Mon_02 is NOT applied here; this script reflects empirical counts over time.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# Clean up R environment -------------------------------------------------------
+rm(list = ls())
+cat("\014")
+
 # ---- Locate ROOT ----
 if (requireNamespace("here", quietly = TRUE)) {
-  here::i_am("Mon_03 Timeline of data collection.R")
+  here::i_am("Mon_03_Timeline_of_data_collection.R")
   ROOT <- here::here()
 } else if (requireNamespace("rprojroot", quietly = TRUE)) {
   ROOT <- rprojroot::find_root(

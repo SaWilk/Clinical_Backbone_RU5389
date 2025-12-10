@@ -49,17 +49,16 @@
 
 # partition_empty_obs_psytoolkit.R
 # Robustly split PsyToolkit info exports into: kept / empty / no_id
-# - Handles legacy item-level names (e.g., WCST_1) and new aggregate names (WCST)
-# - Case-insensitive, tolerant to underscores/digits/extra chars
-# - Falls back to other numeric, non-admin columns if tasks renamed again
-# - Never silently discards everything; emits clear warnings
+# - Broader task signal detection (tokens, metric suffixes, legacy names)
+# - STRICT: TIME_* alone is not "signal"
+# - No deduping here (that stays in resolve_duplicates)
 
 partition_empty_obs_psytoolkit <- function(
     df,
     id_col         = "id",
     time_start_col = "TIME_start",
     time_end_col   = "TIME_end",
-    # Add your third-battery tokens here (examples included)
+    # extend this if new task names appear
     task_tokens    = c("wcst","lns","bacs","ant","cpt","flanker","gng","stroop","nback"),
     admin_like     = c("id","vpid","p","project","proj","comp",
                        "timestart","timeend","timetotal","startdate","enddate",
@@ -69,38 +68,43 @@ partition_empty_obs_psytoolkit <- function(
   stopifnot(is.data.frame(df))
   if (!nrow(df)) return(list(kept = df, empty = df, no_id = df))
   
-  canon <- function(x) gsub("[^a-z0-9]", "", tolower(x), perl = TRUE)
+  canon    <- function(x) gsub("[^a-z0-9]", "", tolower(x), perl = TRUE)
   has_col  <- function(nm) isTRUE(nm %in% names(df))
   safe_get <- function(nm) if (has_col(nm)) df[[nm]] else rep(NA, nrow(df))
   
   cols       <- names(df)
   cols_canon <- canon(cols)
   
-  id_vec       <- safe_get(id_col)
-  time_end_vec <- safe_get(time_end_col)
+  id_vec <- safe_get(id_col)
   
+  # --- detect potential measure columns (broader) ---
   is_admin  <- cols_canon %in% unique(canon(admin_like))
+  
+  # 1) column names containing any task token
   token_hit <- Reduce(`|`, lapply(task_tokens, function(tok) grepl(tok, cols_canon, fixed = TRUE)))
-  measure_1 <- which(token_hit & !is_admin)
   
+  # 2) typical metric/file suffixes
+  suffix_hit <- grepl("(_acc|_rt|_score|_n?trials|_hits?|_errors?|_omissions?|_file|_path|_txt)$",
+                      cols_canon)
+  
+  # 3) legacy item-style names: wcst1, lns_2, ...
   legacy_rx <- paste0("^(?:", paste(task_tokens, collapse="|"), ")[0-9_]+$")
-  measure_2 <- which(grepl(legacy_rx, cols_canon))
+  legacy_hit <- grepl(legacy_rx, cols_canon)
   
-  measure_idx  <- unique(c(measure_1, measure_2))
+  measure_idx <- which((token_hit | suffix_hit | legacy_hit) & !is_admin)
   
-  # Last fallback: numeric, non-admin, non time/id
+  # fallback: any numeric, non-admin, non time/id
   if (!length(measure_idx)) {
     numericish <- vapply(df, function(x) is.numeric(x) || is.integer(x) || is.logical(x), logical(1))
     not_admin  <- !is_admin & !(cols_canon %in% c(canon(id_col), canon(time_start_col), canon(time_end_col)))
     measure_idx <- which(numericish & not_admin)
     if (verbose) {
-      warning("partition_empty_obs_psytoolkit(): No task-named columns found. ",
-              "Falling back to ", length(measure_idx), " numeric non-admin column(s) as measures.")
+      warning("partition_empty_obs_psytoolkit(): No token-named task columns found; ",
+              "falling back to ", length(measure_idx), " numeric non-admin column(s).")
     }
   }
   
   measure_cols <- cols[measure_idx]
-  
   if (verbose) {
     if (length(measure_cols)) {
       message("partition_empty_obs_psytoolkit(): Using measure columns: ",
@@ -116,7 +120,7 @@ partition_empty_obs_psytoolkit <- function(
   has_signal <- rep(FALSE, nrow(df))
   if (length(measure_cols)) {
     sub <- df[measure_cols]
-    # zero is a valid value; only NA/blank are treated as missing
+    # zero is a valid value; only NA/blank count as missing
     has_signal <- rowSums(!vapply(sub, function(x) {
       if (is.character(x) || is.factor(x)) {
         z <- if (is.factor(x)) as.character(x) else x
@@ -127,12 +131,12 @@ partition_empty_obs_psytoolkit <- function(
     }, logical(nrow(df)))) > 0
   }
   
-  # STRICT rule: must have ID AND any test signal. TIME_end alone is NOT enough.
+  # STRICT: TIME_* alone does NOT count as signal
   keep_mask <- has_id & has_signal
   
-  kept   <- df[keep_mask, , drop = FALSE]
-  no_id  <- df[!has_id & has_signal, , drop = FALSE]
-  empty  <- df[has_id & !has_signal, , drop = FALSE]
+  kept  <- df[keep_mask, , drop = FALSE]
+  no_id <- df[!has_id & has_signal, , drop = FALSE]
+  empty <- df[has_id & !has_signal, , drop = FALSE]
   
   if (verbose) {
     message(sprintf(

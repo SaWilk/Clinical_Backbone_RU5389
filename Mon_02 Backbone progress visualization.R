@@ -14,6 +14,12 @@
 #
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# Clean up R environment -------------------------------------------------------
+rm(list = ls())
+cat("\014")
+
+#------------ Read in packages ---------------------
+
 if (requireNamespace("here", quietly = TRUE)) {
   # one-time in this file: declare where this script lives (relative to project root)
   here::i_am("Mon_02 Backbone progress visualization.R")
@@ -69,7 +75,7 @@ targets_vanilla <- read_targets_vanilla(target_xlsx)
 total_targets <- setNames(targets_vanilla$target, paste0("p", targets_vanilla$project))
 
 read_targets_split <- function(path){
-  df <- suppressMessages(readxl::read_excel(path, sheet = "Proj_8_Split"))
+  df <- suppressMessages(readxl::read_excel(path, sheet = "P8_Split_P6.2_only"))
   names(df) <- tolower(names(df))
   tibble::tibble(project_raw = as.character(df$project), target = as.numeric(df$target)) %>%
     dplyr::mutate(
@@ -257,7 +263,7 @@ label_df <- plot_df %>%
       TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
     ),
     label = dplyr::case_when(
-      force_33             ~ "TBA / ?",
+      force_33             ~ "162 / ?",
       is.na(sample_target) ~ sprintf("%d / ?", n_complete),
       TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
     )
@@ -280,7 +286,7 @@ summary_tbl <- progress_pct %>%
     target = dplyr::if_else(is.na(sample_target), "?", as.character(sample_target)),
     pct_complete = ifelse(is.na(sample_target) | force_33, NA, round(pctify(n_complete, sample_target),1)),
     label_for_plot = dplyr::case_when(
-      force_33             ~ "TBA / ?",
+      force_33             ~ "162 / ?",
       is.na(sample_target) ~ sprintf("%d / ?", n_complete),
       TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pctify(n_complete, sample_target))
     )
@@ -292,34 +298,42 @@ message("Saved table: ", normalizePath(output_xlsx))
 
 
 
+# ---- Second plot: split project 6 (infants/children) AND project 8 (children/adults) ----
+# Output name: same as original + "_split_p6_p8"
+output_png_split <- file.path(out_dir, sprintf("%s_project_progress_split_p6_p8.png", datestamp))
 
-# ---- Second plot: split project 8 into "children" and "adults" ----
-# Output name: same as original + "_split_proj_8"
-output_png_split <- file.path(out_dir, sprintf("%s_project_progress_split_proj_8.png", datestamp))
-
-# Helper: collapse to "ALL" for non-8, split sample into "children"/"adults" for p8
-collapse_with_split_p8 <- function(df_counts){
+# Helper: for split view
+# - p8 => keep "children"/"adults"
+# - p6 => map possible child labels to "children"; all other p6 -> "infants"
+# - all others => "ALL"
+collapse_with_split_p6_p8 <- function(df_counts){
   if (!nrow(df_counts)) return(tibble::tibble(project=integer(), sample=character(), n=integer()))
   df_counts %>%
     dplyr::mutate(
+      sl = tolower(sample),
       sample = dplyr::case_when(
-        project == 8 & stringr::str_detect(sample, "adult")   ~ "adults",
-        project == 8 & stringr::str_detect(sample, "child")   ~ "children",
-        TRUE                                                  ~ "ALL"
+        project == 8 & stringr::str_detect(sl, "adult") ~ "adults",
+        project == 8 & stringr::str_detect(sl, "child") ~ "children",
+        project == 6 & stringr::str_detect(sl, "child") ~ "children",
+        project == 6                                    ~ "infants",
+        TRUE                                            ~ "ALL"
       )
     ) %>%
     dplyr::group_by(project, sample) %>%
     dplyr::summarise(n = sum(n), .groups = "drop")
 }
 
-n_complete_s <- collapse_with_split_p8(n_complete)
-n_miss_q_s   <- collapse_with_split_p8(n_miss_q)
-n_miss_c_s   <- collapse_with_split_p8(n_miss_c)
+n_complete_s <- collapse_with_split_p6_p8(n_complete)
+n_miss_q_s   <- collapse_with_split_p6_p8(n_miss_q)
+n_miss_c_s   <- collapse_with_split_p6_p8(n_miss_c)
 
-# Ensure rows for p2-9 exist (ALL for others; children/adults for p8)
+# Ensure rows for:
+# p2..p5, p7, p9 => "ALL"
+# p6 => "infants" and "children"
+# p8 => "children" and "adults"
 base_rows <- tibble::tibble(
-  project = c(2:7, 8, 8, 9),
-  sample  = c(rep("ALL", 6), "children", "adults", "ALL")
+  project = c(2:5, 6, 6, 7, 8, 8, 9),
+  sample  = c(rep("ALL", 4), "infants", "children", "ALL", "children", "adults", "ALL")
 )
 
 progress_counts_split <- base_rows %>%
@@ -328,20 +342,27 @@ progress_counts_split <- base_rows %>%
   dplyr::left_join(n_miss_c_s,   by=c("project","sample")) %>% dplyr::rename(n_miss_c  = n) %>%
   dplyr::mutate(dplyr::across(c(n_complete, n_miss_q, n_miss_c), ~tidyr::replace_na(., 0L))) %>%
   dplyr::mutate(
-    project_id    = paste0("p", project),
-    # Project-level targets (used for non-8 entries)
-    proj_target   = as.numeric(total_targets[project_id]),
+    project_id          = paste0("p", project),
+    # Project-level targets (used as fallback)
+    proj_target         = as.numeric(total_targets[project_id]),
     # Layer bases (same logic as original)
     n_has_questionnaire = n_complete + n_miss_c,
-    n_has_cognitive     = n_complete + n_miss_q,
-    force_33            = project == 6
+    n_has_cognitive     = n_complete + n_miss_q
   ) %>%
-  # Join per-(project,sample) targets from the Proj_8_Split sheet; fallback to project target
+  # Join per-(project,sample) targets from the P8_Split_P6.2_only sheet
   dplyr::left_join(targets_split, by = c("project","sample")) %>%
   dplyr::rename(sample_target = target) %>%
-  dplyr::mutate(sample_target = dplyr::coalesce(sample_target, proj_target))
+  # p6 infants uses project target; others use sample target when available, else project target
+  dplyr::mutate(
+    sample_target = dplyr::case_when(
+      project == 6 & sample == "infants"  ~ proj_target,
+      TRUE                                ~ dplyr::coalesce(sample_target, proj_target)
+    ),
+    # Only p6 infants are forced to 33%
+    force_33 = (project == 6 & sample == "infants")
+  )
 
-# Percent-of-targets (with p6 forced visuals)
+# Percent-of-targets (with p6-infants forced visuals)
 pctify <- function(n, target) ifelse(is.na(target) | target <= 0, NA_real_, pmin(100, 100*n/target))
 
 progress_pct_split <- progress_counts_split %>%
@@ -356,12 +377,20 @@ progress_pct_split <- progress_counts_split %>%
     pct_cmiss    = dplyr::if_else(force_33, 33, pct_cmiss)
   )
 
-# Axis labels: keep p2..p7, then "p8 children", "p8 adults", then p9
-axis_levels_split <- c(axis_labels[paste0("p", 2:7)], "p8 children", "p8 adults", axis_labels["p9"]) |> as.character()
+# Axis labels: p2..p5, then "p6 infants", "p6 children", then p7, "p8 children", "p8 adults", p9
+axis_levels_split <- c(
+  axis_labels[paste0("p", 2:5)],
+  "p6 infants", "p6 children",
+  axis_labels["p7"],
+  "p8 children", "p8 adults",
+  axis_labels["p9"]
+) |> as.character()
 
 plot_df2 <- progress_pct_split %>%
   dplyr::mutate(
     project_lbl = dplyr::case_when(
+      project == 6 & sample == "infants"  ~ "p6 infants",
+      project == 6 & sample == "children" ~ "p6 children",
       project == 8 & sample == "children" ~ "p8 children",
       project == 8 & sample == "adults"   ~ "p8 adults",
       TRUE                                ~ axis_labels[paste0("p", project)]
@@ -395,7 +424,7 @@ p2 <- ggplot(plot_long2, aes(x = x, y = pct)) +
   labs(
     x = NULL,
     y = "Percent of target sample size",
-    title = "Completed backbone datasets (p8 split into children/adults)",
+    title = "Completed backbone datasets",
     caption = paste0("Status: ", datestamp)
   ) +
   theme_classic(base_size = 12) +
@@ -408,7 +437,7 @@ p2 <- ggplot(plot_long2, aes(x = x, y = pct)) +
     plot.caption          = element_text(hjust = 0, size = 8)
   )
 
-# Labels based on COMPLETE, with p6 special rule
+# Labels based on COMPLETE; only p6 infants shows the forced 33%-style label
 label_df2 <- plot_df2 %>%
   dplyr::mutate(
     label_total_complete = ifelse(force_33, NA_integer_, n_complete),
@@ -422,7 +451,7 @@ label_df2 <- plot_df2 %>%
       TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
     ),
     label = dplyr::case_when(
-      force_33             ~ "TBA / ?",
+      force_33             ~ "162 / ?",
       is.na(sample_target) ~ sprintf("%d / ?", n_complete),
       TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
     )
@@ -432,4 +461,4 @@ p2 <- p2 + geom_text(data = label_df2, aes(x = x, y = pct_pos, label = label),
                      inherit.aes = FALSE, hjust = 0, size = 3.4)
 
 ggsave(output_png_split, p2, width = png_width, height = png_height, dpi = png_dpi)
-message("Saved plot (p8 split): ", normalizePath(output_png_split))
+message("Saved plot (p6+p8 split): ", normalizePath(output_png_split))

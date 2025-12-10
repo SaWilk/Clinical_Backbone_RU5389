@@ -9,6 +9,10 @@
 # writes sanity logs, and keeps keys.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# Clean up R environment -------------------------------------------------------
+rm(list = ls())
+cat("\014")
+
 # ---- Setup -------------------------------------------------------------------
 
 ensure_packages <- function(pkgs) {
@@ -609,8 +613,8 @@ export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
-  write.csv(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")), delim)
-  write.csv(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")),     delim)
+  write.csv2(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")), row.names = FALSE)
+  write.csv2(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")),     row.names = FALSE)
   
   proj_col <- get_project_col(df_clean)
   if (is.null(proj_col)) {
@@ -733,26 +737,42 @@ label_demographics_health <- function(df) {
 enrich_demographics_and_health_fields <- function(df, sample) {
   d <- label_demographics_health(df)
   
-  # Canonical age_years (DOB or numeric years)
+  # ---- helpers ----
   parse_date_safely <- function(x) suppressWarnings(as.Date(x))
-  dob  <- if ("age" %in% names(d)) parse_date_safely(d$age) else as.Date(NA)
-  subm <- if ("submitdate" %in% names(d)) parse_date_safely(d$submitdate) else as.Date(NA)
-  age_num <- if ("age" %in% names(d)) suppressWarnings(as.numeric(d$age)) else rep(NA_real_, nrow(d))
-  looks_like_years <- !all(is.na(age_num)) && stats::median(age_num, na.rm = TRUE) <= 120
+  # Prefer start date; fall back to datestamp; do NOT fall back to Sys.Date()
+  get_start_like_date <- function(z) {
+    cand <- intersect(c("startdate", "datestamp"), names(z))
+    if (!length(cand)) return(rep(as.Date(NA), nrow(z)))
+    # pick the first that exists
+    parse_date_safely(z[[cand[1]]])
+  }
+  looks_like_years_vec <- function(x) {
+    xn <- suppressWarnings(as.numeric(x))
+    # "looks like years" when most non-missing values are <= 120
+    if (all(is.na(xn))) return(FALSE)
+    stats::median(xn, na.rm = TRUE) <= 120
+  }
+  
+  # ---- age computation ----
+  dob   <- if ("age" %in% names(d)) parse_date_safely(d$age) else as.Date(NA)
+  start <- get_start_like_date(d)
+  age_num_raw <- if ("age" %in% names(d)) suppressWarnings(as.numeric(d$age)) else rep(NA_real_, nrow(d))
+  treat_as_years <- looks_like_years_vec(d$age)
   
   d <- d %>%
     dplyr::mutate(
       age_years = dplyr::case_when(
-        looks_like_years ~ as.integer(floor(age_num)),
-        !is.na(dob) & !is.na(subm) ~ as.integer(floor(lubridate::interval(dob, subm) / lubridate::years(1))),
-        !is.na(dob) ~ as.integer(floor(lubridate::interval(dob, Sys.Date()) / lubridate::years(1))),
+        # PRIMARY RULE: age column contains a date (DOB) AND we have a start date
+        !is.na(dob) & !is.na(start) ~ as.integer(floor(lubridate::interval(dob, start) / lubridate::years(1))),
+        # SECONDARY RULE: if the age column is numeric "in years", accept it as-is
+        treat_as_years ~ as.integer(floor(age_num_raw)),
         TRUE ~ NA_integer_
       ),
       height = suppressWarnings(as.numeric(.data[["height"]])),
       weight = suppressWarnings(as.numeric(.data[["weight"]]))
     )
   
-  # sensible thresholds + sanity log
+  # ---- sanity thresholds + logging ----
   get_id_vec <- function(z) {
     if ("vpid" %in% names(z)) z$vpid
     else if ("vp" %in% names(z)) z$vp
@@ -760,8 +780,35 @@ enrich_demographics_and_health_fields <- function(df, sample) {
     else rep(NA_character_, nrow(z))
   }
   proj_col <- get_project_col(d)
+  id_vec <- get_id_vec(d)
   
-  if (tolower(sample) %in% c("adults","adolescents")) {
+  # Adults: raise sensible minimum age to 18 years
+  if (tolower(sample) == "adults") {
+    age_bad    <- !is.na(d$age_years) & d$age_years < 18L
+    height_bad <- !is.na(d$height)    & d$height > 250
+    weight_bad <- !is.na(d$weight)    & d$weight < 35
+    
+    rep_rows <- function(idx, var, values, rule) {
+      if (any(idx, na.rm = TRUE)) {
+        tibble::tibble(
+          vpid = id_vec[idx],
+          p    = if (!is.null(proj_col)) d[[proj_col]][idx] else NA_character_,
+          value = values[idx]
+        ) %>% log_sanity(sample, ., var, rule)
+      }
+    }
+    rep_rows(age_bad,    "age",    d$age_years, "below sensible threshold 18 years (adults)")
+    rep_rows(height_bad, "height", d$height,    "above sensible threshold 250 cm")
+    rep_rows(weight_bad, "weight", d$weight,    "below sensible threshold 35 kg")
+    
+    d <- d %>%
+      dplyr::mutate(
+        age_years = dplyr::if_else(age_bad,    as.integer(NA), age_years),
+        height    = dplyr::if_else(height_bad, NA_real_,       height),
+        weight    = dplyr::if_else(weight_bad, NA_real_,       weight)
+      )
+  } else if (tolower(sample) == "adolescents") {
+    # keep the old adolescent thresholds
     age_bad    <- !is.na(d$age_years) & d$age_years < 5L
     height_bad <- !is.na(d$height)    & d$height > 250
     weight_bad <- !is.na(d$weight)    & d$weight < 35
@@ -769,7 +816,7 @@ enrich_demographics_and_health_fields <- function(df, sample) {
     rep_rows <- function(idx, var, values, rule) {
       if (any(idx, na.rm = TRUE)) {
         tibble::tibble(
-          vpid = get_id_vec(d)[idx],
+          vpid = id_vec[idx],
           p    = if (!is.null(proj_col)) d[[proj_col]][idx] else NA_character_,
           value = values[idx]
         ) %>% log_sanity(sample, ., var, rule)
@@ -787,7 +834,20 @@ enrich_demographics_and_health_fields <- function(df, sample) {
       )
   }
   
-  # minimal recodes used downstream
+  # ---- manual override: vpid 30102 -> age_years = NA ----
+  if (any(!is.na(id_vec))) {
+    idx_manual <- as.character(id_vec) %in% c("30102")
+    if (any(idx_manual, na.rm = TRUE)) {
+      tibble::tibble(
+        vpid = id_vec[idx_manual],
+        p    = if (!is.null(proj_col)) d[[proj_col]][idx_manual] else NA_character_,
+        value = d$age_years[idx_manual]
+      ) %>% log_sanity(sample, ., "age", "manually set to NA due to implausible DOB (would be ~5 years in adults)")
+      d$age_years[idx_manual] <- NA_integer_
+    }
+  }
+  
+  # ---- minimal recodes used downstream (unchanged) ----
   if ("gender" %in% names(d)) {
     g <- as.character(d$gender)
     g[!(g %in% c("female","male"))] <- NA_character_
@@ -800,7 +860,6 @@ enrich_demographics_and_health_fields <- function(df, sample) {
     d$education <- factor(e, levels = lev, ordered = TRUE)
   }
   if ("maritalstat" %in% names(d)) {
-    # keep 'divorced' (we collapse to 'single' only in the plot)
     m <- as.character(d$maritalstat)
     ord <- c("single","relationship","married","divorced","widowed")
     d$maritalstat <- factor(m, levels = ord, ordered = TRUE)
@@ -808,6 +867,7 @@ enrich_demographics_and_health_fields <- function(df, sample) {
   
   d
 }
+
 
 
 # -------- Multiple-choice helpers (legacy; used by old plotting) --------------

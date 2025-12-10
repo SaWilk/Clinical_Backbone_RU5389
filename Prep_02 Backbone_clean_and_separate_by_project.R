@@ -77,7 +77,7 @@ safe_read_csv <- function(path, tz = "Europe/Berlin") {
   delim <- ifelse(stringr::str_count(first, ";") > stringr::str_count(first, ","), ";", ",")
   df <- readr::read_delim(
     path, delim = delim,
-    na = c("", "NA", "NaN", "null", "0"),
+    na = c("", "NA", "NaN", "null"),
     locale = readr::locale(tz = tz, decimal_mark = ".", grouping_mark = ","),
     trim_ws = TRUE, show_col_types = FALSE
   )
@@ -247,6 +247,57 @@ psytool_info_children    <- remove_test_rows(psytool_info_children,    "Children
 ## Data Cleaning for Questionnaire Data ----------------------------------------
 ################################################################################
 
+
+# ---- 1) read schema once ----
+library(jsonlite)
+schema <- read_json(file.path("information", "recommended_schema.json"), simplifyVector = TRUE)
+
+# small converters
+as_num_safely <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x), fixed = FALSE)))
+as_int_safely <- function(x) suppressWarnings(as.integer(as_num_safely(x)))
+
+as_time_safely <- function(x, tz = "Europe/Berlin") {
+  x <- as.character(x)
+  # try several known formats
+  for (fmt in c("%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d-%H-%M",
+                "%Y-%m-%d",
+                "%d.%m.%Y %H:%M:%S",
+                "%d.%m.%Y %H:%M",
+                "%d.%m.%Y")) {
+    out <- try(as.POSIXct(x, format = fmt, tz = tz), silent = TRUE)
+    if (!inherits(out, "try-error") && any(!is.na(out))) {
+      # fill non-matching with NA, keep vector length
+      good <- !is.na(out)
+      if (!all(good)) out[!good] <- NA
+      return(out)
+    }
+  }
+  # fallback: return NA POSIXct vector
+  as.POSIXct(rep(NA, length(x)), origin = "1970-01-01", tz = tz)
+}
+
+coerce_by_schema <- function(df, schema) {
+  if (is.null(df) || !ncol(df)) return(df)
+  for (nm in intersect(names(df), names(schema))) {
+    tgt <- schema[[nm]]
+    if (is.null(tgt)) next
+    # skip if already the right general class
+    cur <- class(df[[nm]])[1]
+    # perform coercion
+    df[[nm]] <- switch(
+      tgt,
+      "integer"  = as_int_safely(df[[nm]]),
+      "double"   = as_num_safely(df[[nm]]),
+      "datetime" = as_time_safely(df[[nm]]),
+      "string"   = as.character(df[[nm]]),
+      df[[nm]]
+    )
+  }
+  df
+}
+
+
 # Set column name variables ----------------------------------------------------
 vp_col     <- "vpid"
 project_col<- "project"
@@ -255,12 +306,33 @@ link_col   <- "comp"
 id_col     <- "id"         # careful - psytoolkit: vpid; questionnaires: unique counter
 submit_col <- "submitdate"
 
+# --- Normalize ID column types (questionnaires) ---
+for (nm in c("dat_adults","dat_adolescents","dat_children_parents","dat_children_p6","dat_parents_p6")) {
+  if (exists(nm)) {
+    df <- get(nm)
+    if ("vpid"   %in% names(df)) df$vpid   <- suppressWarnings(as.integer(as.character(df$vpid)))
+    if ("VPCode" %in% names(df)) df$VPCode <- suppressWarnings(as.integer(as.character(df$VPCode)))
+    assign(nm, df)
+  }
+}
+
+# --- Normalize ID column types (cogtests / PsyToolkit) ---
+for (nm in c("psytool_info_adults","psytool_info_adolescents","psytool_info_children")) {
+  if (exists(nm)) {
+    df <- get(nm)
+    if ("id" %in% names(df)) df$id <- suppressWarnings(as.integer(as.character(df$id)))
+    assign(nm, df)
+  }
+}
+
+
 # Fix issues with project assignment ------------------------------------------
 # assuming this is project 2 since project 1 does not collect data and the id starts with a 2
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 2048)]  <- 2
 # assuming this is project 9 since project 1 does not collect data and the id starts with a 9.
 # also project 9 IDs are actually consecutive and 17 is missing.
 dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)] <- 9
+
 
 # Remove empty Rows ------------------------------------------------------------
 # ---------- NA & factor SAFE helpers ----------
@@ -306,6 +378,31 @@ dat_adults[[project_col]][which(dat_adults[[vp_col]] == 99017)] <- 9
   cat(sprintf("%s: n=%d | drop=%d | keep=%d\n",
               tag, nrow(df), sum(mask, na.rm = TRUE), nrow(df) - sum(mask, na.rm = TRUE)))
 }
+
+# ------- coerce table types to same format ---------------#
+# Example on your loaded tables:
+dat_adults           <- coerce_by_schema(dat_adults,           schema)
+dat_adolescents      <- coerce_by_schema(dat_adolescents,      schema)
+dat_children_parents <- coerce_by_schema(dat_children_parents, schema)
+dat_parents_p6       <- coerce_by_schema(dat_parents_p6,       schema)
+dat_children_p6      <- coerce_by_schema(dat_children_p6,      schema)
+dat_general          <- coerce_by_schema(dat_general,          schema)
+
+# --- ALSO coerce PsyToolkit tables to the same schema --- #
+psytool_info_adults      <- coerce_by_schema(psytool_info_adults,      schema)
+psytool_info_adolescents <- coerce_by_schema(psytool_info_adolescents, schema)
+psytool_info_children    <- coerce_by_schema(psytool_info_children,    schema)
+
+# Be explicit for project + id to remove any ambiguity
+if ("p"  %in% names(psytool_info_adults))      psytool_info_adults$p      <- as_int_safely(psytool_info_adults$p)
+if ("p"  %in% names(psytool_info_adolescents)) psytool_info_adolescents$p <- as_int_safely(psytool_info_adolescents$p)
+if ("p"  %in% names(psytool_info_children))    psytool_info_children$p    <- as_int_safely(psytool_info_children$p)
+
+if ("id" %in% names(psytool_info_adults))      psytool_info_adults$id      <- as_int_safely(psytool_info_adults$id)
+if ("id" %in% names(psytool_info_adolescents)) psytool_info_adolescents$id <- as_int_safely(psytool_info_adolescents$id)
+if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as_int_safely(psytool_info_children$id)
+
+
 
 # ---------- Remove empty Rows (robust) ----------
 LAST_P_EMPTY <- 7
@@ -448,6 +545,7 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 1 & dat_adults[[project_col]]
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 3 & dat_adults[[project_col]] == PROJECT)] <- 30003
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 8 & dat_adults[[project_col]] == PROJECT)] <- 30008
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9 & dat_adults[[project_col]] == PROJECT)] <- 30009
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 104 & dat_adults[[project_col]] == PROJECT)] <- 30104
 
 # assuming the wrong initial number was given...
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10002 & dat_adults[[project_col]] == PROJECT)] <- 30002
@@ -466,6 +564,9 @@ PROJECT <- 4
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4001 & dat_adults[[project_col]] == PROJECT)] <- 40001
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4002 & dat_adults[[project_col]] == PROJECT)] <- 40002
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT)] <- 40003
+
+# falesly named datasets
+dat_adults[[vp_col]][which(dat_adults$id == 630 & dat_adults[[project_col]] == PROJECT)] <- 40016
 
 # Project 9
 PROJECT <- 9
@@ -488,6 +589,7 @@ pilot_ad_9 <- c()
 pilot_ad_8 <- c(80350)
 pilot_asc_7 <- c()
 pilot_ch_6 <- c(62973, 62980, 62998, 62992, 62987, 62989, 62994, 62970)
+pilot_ch_8 <- c(80350)
 
 pilot_ad_all <- c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto)
 pilot_asc_all <- c(pilots_asc_auto)
@@ -548,6 +650,7 @@ dat_children_parents <- dat_children_parents %>%
   ungroup()
 
 dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), ]
+
 # Project 9
 PROJECT = 9;
 dat_adults = dat_adults %>%
@@ -569,9 +672,12 @@ drop_answer_empty <- function(df, admin_like = c(
   df[non_empty, , drop = FALSE]
 }
 
-dat_adults <- drop_answer_empty(dat_adults)
-dat_adults <- drop_answer_empty(dat_children)
-dat_adults <- drop_answer_empty(dat_adults)
+dat_adults            <- drop_answer_empty(dat_adults)
+dat_adolescents       <- drop_answer_empty(dat_adolescents)
+dat_children_parents  <- drop_answer_empty(dat_children_parents)
+dat_children_p6       <- drop_answer_empty(dat_children_p6)
+dat_parents_p6        <- drop_answer_empty(dat_parents_p6)
+
 
 # move to other sample
 
@@ -629,9 +735,9 @@ trash_parents_p6 <- res_parents_p6$trash_bin
 check_vpid_forms(dat_children_parents, logger = logger)
 
 # Save the Trash just to be safe -----------------------------------------------
-all_trash_adults      <- rbind(all_empty_ad, trash_adults)
-all_trash_children    <- rbind(all_empty_ch, trash_children_parents)
-all_trash_adolescents <- rbind(empty_adlsc_7, trash_adolescents)
+all_trash_adults      <- dplyr::bind_rows(all_empty_ad,      trash_adults)
+all_trash_children    <- dplyr::bind_rows(all_empty_ch,      trash_children_parents)
+all_trash_adolescents <- dplyr::bind_rows(empty_adlsc_7,     trash_adolescents)
 
 write_xlsx(all_trash_adults,      file.path(out_path, "discarded", sprintf("deleted-rows_%s_adults.xlsx", today)))
 write_xlsx(all_trash_children,    file.path(out_path, "discarded", sprintf("deleted-rows_%s_children.xlsx", today)))
@@ -797,6 +903,7 @@ psytool_info_adults <- psytool_info_adults %>%
   ungroup()
 
 psytool_info_adults <- psytool_info_adults[!(psytool_info_adults$id == 80009 & psytool_info_adults$p == 8), ]
+
 
 # Adults
 res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col,
