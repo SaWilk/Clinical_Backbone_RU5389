@@ -1,6 +1,8 @@
 # --- analyze_backbone_scales_hist_density.R ----------------------------------
 # Fast figures only: overall histograms + per-project density overlays (+ HC/patient)
 # No omega. No per-item violins.
+# Includes SUQ scoring (sum) + correct SUQ x-axis limits.
+# Also builds scale totals even if only subscales exist (union-of-subscales).
 
 # ===== Pre-flight =====
 rm(list = ls(all.names = TRUE)); invisible(gc())
@@ -14,7 +16,7 @@ ensure_packages <- function(pkgs) {
 }
 ensure_packages(c(
   "readr","jsonlite","tibble","dplyr","tidyr","purrr","stringr","ggplot2",
-  "fs","glue","janitor","forcats","psych","rprojroot","readxl"
+  "fs","glue","janitor","forcats","rprojroot","readxl"
 ))
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
@@ -58,7 +60,6 @@ MAKE_GROUP_VARIANTS <- TRUE         # skip if 'group' missing/empty
 
 # ===== Source helpers =====
 source(file.path(DIR_FUNCTIONS, "plot_density_by_project.R"))
-source(file.path(DIR_FUNCTIONS, "write_excel_friendly_csv.R"))
 source(file.path(DIR_FUNCTIONS, "normalize_id.R"))
 source(file.path(DIR_FUNCTIONS, "get_project_col.R"))
 source(file.path(DIR_FUNCTIONS, "extract_date_string.R"))
@@ -77,6 +78,7 @@ latest_scoring <- function(info_dir = DIR_INFO) {
   dt <- stringr::str_match(basename(files), "^(\\d{4}-\\d{2}-\\d{2})_")[,2]
   files[order(as.Date(dt), decreasing = TRUE)][1]
 }
+
 q_file   <- latest_questionnaire_for_sample(SAMPLE, DIR_QUESTIONNAIRES)
 date_str <- if (!is.na(q_file)) extract_date_string(q_file) else format(Sys.Date(), "%Y-%m-%d")
 
@@ -110,7 +112,8 @@ safe_empty_dir <- function(path, retries = 3, sleep_sec = 0.5) {
   invisible(FALSE)
 }
 
-close_all_graphics(); safe_empty_dir(DIR_PLOTS)
+close_all_graphics()
+safe_empty_dir(DIR_PLOTS)
 fs::dir_create(DIR_LOGS)
 
 # ===== Logger =====
@@ -149,17 +152,55 @@ proj_col <- get_project_col(df) # "project" or "p" or NULL
 # ===== Column map for items =====
 col_map <- tibble::tibble(orig = names(df), item_norm = normalize_id(names(df)))
 
-# ===== Keys & Scoring workbook (for subtitles/modes) =====
+get_id_vec <- function(d) {
+  if ("vpid" %in% names(d)) d$vpid
+  else if ("vp" %in% names(d)) d$vp
+  else if ("participantid" %in% names(d)) d$participantid
+  else rep(NA_character_, nrow(d))
+}
+
+# ===== Keys & Scoring workbook (for subtitles/modes + AQ max if present) =====
 keys_raw <- jsonlite::read_json(keys_json, simplifyVector = FALSE)
+
 items_by_scale <- tibble::tibble(
   scale = purrr::map_chr(keys_raw$items_by_scale, ~ .x$scale %||% NA_character_),
   items = purrr::map(keys_raw$items_by_scale, ~ as.character(.x$items %||% character(0)))
 )
+
 items_by_subscale <- tibble::tibble(
   scale    = purrr::map_chr(keys_raw$items_by_subscale, ~ .x$scale %||% NA_character_),
   subscale = purrr::map_chr(keys_raw$items_by_subscale, ~ .x$subscale %||% NA_character_),
   items    = purrr::map(keys_raw$items_by_subscale, ~ as.character(.x$items %||% character(0)))
 )
+
+# --- Build scale totals even if keys only define subscales ---
+.as_chr0 <- function(x) {
+  if (is.null(x)) return(character(0))
+  if (length(x) == 1 && is.na(x)) return(character(0))
+  as.character(x)
+}
+
+scale_from_subscales <- items_by_subscale %>%
+  dplyr::filter(!is.na(.data$scale)) %>%
+  dplyr::group_by(.data$scale) %>%
+  dplyr::summarise(items_sub = list(unique(unlist(.data$items, use.names = FALSE))),
+                   .groups = "drop")
+
+items_by_scale_all <- items_by_scale %>%
+  dplyr::rename(items_scale = .data$items) %>%
+  dplyr::full_join(scale_from_subscales, by = "scale") %>%
+  dplyr::mutate(
+    items = purrr::map2(.data$items_scale, .data$items_sub, ~{
+      a <- .as_chr0(.x); b <- .as_chr0(.y)
+      if (length(a)) a else b
+    }),
+    total_source = dplyr::case_when(
+      purrr::map_int(.data$items_scale, ~ length(.as_chr0(.x))) > 0 ~ "keys_scale",
+      TRUE ~ "union_subscales"
+    )
+  ) %>%
+  dplyr::select(.data$scale, .data$items, .data$total_source) %>%
+  dplyr::filter(!is.na(.data$scale))
 
 latest_scoring_path <- latest_scoring(DIR_INFO)
 scoring_df <- if (!is.na(latest_scoring_path)) {
@@ -173,6 +214,7 @@ get_mode_text <- function(scale, subscale = NULL) {
   ss_need <- norm(subscale)
   scoring_df$.scale_norm    <- norm(scoring_df$scale)
   scoring_df$.subscale_norm <- if ("subscale" %in% names(scoring_df)) norm(scoring_df$subscale) else NA_character_
+  
   if (!is.null(subscale) && "subscale" %in% names(scoring_df)) {
     m <- dplyr::filter(scoring_df, .data$.scale_norm == s_need, .data$.subscale_norm == ss_need)
     if (nrow(m) && !is.na(m$mode[1])) return(as.character(m$mode[1]))
@@ -182,7 +224,7 @@ get_mode_text <- function(scale, subscale = NULL) {
   NA_character_
 }
 
-# ===== Base scorers (same as your original where needed for plots) ===========
+# ===== Base scorers =====
 score_sum <- function(d, items, min_prop = MIN_PROP_ITEMS,
                       scale_label = NULL, sub_label = NULL, ...) {
   items_norm <- normalize_id(items)
@@ -191,16 +233,22 @@ score_sum <- function(d, items, min_prop = MIN_PROP_ITEMS,
   orig_cols  <- col_map$orig[match(keep_norm, col_map$item_norm)]
   M <- d[, orig_cols, drop = FALSE]
   M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
+  
   n_nonmiss <- rowSums(!is.na(as.matrix(M)))
   thresh <- ceiling(min_prop * ncol(M))
   skip <- n_nonmiss < thresh
+  
   if (any(skip)) {
-    ids <- if ("vpid" %in% names(d)) d$vpid else if ("vp" %in% names(d)) d$vp else NA
+    ids <- get_id_vec(d)
     lbl <- paste0(scale_label, if (!is.null(sub_label)) paste0(" / ", sub_label))
     for (j in which(skip)) logger$write(glue::glue("⚠️ Skipping participant {ids[j]} for {lbl}: missing items >= {100*(1-min_prop)}%"))
   }
-  out <- rowSums(M, na.rm = TRUE); out[skip] <- NA_real_; out
+  
+  out <- rowSums(M, na.rm = TRUE)
+  out[skip] <- NA_real_
+  out
 }
+
 score_mean <- function(d, items, min_prop = MIN_PROP_ITEMS,
                        scale_label = NULL, sub_label = NULL, ...) {
   items_norm <- normalize_id(items)
@@ -209,88 +257,123 @@ score_mean <- function(d, items, min_prop = MIN_PROP_ITEMS,
   orig_cols  <- col_map$orig[match(keep_norm, col_map$item_norm)]
   M <- d[, orig_cols, drop = FALSE]
   M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
+  
   n_nonmiss <- rowSums(!is.na(as.matrix(M)))
-  thresh <- ceiling(min_prop * ncol(M)); skip <- n_nonmiss < thresh
+  thresh <- ceiling(min_prop * ncol(M))
+  skip <- n_nonmiss < thresh
+  
   if (any(skip)) {
-    ids <- if ("vpid" %in% names(d)) d$vpid else if ("vp" %in% names(d)) d$vp else NA
+    ids <- get_id_vec(d)
     lbl <- paste0(scale_label, if (!is.null(sub_label)) paste0(" / ", sub_label))
     for (j in which(skip)) logger$write(glue::glue("⚠️ Skipping participant {ids[j]} for {lbl}: missing items >= {100*(1-min_prop)}%"))
   }
-  out <- rowMeans(M, na.rm = TRUE); out[skip] <- NA_real_; out
+  
+  out <- rowMeans(M, na.rm = TRUE)
+  out[skip] <- NA_real_
+  out
 }
 
-# Special scorers you used
+# ===== Special scorers =====
 score_CAPE <- function(d, items, min_prop = MIN_PROP_ITEMS,
                        scale_label = "CAPE", sub_label = NULL, ...) {
   items_norm <- normalize_id(items)
   keep_norm  <- intersect(items_norm, col_map$item_norm)
-  if (length(keep_norm) == 0) return(rep(NA_real_, nrow(d)))
+  if (!length(keep_norm)) return(rep(NA_real_, nrow(d)))
+  
   orig <- col_map$orig[match(keep_norm, col_map$item_norm)]
   nn   <- normalize_id(orig)
+  
   is_freq <- grepl("^capefreq", nn, ignore.case = TRUE)
   is_dist <- grepl("^capedistr", nn, ignore.case = TRUE)
   if (!any(is_freq) || !any(is_dist)) {
     logger$write("⚠️ CAPE scoring skipped: no CAPEfreq*/CAPEdistr* columns detected.")
     return(rep(NA_real_, nrow(d)))
   }
+  
   item_id <- function(v) stringr::str_extract(v, "\\d+")
   ids_freq <- item_id(nn[is_freq]); ids_dist <- item_id(nn[is_dist])
-  valid_freq <- !is.na(ids_freq);    valid_dist <- !is.na(ids_dist)
+  valid_freq <- !is.na(ids_freq); valid_dist <- !is.na(ids_dist)
   if (!any(valid_freq) || !any(valid_dist)) {
     logger$write("⚠️ CAPE scoring skipped: could not parse numeric item ids from prefixes.")
     return(rep(NA_real_, nrow(d)))
   }
+  
   ids_freq  <- ids_freq[valid_freq]; ids_dist <- ids_dist[valid_dist]
   orig_freq <- orig[is_freq][valid_freq]
   orig_dist <- orig[is_dist][valid_dist]
+  
   common <- intersect(ids_freq, ids_dist)
   if (!length(common)) {
     logger$write("⚠️ CAPE scoring skipped: no matching freq/dist item ids.")
     return(rep(NA_real_, nrow(d)))
   }
+  
   df_freq <- d[, orig_freq, drop = FALSE][, match(common, ids_freq), drop = FALSE]
   df_dist <- d[, orig_dist, drop = FALSE][, match(common, ids_dist), drop = FALSE]
   df_freq[] <- lapply(df_freq, function(z) suppressWarnings(as.numeric(z)))
   df_dist[] <- lapply(df_dist, function(z) suppressWarnings(as.numeric(z)))
+  
   n_items   <- ncol(df_freq)
   n_nonmiss <- rowSums(!is.na(df_freq) & !is.na(df_dist))
   thresh    <- ceiling(min_prop * n_items)
   skip      <- n_nonmiss < thresh
+  
   if (any(skip)) {
-    ids <- if ("vpid" %in% names(d)) d$vpid else if ("vp" %in% names(d)) d$vp else NA
+    ids <- get_id_vec(d)
     lbl <- paste0(scale_label, if (!is.null(sub_label)) paste0(" / ", sub_label))
     for (j in which(skip)) logger$write(glue::glue("⚠️ Skipping participant {ids[j]} for {lbl}: missing CAPE item pairs >= {100*(1-min_prop)}%"))
   }
+  
   prod_mat <- as.matrix(df_freq) * as.matrix(df_dist)
   sc <- rowSums(prod_mat, na.rm = TRUE) / n_items
   sc[skip] <- NA_real_
   sc
 }
+
 score_AQ <- function(d, items, min_prop = MIN_PROP_ITEMS,
                      scale_label = "AQ", sub_label = NULL, ...) {
   items_norm <- normalize_id(items)
   keep_norm  <- intersect(items_norm, col_map$item_norm)
   if (!length(keep_norm)) return(rep(NA_real_, nrow(d)))
-  orig_cols  <- col_map$orig[match(keep_norm, col_map$item_norm)]
+  
+  orig_cols <- col_map$orig[match(keep_norm, col_map$item_norm)]
   X <- d[, orig_cols, drop = FALSE]
   X[] <- lapply(X, function(z) suppressWarnings(as.numeric(z)))
+  
+  per_item_max <- NULL
+  if (nrow(scoring_df) && all(c("item","max") %in% names(scoring_df))) {
+    scoring_df$item_norm <- normalize_id(scoring_df$item)
+    per_item_max <- scoring_df %>%
+      dplyr::filter(.data$item_norm %in% keep_norm) %>%
+      dplyr::select(item_norm, max)
+  }
+  
   n_nonmiss <- rowSums(!is.na(as.matrix(X)))
   thresh <- ceiling(min_prop * ncol(X))
   skip <- n_nonmiss < thresh
+  
   if (any(skip)) {
-    ids <- if ("vpid" %in% names(d)) d$vpid else if ("vp" %in% names(d)) d$vp else NA
+    ids <- get_id_vec(d)
     for (j in which(skip)) logger$write(glue::glue("⚠️ Skipping participant {ids[j]} for AQ: missing items >= {100*(1-min_prop)}%"))
   }
-  # dichotomize as in your original: count max / max-1 responses
+  
   S <- matrix(0, nrow = nrow(X), ncol = ncol(X))
   for (k in seq_len(ncol(X))) {
-    mx <- suppressWarnings(max(X[[k]], na.rm = TRUE))
-    S[,k] <- as.numeric(X[[k]] %in% c(mx, mx-1))
+    mx <- if (!is.null(per_item_max)) {
+      as.numeric(per_item_max$max[match(keep_norm[k], per_item_max$item_norm)])
+    } else {
+      suppressWarnings(max(X[[k]], na.rm = TRUE))
+    }
+    if (is.infinite(mx) || is.na(mx)) mx <- suppressWarnings(max(X[[k]], na.rm = TRUE))
+    S[, k] <- as.numeric(X[[k]] %in% c(mx, mx - 1))
   }
+  
   sc <- rowSums(S, na.rm = TRUE)
   sc[skip] <- NA_real_
   sc
 }
+
+# Aliases
 score_IDAS  <- score_sum
 score_ASRS  <- score_sum
 score_IUS   <- score_sum
@@ -303,53 +386,78 @@ score_BISBAS_total <- function(d, items, ...) score_sum(d, items, ...)
 # ===== Range helpers (for consistent x-limits) =====
 .col_minmax <- function(df_cols) {
   if (!ncol(df_cols)) return(data.frame(min=numeric(0), max=numeric(0)))
-  mins <- vapply(df_cols, function(v) { v <- suppressWarnings(as.numeric(v)); if (all(is.na(v))) NA_real_ else suppressWarnings(min(v, na.rm = TRUE)) }, numeric(1))
-  maxs <- vapply(df_cols, function(v) { v <- suppressWarnings(as.numeric(v)); if (all(is.na(v))) NA_real_ else suppressWarnings(max(v, na.rm = TRUE)) }, numeric(1))
+  mins <- vapply(df_cols, function(v) {
+    v <- suppressWarnings(as.numeric(v))
+    if (all(is.na(v))) NA_real_ else suppressWarnings(min(v, na.rm = TRUE))
+  }, numeric(1))
+  maxs <- vapply(df_cols, function(v) {
+    v <- suppressWarnings(as.numeric(v))
+    if (all(is.na(v))) NA_real_ else suppressWarnings(max(v, na.rm = TRUE))
+  }, numeric(1))
   data.frame(min = mins, max = maxs)
 }
+
 score_limits <- function(d, scale_name, sub_name, items) {
   sc_lower <- tolower(scale_name)
+  
   items_norm <- normalize_id(items)
   keep_norm  <- intersect(items_norm, col_map$item_norm)
   if (!length(keep_norm)) return(c(NA_real_, NA_real_))
+  
+  # ---- SUQ special range (sum across blocks with mixed maxima) ----
+  if (sc_lower == "suq") {
+    m <- stringr::str_match(keep_norm, "^(.*?)(?:_)?([1-3])$")
+    base <- m[,2]; q <- m[,3]
+    ok <- !is.na(base) & !is.na(q)
+    base <- base[ok]; q <- q[ok]
+    if (!length(base)) return(c(NA_real_, NA_real_))
+    
+    base_max <- tapply(q, base, function(qq) {
+      (("1" %in% qq) * 1) + (("2" %in% qq) * 5) + (("3" %in% qq) * 4)
+    })
+    return(c(0, sum(base_max)))
+  }
+  
+  # AQ: dichotomous sum
   if (sc_lower == "aq") return(c(0, length(keep_norm)))
+  
+  # CAPE: product-based score; estimate possible range from item ranges
   if (sc_lower == "cape") {
     orig <- col_map$orig[match(keep_norm, col_map$item_norm)]
     nn   <- normalize_id(orig)
     is_f <- grepl("^capefreq", nn, ignore.case = TRUE)
     is_d <- grepl("^capedistr", nn, ignore.case = TRUE)
     if (!any(is_f) || !any(is_d)) return(c(NA_real_, NA_real_))
+    
     idnum <- function(v) stringr::str_extract(v, "\\d+")
     ids_f <- idnum(nn[is_f]); ids_d <- idnum(nn[is_d])
-    ok_f  <- !is.na(ids_f);    ok_d  <- !is.na(ids_d)
-    ids_f <- ids_f[ok_f];      ids_d <- ids_d[ok_d]
+    ok_f  <- !is.na(ids_f);   ok_d  <- !is.na(ids_d)
+    ids_f <- ids_f[ok_f];     ids_d <- ids_d[ok_d]
     orig_f <- orig[is_f][ok_f]; orig_d <- orig[is_d][ok_d]
     common <- intersect(ids_f, ids_d)
     if (!length(common)) return(c(NA_real_, NA_real_))
-    df_f <- d[, orig_f, drop=FALSE][, match(common, ids_f), drop=FALSE]
-    df_d <- d[, orig_d, drop=FALSE][, match(common, ids_d), drop=FALSE]
+    
+    df_f <- d[, orig_f, drop = FALSE][, match(common, ids_f), drop = FALSE]
+    df_d <- d[, orig_d, drop = FALSE][, match(common, ids_d), drop = FALSE]
     rf <- .col_minmax(df_f); rd <- .col_minmax(df_d)
-    rf <- rf[seq_along(common), , drop=FALSE]
-    rd <- rd[seq_along(common), , drop=FALSE]
+    
     prod_min <- rf$min * rd$min
     prod_max <- rf$max * rd$max
     return(c(mean(prod_min, na.rm = TRUE), mean(prod_max, na.rm = TRUE)))
   }
+  
+  # Default: infer from observed per-item ranges
   orig_cols <- col_map$orig[match(keep_norm, col_map$item_norm)]
-  R <- .col_minmax(d[, orig_cols, drop=FALSE])
-  if (grepl("^(idas|asrs|ius|aps|tics|ctq|map[-_]?sr|bisbas)$", tolower(scale_name))) {
+  R <- .col_minmax(d[, orig_cols, drop = FALSE])
+  
+  if (grepl("^(idas|asrs|ius|aps|tics|ctq|map[-_]?sr|bisbas|suq)$", sc_lower)) {
     c(sum(R$min, na.rm = TRUE), sum(R$max, na.rm = TRUE))
   } else {
     c(mean(R$min, na.rm = TRUE), mean(R$max, na.rm = TRUE))
   }
 }
 
-.adjust_from_nvals <- function(n_vals) {
-  if (!is.finite(n_vals) || n_vals <= 0) return(0.75)
-  if (n_vals <= 10) return(0.50)
-  if (n_vals >= 50) return(0.75)
-  0.50 + (n_vals - 10) * (0.25 / 40)
-}
+# cap histogram bins by # of distinct observed values
 .bins_from_values <- function(x, max_bins = 15L) {
   n_vals <- length(unique(x[is.finite(x)]))
   bins <- min(max_bins, max(1L, n_vals))
@@ -359,8 +467,12 @@ score_limits <- function(d, scale_name, sub_name, items) {
 save_hist <- function(vec, out_png, title, xlab, mode_text = NA, vlines = NULL, xlim = NULL) {
   d <- tibble::tibble(x = as.numeric(vec)) %>% dplyr::filter(is.finite(x))
   if (!nrow(d)) { message("  • (hist) no data -> skipped: ", out_png); return(invisible(FALSE)) }
+  
   subtitle <- if (!is.na(mode_text)) glue::glue("Scoring: {mode_text}") else NULL
-  rng_emp <- range(d$x, na.rm = TRUE); m_emp <- mean(d$x, na.rm = TRUE); n_emp <- nrow(d)
+  rng_emp <- range(d$x, na.rm = TRUE)
+  m_emp   <- mean(d$x, na.rm = TRUE)
+  n_emp   <- nrow(d)
+  
   cap <- paste0(
     "Possible min/max: ",
     if (!is.null(xlim) && all(is.finite(xlim))) paste0("[", signif(xlim[1],4), ", ", signif(xlim[2],4), "]") else "unknown",
@@ -368,7 +480,9 @@ save_hist <- function(vec, out_png, title, xlab, mode_text = NA, vlines = NULL, 
     " | Mean: ", signif(m_emp,4),
     " | N: ", n_emp
   )
+  
   bins_use <- .bins_from_values(d$x, max_bins = 15L)
+  
   p <- ggplot2::ggplot(d, ggplot2::aes(x = x)) +
     ggplot2::geom_histogram(bins = bins_use) +
     { if (!is.null(vlines)) ggplot2::geom_vline(xintercept = vlines, linetype = "dotted") } +
@@ -376,17 +490,20 @@ save_hist <- function(vec, out_png, title, xlab, mode_text = NA, vlines = NULL, 
     ggplot2::theme_bw(base_size = 13) +
     ggplot2::theme(panel.grid.minor = ggplot2::element_blank()) +
     { if (!is.null(xlim) && all(is.finite(xlim))) ggplot2::coord_cartesian(xlim = xlim) }
+  
   ggplot2::ggsave(out_png, p, width = 7.5, height = 5.2, dpi = 150)
   TRUE
 }
 
-# ===== Plot one (sub)scale (restored from your original) =====================
+# ===== Plot one (sub)scale =====
 score_and_plot_one <- function(d, scale_name, sub_name, items, level_name) {
   lvl <- tolower(level_name)
   sc_lower <- tolower(scale_name)
   mode_txt <- get_mode_text(scale_name, if (lvl == "subscale") sub_name else NULL)
   
-  scorer <- score_mean; vlines <- NULL
+  scorer <- score_mean
+  vlines <- NULL
+  
   if (sc_lower == "cape") {
     scorer <- score_CAPE
   } else if (sc_lower == "aq") {
@@ -408,21 +525,26 @@ score_and_plot_one <- function(d, scale_name, sub_name, items, level_name) {
     if (lvl == "subscale") vlines <- c(8.5, 12.5, 15.5, 18.5) else vlines <- c(36.5, 51.5, 68.5, 87.5)
   } else if (sc_lower == "map-sr" || sc_lower == "mapsr" || sc_lower == "map_sr") {
     scorer <- score_MAPSR
-  } else if (sc_lower == "suq" || sc_lower == "fhsfamilytree" || sc_lower == "fhs-familytree" || sc_lower == "fhs_familytree") {
-    message("SUQ / FHSfamilytree have no consistent scoring — skipped.")
-    return(invisible(NA_real_))
+  } else if (sc_lower == "suq") {
+    scorer <- score_sum
+  } else if (sc_lower %in% c("fhsfamilytree", "fhs-familytree", "fhs_familytree")) {
+    message("FHSfamilytree has no consistent scoring — skipped.")
+    return(invisible(TRUE))
   } else {
     scorer <- score_mean
   }
   
-  score <- scorer(d, items, MIN_PROP_ITEMS, scale_label = scale_name, sub_label = if (!is.null(sub_name)) sub_name else NULL)
+  score <- scorer(d, items, MIN_PROP_ITEMS, scale_label = scale_name, sub_label = sub_name)
   varname <- paste0(level_name, "_score")
   d_local <- d; d_local[[varname]] <- score
   
   lims <- score_limits(d, scale_name, sub_name, items)
-  if (all(is.finite(lims)) && lims[1] < lims[2]) xlim_use <- lims else {
-    xr <- range(d_local[[varname]], na.rm = TRUE); pad <- if (is.finite(diff(xr))) diff(xr) * 0.02 else 0
-    xlim_use <- if (is.finite(xr[1]) && is.finite(xr[2])) c(xr[1]-pad, xr[2]+pad) else NULL
+  if (all(is.finite(lims)) && lims[1] < lims[2]) {
+    xlim_use <- lims
+  } else {
+    xr <- range(d_local[[varname]], na.rm = TRUE)
+    pad <- if (is.finite(diff(xr))) diff(xr) * 0.02 else 0
+    xlim_use <- if (is.finite(xr[1]) && is.finite(xr[2])) c(xr[1] - pad, xr[2] + pad) else NULL
   }
   
   fname_base <- if (lvl == "scale") glue::glue("scale_{safe_var(scale_name)}")
@@ -488,25 +610,29 @@ score_and_plot_one <- function(d, scale_name, sub_name, items, level_name) {
       }
     }
   }
+  
   invisible(TRUE)
 }
 
 # ===== MAIN LOOPS (plots only) ===============================================
 plots_made <- 0L
 
-if (nrow(items_by_scale)) {
-  message("== Scales ==")
-  for (i in seq_len(nrow(items_by_scale))) {
-    sc    <- items_by_scale$scale[i]
-    items <- unlist(items_by_scale$items[[i]], use.names = FALSE)
+if (nrow(items_by_scale_all)) {
+  message("== Scales (including totals from union-of-subscales) ==")
+  for (i in seq_len(nrow(items_by_scale_all))) {
+    sc    <- items_by_scale_all$scale[i]
+    items <- unlist(items_by_scale_all$items[[i]], use.names = FALSE)
+    
     items_norm <- normalize_id(items)
     hit <- intersect(items_norm, col_map$item_norm)
-    message(glue::glue("[Scale {i}/{nrow(items_by_scale)}] {sc}: {length(hit)}/{length(items_norm)} items found"))
+    
+    message(glue::glue("[Scale {i}/{nrow(items_by_scale_all)}] {sc}: {length(hit)}/{length(items_norm)} items found"))
     if (!length(hit)) {
       warning(glue::glue("No matching item columns for scale '{sc}'. Skipping plots."), call. = FALSE)
       next
     }
-    score_and_plot_one(df, sc, NULL, items, "scale"); plots_made <- plots_made + 1L
+    score_and_plot_one(df, sc, NULL, items, "scale")
+    plots_made <- plots_made + 1L
   }
 }
 
@@ -516,14 +642,17 @@ if (nrow(items_by_subscale)) {
     sc    <- items_by_subscale$scale[i]
     ssc   <- items_by_subscale$subscale[i]
     items <- unlist(items_by_subscale$items[[i]], use.names = FALSE)
+    
     items_norm <- normalize_id(items)
     hit <- intersect(items_norm, col_map$item_norm)
+    
     message(glue::glue("[Subscale {i}/{nrow(items_by_subscale)}] {sc} — {ssc}: {length(hit)}/{length(items_norm)} items found"))
     if (!length(hit)) {
       warning(glue::glue("No matching item columns for subscale '{sc} — {ssc}'. Skipping plots."), call. = FALSE)
       next
     }
-    score_and_plot_one(df, sc, ssc, items, "subscale"); plots_made <- plots_made + 1L
+    score_and_plot_one(df, sc, ssc, items, "subscale")
+    plots_made <- plots_made + 1L
   }
 }
 

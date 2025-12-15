@@ -4,6 +4,15 @@ plot_density_by_project <- function(df, var, proj_col, out_png, title, xlab,
                                     adjust = NULL, mode_text = NA, xlim = NULL,
                                     vlines = NULL) {
   
+  # ---- helper: adaptive density smoothing (self-contained) ----
+  .adjust_from_nvals_local <- function(n_vals) {
+    # <=10 distinct values -> 0.50; >=50 -> 0.75; linear between
+    if (!is.finite(n_vals) || n_vals <= 0) return(0.75)
+    if (n_vals <= 10) return(0.50)
+    if (n_vals >= 50) return(0.75)
+    0.50 + (n_vals - 10) * (0.25 / 40)
+  }
+  
   # optional group filter
   if (!is.null(group_filter)) {
     if (!("group" %in% names(df)) || all(is.na(df$group))) {
@@ -18,7 +27,7 @@ plot_density_by_project <- function(df, var, proj_col, out_png, title, xlab,
   }
   
   if (!(proj_col %in% names(df))) { warning("plot_density_by_project: project column not found; skipping.", call. = FALSE); return(invisible(NULL)) }
-  if (!(var %in% names(df))) { warning(sprintf("plot_density_by_project: var '%s' not present; skipping.", var), call. = FALSE); return(invisible(NULL)) }
+  if (!(var %in% names(df)))      { warning(sprintf("plot_density_by_project: var '%s' not present; skipping.", var), call. = FALSE); return(invisible(NULL)) }
   
   xnum <- suppressWarnings(as.numeric(df[[var]]))
   d <- df[is.finite(xnum) & !is.na(df[[proj_col]]), , drop = FALSE]
@@ -76,16 +85,18 @@ plot_density_by_project <- function(df, var, proj_col, out_png, title, xlab,
     " | N total: ", n_emp
   )
   
-  # adaptive smoothing if adjust is NULL
+  # adaptive smoothing if adjust is NULL (no external dependency anymore)
   if (is.null(adjust)) {
     n_vals <- length(unique(x_all[is.finite(x_all)]))
-    adjust <- .adjust_from_nvals(n_vals)
+    adjust <- .adjust_from_nvals_local(n_vals)
   }
   
   p <- ggplot2::ggplot(
-    d, ggplot2::aes(x = .data[[var]],
-                    color = .data$.__pal_key,
-                    fill  = .data$.__pal_key)
+    d, ggplot2::aes(
+      x = .data[[var]],
+      color = .data$.__pal_key,
+      fill  = .data$.__pal_key
+    )
   ) +
     ggplot2::geom_density(
       ggplot2::aes(y = after_stat(density * 100), group = .data$.__pal_key),

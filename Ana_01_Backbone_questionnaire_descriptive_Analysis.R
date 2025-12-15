@@ -606,6 +606,93 @@ impute_cape_distress_from_frequency <- function(df, item_info, scoring_df) {
   df
 }
 
+# ---- SUQ preprocessing: branching + recode (NO scoring) ----------------------
+# ---- SUQ preprocessing: branching + recode (NO scoring) ----------------------
+preprocess_suq_wide <- function(df, item_info) {
+  if (is.null(item_info) || !"scale" %in% names(item_info)) return(df)
+  
+  # Ensure we have item_norm (your read_item_info() already creates it, but keep this safe)
+  if (!"item_norm" %in% names(item_info)) {
+    item_info <- item_info %>%
+      dplyr::mutate(item_norm = normalize_id(.data$item))
+  }
+  if (!"subscale" %in% names(item_info) || !"item" %in% names(item_info)) return(df)
+  
+  ii_suq <- item_info %>%
+    dplyr::filter(toupper(.data$scale) == "SUQ") %>%
+    dplyr::mutate(
+      subscale = as.character(.data$subscale),
+      item_num = suppressWarnings(as.integer(stringr::str_extract(.data$item, "\\d+$")))
+    ) %>%
+    dplyr::filter(
+      !is.na(item_num), item_num %in% c(1L, 2L, 3L),
+      !is.na(subscale), subscale != ""
+    )
+  
+  if (!nrow(ii_suq)) return(df)
+  
+  # map item_norm -> actual df column names
+  col_map <- tibble::tibble(
+    orig      = names(df),
+    item_norm = normalize_id(names(df))
+  )
+  
+  mapped <- ii_suq %>%
+    dplyr::inner_join(col_map, by = "item_norm") %>%
+    dplyr::select(subscale, item_num, col = orig) %>%
+    dplyr::distinct()
+  
+  # per-subscale triplets (Q1/Q2/Q3)
+  wide_map <- mapped %>%
+    dplyr::group_by(subscale) %>%
+    dplyr::summarise(
+      q1 = dplyr::first(col[item_num == 1]),
+      q2 = dplyr::first(col[item_num == 2]),
+      q3 = dplyr::first(col[item_num == 3]),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(!is.na(q1) & !is.na(q2) & !is.na(q3))
+  
+  if (!nrow(wide_map)) return(df)
+  
+  # Ensure numeric on SUQ columns
+  suq_cols <- unique(c(wide_map$q1, wide_map$q2, wide_map$q3))
+  df <- df %>%
+    dplyr::mutate(dplyr::across(dplyr::all_of(suq_cols), ~ suppressWarnings(as.numeric(.x))))
+  
+  for (i in seq_len(nrow(wide_map))) {
+    c1 <- wide_map$q1[i]
+    c2 <- wide_map$q2[i]
+    c3 <- wide_map$q3[i]
+    
+    q1 <- df[[c1]]
+    q2 <- df[[c2]]
+    q3 <- df[[c3]]
+    
+    # Recode Q2: 1..6 -> 0..5 (only when in 1..6)
+    q2r <- dplyr::case_when(
+      is.na(q2) ~ as.numeric(NA),
+      q2 >= 1 & q2 <= 6 ~ q2 - 1,
+      TRUE ~ q2
+    )
+    
+    # If Q1 == 0: Q2/Q3 skipped -> fill missing with 0
+    idx_no <- !is.na(q1) & q1 == 0
+    q2r[idx_no & is.na(q2r)] <- 0
+    q3[idx_no & is.na(q3)]   <- 0
+    
+    # If Q1 == 1 and Q2(recoded) == 0: Q3 skipped -> fill missing with 0
+    idx_skip3 <- !is.na(q1) & q1 == 1 & !is.na(q2r) & q2r == 0
+    q3[idx_skip3 & is.na(q3)] <- 0
+    
+    # Write back
+    df[[c2]] <- q2r
+    df[[c3]] <- q3
+  }
+  
+  df
+}
+
 
 # ---- Export helpers ----------------------------------------------------------
 
@@ -1239,6 +1326,9 @@ process_sample <- function(sample,
   # NEW: CAPE rule – if freq is at minimum and distress is missing,
   #       set distress to minimum for CAPE items
   q_final <- impute_cape_distress_from_frequency(q_final, ii, scoring_df)
+  
+  # NEW: SUQ preprocessing – branching + recode Q2 (1..6 -> 0..5), NO scoring
+  q_final <- preprocess_suq_wide(q_final, ii_all)
   
   q_final <- q_final %>%
     dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
