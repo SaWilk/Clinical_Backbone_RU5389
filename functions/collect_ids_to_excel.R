@@ -81,7 +81,8 @@ collect_ids_to_excel <- function(
     out_basename = "ids_in_all_projects",
     out_dir = NULL,               # defaults to "<script_dir>/private_information"
     purge_previous = TRUE,        # <<< NEW: delete older matching files first
-    keep_last = 0                 # <<< NEW: keep this many newest matching files
+    keep_last = 0,                 # <<< NEW: keep this many newest matching files
+    wipe_out_dir = FALSE
 ) {
   # --- helpers (unchanged) ---
   get_script_dir <- function() {
@@ -193,7 +194,7 @@ collect_ids_to_excel <- function(
   date_list <- date_list[names(out_df)]
   date_df <- as.data.frame(lapply(date_list, function(x) as.Date(pad_to(x, max_len))), check.names = FALSE, optional = TRUE, stringsAsFactors = FALSE)
   
-  # --- write XLSX (with purge) ---
+  # --- write XLSX (SAFE purge/wipe) ---
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     stop("Package 'openxlsx' is required. Install with install.packages('openxlsx').", call. = FALSE)
   }
@@ -202,26 +203,39 @@ collect_ids_to_excel <- function(
     base_dir <- get_script_dir()
     out_dir <- file.path(base_dir, "private_information")
   }
+  
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   
-  out_dir <- file.path(out_dir, "ids_in_all_projects")
+  # If user already points to .../ids_in_all_projects, don't append again
+  if (tolower(basename(out_dir)) != "ids_in_all_projects") {
+    out_dir <- file.path(out_dir, "ids_in_all_projects")
+  }
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   
-  # <<< NEW: purge previous matching files safely >>>
+  # IMPORTANT: never wipe the parent folder.
+  # Redefine wipe_out_dir to mean "delete all matching files for THIS data_type".
+  # (This is exactly what purge_previous already does when keep_last == 0.)
+  if (isTRUE(wipe_out_dir)) {
+    purge_previous <- TRUE
+    keep_last <- 0L
+  }
+  
+  # Purge only files created by this function for the SAME basename + SAME data_type
   if (isTRUE(purge_previous)) {
     all_files <- list.files(out_dir, pattern = "\\.xlsx$", full.names = TRUE)
     if (length(all_files)) {
-      # match only files created by this function for the SAME basename + data_type
-      # Pattern: YYYY-MM-DD_<out_basename>_<data_type>.xlsx
-      pat <- sprintf("^\\d{4}-\\d{2}-\\d{2}_%s_%s\\.xlsx$", gsub("([.\\^$|()*+?{}\\[\\]\\\\])","\\\\\\1", out_basename),
-                     gsub("([.\\^$|()*+?{}\\[\\]\\\\])","\\\\\\1", data_type))
-      keep <- grepl(pat, basename(all_files), perl = TRUE)
-      cand <- all_files[keep]
+      esc <- function(x) gsub("([.\\^$|()*+?{}\\[\\]\\\\])", "\\\\\\1", x)
+      pat <- sprintf("^\\d{4}-\\d{2}-\\d{2}_%s_%s\\.xlsx$",
+                     esc(out_basename), esc(data_type))
+      cand <- all_files[grepl(pat, basename(all_files), perl = TRUE)]
       if (length(cand)) {
-        # order by file mtime descending (newest first)
         ord <- order(file.info(cand)$mtime, decreasing = TRUE)
         cand <- cand[ord]
-        to_delete <- if (keep_last > 0L && length(cand) > keep_last) cand[(keep_last + 1L):length(cand)] else cand
+        to_delete <- if (keep_last > 0L && length(cand) > keep_last) {
+          cand[(keep_last + 1L):length(cand)]
+        } else {
+          cand
+        }
         if (length(to_delete)) file.remove(to_delete)
       }
     }

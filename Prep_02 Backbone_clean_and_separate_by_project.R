@@ -404,7 +404,7 @@ if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as
 
 
 
-# ---------- Remove empty Rows (robust) ----------
+# ---------- Remove empty Rows ----------
 LAST_P_EMPTY <- 7
 
 ## Project 3
@@ -568,6 +568,11 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_co
 # falesly named datasets
 dat_adults[[vp_col]][which(dat_adults$id == 630 & dat_adults[[project_col]] == PROJECT)] <- 40016
 
+# Project 8
+PROJECT <- 8
+# assuming a 0 (or many) 0s are missing
+dat_children_parents[[vp_col]][which(dat_adults[[vp_col]] == 80418)] <- 80518
+
 # Project 9
 PROJECT <- 9
 # assuming a 0 (or many) 0s are missing
@@ -586,14 +591,14 @@ pilots_ch_auto <- find_pilot_ids(dat_general, dat_children_parents)
 
 pilot_ad_2 <- c(20004)
 pilot_ad_9 <- c()
-pilot_ad_8 <- c(80350)
+pilot_ad_8 <- c()
 pilot_asc_7 <- c()
 pilot_ch_6 <- c(62973, 62980, 62998, 62992, 62987, 62989, 62994, 62970)
 pilot_ch_8 <- c(80350)
 
 pilot_ad_all <- c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto)
 pilot_asc_all <- c(pilots_asc_auto)
-pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6)
+pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6, pilot_ch_8)
 
 # --- SAVE P9 (and all) pilot rows BEFORE extracting them out ------------------
 pilot_quest_adults  <- dplyr::filter(dat_adults, .data[[vp_col]] %in% pilot_ad_all)
@@ -642,6 +647,11 @@ dat_children_parents <- dat_children_parents %>%
   filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
   select(-.row)
 
+# Project 7
+# participants filled out questionnaires twice
+drop_ids_p7 <- c(70076L,70072L,70062L)
+dat_adults <- dat_adults %>% group_by(vpid, project) %>% arrange(submitdate, .by_group=TRUE) %>% filter(!(project==7 & vpid %in% drop_ids_p7 & n()>1 & row_number()==n())) %>% ungroup()
+
 # Project 8
 dat_children_parents <- dat_children_parents %>%
   mutate(startdate = as.Date(startdate)) %>%
@@ -655,6 +665,13 @@ dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), 
 PROJECT = 9;
 dat_adults = dat_adults %>%
   filter(!(vpid == 90002 & lastpage == 11))
+
+dat_adults <- dat_adults %>% 
+  group_by(vpid, project) %>% 
+  arrange(dplyr::coalesce(submitdate, as.POSIXct("1900-01-01", tz="Europe/Berlin")), .by_group=TRUE) %>% 
+  filter(!(project==9 & vpid==90004L & n()>1 & row_number()==n())) %>% 
+  ungroup()
+
 
 # Remove all rows with zero non-admin answers
 drop_answer_empty <- function(df, admin_like = c(
@@ -691,6 +708,8 @@ dat_adults      <- dplyr::filter(dat_adults, !vpid %in% ids)
 # Cogtests / PsyToolkit (key: id)
 psytool_info_adolescents <- dplyr::bind_rows(psytool_info_adolescents, dplyr::filter(psytool_info_adults, id %in% ids))
 psytool_info_adults      <- dplyr::filter(psytool_info_adults, !id %in% ids)
+
+
 
 
 # Auto-remove and check for remaining duplicates
@@ -753,12 +772,26 @@ samples <- list(
   parents_p6      = dat_parents_p6
 )
 
-# Questionnaires
-lapply(names(samples), function(s) {
-  prep <- prepare_project_slices(samples[[s]], out_path = out_path, sample = s, data_type = "questionnaires", metadata_info = quest_info)
-  prep <- analyze_rushing(prep)
-  write_project_slices(prep)
+# 1) prepare all preps first
+preps <- lapply(names(samples), function(s) {
+  prepare_project_slices(samples[[s]], out_path = out_path, sample = s,
+                         data_type = "questionnaires", metadata_info = quest_info)
 })
+names(preps) <- names(samples)
+
+# 2) pooled rushing for adults + adolescents (single PNG, shared cutoff)
+pooled <- analyze_rushing(preps[c("adults","adolescents")])
+preps["adults"]      <- pooled["adults"]
+preps["adolescents"] <- pooled["adolescents"]
+
+# 3) rushing for the other samples individually (optional; now minutes-based)
+for (s in setdiff(names(preps), c("adults","adolescents"))) {
+  preps[[s]] <- analyze_rushing(preps[[s]])
+}
+
+# 4) now write everything
+lapply(names(preps), function(s) write_project_slices(preps[[s]]))
+
 
 
 ##########################################################################
@@ -1174,9 +1207,6 @@ collect_ids_to_excel(
   
   list(link = link, present = present, missing = missing)
 }
-
-
-
 
 
 # expect objects named data_adults_p_1_questionnaire ... _p_9_questionnaire

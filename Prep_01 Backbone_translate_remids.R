@@ -167,11 +167,19 @@ get_project_value <- function(df, row_idx) {
 }
 
 # load data --------------------------------------------------------------------
-dat_children_parents <- readr::read_csv(file.path(in_path, file_children_parents),
-                                 sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
-dat_adults <- readr::read_csv(file.path(in_path, file_adults),
-                       sep = ";", stringsAsFactors = FALSE, check.names = FALSE)
+dat_children_parents <- readr::read_delim(
+  file.path(in_path, file_children_parents),
+  delim = ";",
+  show_col_types = FALSE,
+  locale = readr::locale(decimal_mark = ".")
+)
 
+dat_adults <- readr::read_delim(
+  file.path(in_path, file_adults),
+  delim = ";",
+  show_col_types = FALSE,
+  locale = readr::locale(decimal_mark = ".")
+)
 # enforce required columns (Points 1 & 9) --------------------------------------
 require_cols(dat_children_parents, c("remid", "remidcheck"), "children/parents")
 require_cols(dat_adults,           c("remid", "remidcheck"), "adults")
