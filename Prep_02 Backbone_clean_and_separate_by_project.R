@@ -556,6 +556,10 @@ dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 40019 & dat_adults[[project_c
 # falsely named datasets
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 227 & dat_adults[[project_col]] == PROJECT)] <- 30047
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 316 & dat_adults[[project_col]] == PROJECT)] <- 30057
+dat_adults[[vp_col]][which(dat_adults[[id_col]] == 579 & dat_adults[[project_col]] == PROJECT)] <- 30100
+dat_adults[[vp_col]][which(dat_adults[[id_col]] == 606 & dat_adults[[project_col]] == PROJECT)] <- 30101
+dat_adults[[vp_col]][which(dat_adults[[id_col]] == 708 & dat_adults[[project_col]] == PROJECT)] <- 30112
+# info on who to rename to what comes from Hendrik
 
 # Project 4
 PROJECT <- 4
@@ -861,6 +865,10 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psy
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] <- 30019
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT)] <- 30104
 
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 579 & psytool_info_adults[[project_col]] == PROJECT)] <- 30100
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 606 & psytool_info_adults[[project_col]] == PROJECT)] <- 30101
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 708 & psytool_info_adults[[project_col]] == PROJECT)] <- 30112
+# info on who to rename to what comes from Hendrik
 
 # Falsely named datasets -----------------------------
 psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
@@ -870,6 +878,9 @@ psytool_info_adults <- psytool_info_adults %>%
     id = dplyr::case_when(
       id == 30048L & p == 3 & TIME_start == max(TIME_start) ~ 30047L,
       id == 30058L & p == 3 & TIME_start == max(TIME_start) ~ 30057L,
+      id == 30099L & p == 3 & TIME_start == min(TIME_start) ~ 30100L,
+      id == 30101L & p == 3 & TIME_start == max(TIME_start) ~ 30102L,
+      id == 30111L & p == 3 & TIME_start == min(TIME_start) ~ 30112L,
       TRUE ~ id
     )
   ) %>%
