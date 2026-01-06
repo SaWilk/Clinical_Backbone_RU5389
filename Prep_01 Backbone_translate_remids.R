@@ -132,6 +132,35 @@ canon_remote <- function(x) {
   y
 }
 
+# ---- remidcheck sanity: only trust 5-digit numeric IDs (10000..99999) --------
+numeric_part_remote <- function(x) {
+  y <- canon_remote(x)               # strips leading R/r, trims, uppercases
+  y <- trimws(as.character(y))
+  ok <- grepl("^[0-9]+$", y)
+  out <- suppressWarnings(as.numeric(y))
+  out[!ok] <- NA_real_
+  out
+}
+
+is_valid_5digit_remote <- function(x) {
+  n <- numeric_part_remote(x)
+  !is.na(n) & n >= 10000 & n <= 99999
+}
+
+# Choose the key for mapping:
+# - default: remid
+# - only if remid == "XXXXX" AND remidcheck is a valid 5-digit numeric ID -> use remidcheck
+pick_key_for_mapping <- function(remid, remidcheck) {
+  remid_chr <- as.character(remid)
+  check_chr <- as.character(remidcheck)
+  
+  xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
+  use_check <- xmask & !is_blank(check_chr) & is_valid_5digit_remote(check_chr)
+  
+  ifelse(use_check, check_chr, remid_chr)
+}
+
+
 require_cols <- function(df, cols, nm) {
   missing <- setdiff(cols, names(df))
   if (length(missing)) {
@@ -264,8 +293,29 @@ flag_and_report_mismatches <- function(df, dataset_name) {
   xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
   both_present <- !is_blank(remid_chr) & !is_blank(check_chr)
   
-  # mismatch only if canonical values differ (ignores any number of leading/interior 'r's)
-  mismatch <- both_present & (trimws(remid_can) != trimws(check_can)) & !xmask
+  # NEW: only treat as a "real" mismatch if remidcheck looks like a plausible ID (5 digits)
+  check_valid <- is_valid_5digit_remote(check_chr)
+  
+  # mismatch only if canonical values differ AND remidcheck is valid AND not XXXXX-row
+  mismatch <- both_present & (trimws(remid_can) != trimws(check_can)) & !xmask & check_valid
+  
+  # NEW: log rows where remidcheck is present but invalid/out-of-range (does NOT block translation)
+  invalid_check <- both_present & !xmask & !check_valid
+  if (any(invalid_check)) {
+    idx_bad <- which(invalid_check)
+    for (i in idx_bad) {
+      proj <- get_project_value(df, i)
+      log_warn_unmapped(
+        project      = proj,
+        sample       = dataset_name,         # keep consistent with how you label logs elsewhere
+        remid_raw    = check_chr[i],
+        remid_canon  = canon_remote(check_chr[i]),
+        dataset_name = dataset_name,
+        row_index    = i,
+        note         = sprintf("remidcheck invalid/out-of-range; ignored for mismatch gate. remid='%s' used.", remid_chr[i])
+      )
+    }
+  }
   
   if (any(mismatch)) {
     idx <- which(mismatch)
@@ -285,14 +335,14 @@ flag_and_report_mismatches <- function(df, dataset_name) {
   eligible
 }
 
+
 # Unmapped check (returns rows + values; also logs into shared log) ------------
 # (Point 5 + canonical compare, extended to gather indices & project/sample)
 find_unmapped_rows <- function(df, remote_ids_canon, eligible_rows, dataset_name, sample_label) {
   remid_chr <- as.character(df$remid)
   check_chr <- as.character(df$remidcheck)
   
-  xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
-  key   <- ifelse(xmask & !is_blank(check_chr), check_chr, remid_chr)
+  key <- pick_key_for_mapping(remid_chr, check_chr)
   
   use_mask   <- eligible_rows & !is_blank(key)
   candidates <- trimws(key)
@@ -341,9 +391,10 @@ find_unmapped_rows <- function(df, remote_ids_canon, eligible_rows, dataset_name
 translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   remid_chr  <- as.character(df$remid)
   check_chr  <- as.character(df$remidcheck)
-  xmask      <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
+  xmask <- !is.na(remid_chr) & toupper(trimws(remid_chr)) == "XXXXX"
   
-  key <- ifelse(xmask & !is_blank(check_chr), check_chr, remid_chr)
+  # Use remidcheck only if it's a valid 5-digit numeric ID; otherwise stick with remid
+  key <- pick_key_for_mapping(remid_chr, check_chr)
   df$key_for_mapping        <- key
   df$key_for_mapping_canon  <- canon_remote(key)
   
@@ -363,7 +414,9 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   df$remidcheck[can_translate] <- NA
   
   # log for 'XXXXX' fallbacks (kept: CSV in 01_project_data/logs)
-  x_rows <- which(xmask & eligible_rows)
+  used_check <- xmask & !is_blank(check_chr) & is_valid_5digit_remote(check_chr)
+  used_check <- xmask & !is_blank(check_chr) & is_valid_5digit_remote(check_chr)
+  x_rows <- which(used_check & eligible_rows)
   log_df <- NULL
   if (length(x_rows) > 0) {
     id_cols_pref <- c("ResponseId","Response ID","id","ID","StartDate","EndDate","record_id")

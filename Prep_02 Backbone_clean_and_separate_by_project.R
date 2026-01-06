@@ -403,7 +403,6 @@ if ("id" %in% names(psytool_info_adolescents)) psytool_info_adolescents$id <- as
 if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as_int_safely(psytool_info_children$id)
 
 
-
 # ---------- Remove empty Rows ----------
 LAST_P_EMPTY <- 7
 
@@ -591,7 +590,7 @@ pilots_ch_auto <- find_pilot_ids(dat_general, dat_children_parents)
 
 pilot_ad_2 <- c(20004)
 pilot_ad_9 <- c()
-pilot_ad_8 <- c()
+pilot_ad_8 <- c(80350)
 pilot_asc_7 <- c()
 pilot_ch_6 <- c(62973, 62980, 62998, 62992, 62987, 62989, 62994, 62970)
 pilot_ch_8 <- c(80350)
@@ -659,7 +658,10 @@ dat_children_parents <- dat_children_parents %>%
   filter(!(vpid == 80505 & form == "P" & startdate == max(startdate))) %>%
   ungroup()
 
+# Leo says they are not complete and cannot be salvaged:
+dat_adults <- dat_adults[!(dat_adults$vpid == 80018 & dat_adults$project == 8), ]
 dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), ]
+
 
 # Project 9
 PROJECT = 9;
@@ -857,6 +859,8 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10005 & psy
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10006 & psytool_info_adults[[project_col]] == PROJECT)] <- 30006
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psytool_info_adults[[project_col]] == PROJECT)] <- 30007
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] <- 30019
+psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT)] <- 30104
+
 
 # Falsely named datasets -----------------------------
 psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
