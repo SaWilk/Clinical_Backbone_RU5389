@@ -653,7 +653,7 @@ dat_children_parents <- dat_children_parents %>%
 # Project 7
 # participants filled out questionnaires twice
 drop_ids_p7 <- c(70076L,70072L,70062L)
-dat_adults <- dat_adults %>% group_by(vpid, project) %>% arrange(submitdate, .by_group=TRUE) %>% filter(!(project==7 & vpid %in% drop_ids_p7 & n()>1 & row_number()==n())) %>% ungroup()
+dat_adolescents <- dat_adolescents %>% group_by(vpid, project) %>% arrange(submitdate, .by_group=TRUE) %>% filter(!(project==7 & vpid %in% drop_ids_p7 & n()>1 & row_number()==n())) %>% ungroup()
 
 # Project 8
 dat_children_parents <- dat_children_parents %>%
@@ -865,10 +865,6 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psy
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] <- 30019
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT)] <- 30104
 
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 579 & psytool_info_adults[[project_col]] == PROJECT)] <- 30100
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 606 & psytool_info_adults[[project_col]] == PROJECT)] <- 30101
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[id_col]] == 708 & psytool_info_adults[[project_col]] == PROJECT)] <- 30112
-# info on who to rename to what comes from Hendrik
 
 # Falsely named datasets -----------------------------
 psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
@@ -885,6 +881,7 @@ psytool_info_adults <- psytool_info_adults %>%
     )
   ) %>%
   ungroup()
+# info on who to rename to what comes from Hendrik
 
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
 

@@ -206,7 +206,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
     if (nrow(d_age)) {
       p_age <- ggplot2::ggplot(d_age, ggplot2::aes(x = age_years, color = palette_key, fill = palette_key)) +
         ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
-        ggplot2::labs(title = paste0(sample, " — Age distribution by project"), x = "Age (years)", y = "Percentage") +
+        ggplot2::labs(title = paste0(sample, ": Age distribution by project"), x = "Age (years)", y = "Percentage") +
         { if (use_manual) ggplot2::scale_color_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_color_discrete() } +
         { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
         ggplot2::theme_bw(base_size = 13) +
@@ -234,7 +234,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
             labels = edu_levels,
             expand = ggplot2::expansion(mult = c(0.02, 0.02))
           ) +
-          ggplot2::labs(title = paste0(sample, " — Education (ordinal) density by project"), x = "Education", y = "Percentage") +
+          ggplot2::labs(title = paste0(sample, ": Education (ordinal) density by project"), x = "Education", y = "Percentage") +
           { if (use_manual) ggplot2::scale_color_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_color_discrete() } +
           { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
           ggplot2::theme_bw(base_size = 13) +
@@ -269,7 +269,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
       p_w <- ggplot2::ggplot(women_pct, ggplot2::aes(x = .data[[proj_col]], y = pct_female, fill = palette_key)) +
         ggplot2::geom_col(width = 0.75) +
         ggplot2::geom_text(ggplot2::aes(label = sprintf("%.1f%%", pct_female)), vjust = -0.3, size = 3) +
-        ggplot2::labs(title = paste0(sample, " — % Women by project"), x = "Project", y = "Percentage women") +
+        ggplot2::labs(title = paste0(sample, ": % Women by project"), x = "Project", y = "Percentage women") +
         { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
         ggplot2::theme_bw(base_size = 13) +
         ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.position = "none")
@@ -304,7 +304,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
       p_s <- ggplot2::ggplot(single_pct, ggplot2::aes(x = .data[[proj_col]], y = pct_single, fill = palette_key)) +
         ggplot2::geom_col(width = 0.75) +
         ggplot2::geom_text(ggplot2::aes(label = sprintf("%.1f%%", pct_single)), vjust = -0.3, size = 3) +
-        ggplot2::labs(title = paste0(sample, " — % Single (divorced → single) by project"), x = "Project", y = "Percentage single") +
+        ggplot2::labs(title = paste0(sample, ": % Single ('divorced' + 'single') by project"), x = "Project", y = "Percentage single") +
         { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
         ggplot2::theme_bw(base_size = 13) +
         ggplot2::theme(panel.grid.minor = ggplot2::element_blank(), legend.position = "none")
@@ -319,7 +319,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
     if (nrow(d_h)) {
       p_h <- ggplot2::ggplot(d_h, ggplot2::aes(x = height, color = palette_key, fill = palette_key)) +
         ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
-        ggplot2::labs(title = paste0(sample, " — Height distribution by project"), x = "Height (cm)", y = "Percentage") +
+        ggplot2::labs(title = paste0(sample, ": Height distribution by project"), x = "Height (cm)", y = "Percentage") +
         { if (use_manual) ggplot2::scale_color_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_color_discrete() } +
         { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
         ggplot2::theme_bw(base_size = 13) +
@@ -334,7 +334,7 @@ plot_simple_demographics_from_cleaned <- function(df_clean, sample, run_tag = fo
     if (nrow(d_w)) {
       p_wt <- ggplot2::ggplot(d_w, ggplot2::aes(x = weight, color = palette_key, fill = palette_key)) +
         ggplot2::geom_density(ggplot2::aes(y = after_stat(density * 100)), alpha = 0.2, adjust = 1) +
-        ggplot2::labs(title = paste0(sample, " — Weight distribution by project"), x = "Weight (kg)", y = "Percentage") +
+        ggplot2::labs(title = paste0(sample, ": Weight distribution by project"), x = "Weight (kg)", y = "Percentage") +
         { if (use_manual) ggplot2::scale_color_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_color_discrete() } +
         { if (use_manual) ggplot2::scale_fill_manual(values = vanilla_colors, drop = FALSE) else ggplot2::scale_fill_discrete() } +
         ggplot2::theme_bw(base_size = 13) +

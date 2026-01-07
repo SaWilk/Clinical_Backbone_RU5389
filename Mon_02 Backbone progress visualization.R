@@ -263,7 +263,7 @@ label_df <- plot_df %>%
       TRUE                 ~ pmin(98, pmax(5, pct_for_label + 2))
     ),
     label = dplyr::case_when(
-      force_33             ~ "162 / ?",
+      force_33             ~ "156 / ?",
       is.na(sample_target) ~ sprintf("%d / ?", n_complete),
       TRUE                 ~ sprintf("%d / %d (%.0f%%)", n_complete, sample_target, pct_for_label)
     )
