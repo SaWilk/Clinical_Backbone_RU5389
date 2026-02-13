@@ -1,10 +1,9 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Subscale-level factor analysis (EFA) with ordinal data
-# - subscale scores built from item-level data using keys.json
-# - parallel analysis + scree on polychoric correlations
-# - EFA via lavaan using WLSMV (ordered indicators)
-# - exports a human-readable XLSX
-# Output: ROOT/out/internal_data_analysis/factor_analysis/
+# Flexible EFA driver (items OR subscales) with configurable correlations + estimator
+# + Input switch: HiTOP vs COMPLETE (reads pre-exported analysis-input XLSX files)
+#
+# Exports: scree PNG + human-readable XLSX
+# Output: ROOT/out/internal_data_analysis/factor_analysis/<DATE>/
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 rm(list = ls())
@@ -18,7 +17,10 @@ ensure_packages <- function(pkgs) {
   invisible(lapply(pkgs, require, character.only = TRUE))
 }
 
-ensure_packages(c("jsonlite", "dplyr", "tibble", "stringr", "fs", "psych", "lavaan", "writexl"))
+ensure_packages(c(
+  "jsonlite","dplyr","tibble","stringr","fs","psych","lavaan","writexl","tidyr",
+  "readxl","ggplot2","GPArotation","rstudioapi"
+))
 
 # ---- Paths ------------------------------------------------------------------
 
@@ -29,8 +31,7 @@ script_dir <- function() {
     filepath <- sub(file_arg, "", args[grep(file_arg, args)])
     if (length(filepath) == 1) return(normalizePath(dirname(filepath), winslash = "/"))
   }
-  if (requireNamespace("rstudioapi", quietly = TRUE) &&
-      rstudioapi::isAvailable()) {
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
     p <- tryCatch(rstudioapi::getActiveDocumentContext()$path, error = function(e) "")
     if (nzchar(p)) return(normalizePath(dirname(p), winslash = "/"))
   }
@@ -38,149 +39,226 @@ script_dir <- function() {
 }
 
 ROOT <- script_dir()
-
-DIR_OUT <- fs::path(ROOT, "out", "internal_data_analysis", "factor_analysis")
+DATE_TAG <- format(Sys.Date(), "%Y-%m-%d")
+DIR_OUT  <- fs::path(ROOT, "out", "internal_data_analysis", "factor_analysis", DATE_TAG)
 fs::dir_create(DIR_OUT)
 
-# ---- CONFIG (edit this block to test decisions) ------------------------------
+# ---- CONFIG -----------------------------------------------------------------
 
 CFG <- list(
   sample = "adults",
   
-  # Input files (these follow your cleaning pipeline conventions)
-  data_csv  = fs::path(ROOT, "02_cleaned", "adults", "adults_clean_master.csv"),
+  # Choose which exported input set to use:
+  # "hitop" or "complete"
+  input_set = "hitop",
+  
+  # Where analysis-input files live (created by your export script)
+  analysis_input_dir = fs::path(ROOT, "03_analysis_input"),
+  
+  # keys.json still needed for metadata tables (and optional fallbacks)
   keys_json = fs::path(ROOT, "02_cleaned", "keys", "adults_keys.json"),
   
-  # Subscale scoring
-  score_method   = "sum",   # "sum" | "mean" | "prorated_sum"
-  min_prop_items = 0.80,    # require >=80% items present to score a subscale
+  # Analysis level: "items" or "subscales"
+  level = "subscales",
   
-  # Which scales to include (set NULL to include all scales in keys)
-  include_scales = c("IDAS", "CAPE", "IUS", "APS", "BISBAS", "TICS", "AQ", "MAP-SR", "SUQ", "CTQ"),
-  exclude_scales = c("FHSfamilytree"),  # typical meta-family-history block
+  # Correlation matrix: "pearson" | "polychoric" | "tetrachoric"
+  corr = "pearson",
   
-  # EFA settings
-  n_factors = 6,            # choose manually; you will also get parallel analysis suggestion
-  rotation  = "geomin",     # "geomin" is common for EFA; alternatives: "oblimin", "promax"
+  # Factor choice: "manual" | "parallel" | "scree_prompt"
+  n_factors_mode   = "scree_prompt",
+  n_factors_manual = 6,
   
-  # Parallel analysis settings
-  pa_iter   = 200,          # increase for stability (e.g., 500–1000)
+  # Estimator: "ML" | "WLSMV"
+  estimator = "MLR",
   
-  # Optional: compute factor scores (can be large sheets)
+  # Rotation (lavaan EFA rotation)
+  rotation  = "geomin",
+  
+  # Parallel analysis stability
+  pa_iter   = 200,
+  
+  # Drop indicators with too few observed categories (relevant for poly/tetra; also useful generally)
+  min_levels_keep = 3,
+  
+  # Optional factor scores
   compute_factor_scores = FALSE,
   
-  # Output naming tag (helps when you iterate)
-  tag = "v1"
+  # Tag for output naming
+  tag = "v3_input_switch"
 )
 
+CFG <- within(CFG, {
+  # --- Split-half stability (train/test) ---
+  do_split_half     <- TRUE
+  split_frac_train  <- 0.50
+  split_seed        <- 1
+  age_bins          <- 6
+  
+  # Stratification metadata file
+  strat_file <- fs::path(ROOT, "03_analysis_input", "stratification_info.xlsx")
+  
+  # Which column in stratification_info is the participant id
+  id_col_in_strat = "vpid"
+  
+  # KMO / Bartlett
+  do_kmo            <- TRUE
+  do_bartlett       <- FALSE
+})
+
 # ---- Helpers ----------------------------------------------------------------
+
+# ---- Output visualizations ---------------------------------------------------
+
+make_loading_long <- function(loadings_wide) {
+  stopifnot("indicator" %in% names(loadings_wide))
+  loadings_wide |>
+    tidyr::pivot_longer(
+      cols = -indicator,
+      names_to = "factor",
+      values_to = "loading"
+    )
+}
+
+plot_loadings_heatmap <- function(loadings_wide, out_png, title = "EFA loadings (standardized)") {
+  df_long <- make_loading_long(loadings_wide)
+  
+  # Order indicators by max absolute loading
+  ord <- df_long |>
+    dplyr::group_by(indicator) |>
+    dplyr::summarise(mx = max(abs(loading), na.rm = TRUE), .groups = "drop") |>
+    dplyr::arrange(dplyr::desc(mx)) |>
+    dplyr::pull(indicator)
+  
+  df_long$indicator <- factor(df_long$indicator, levels = rev(ord))
+  
+  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = factor, y = indicator, fill = loading)) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.2) +
+    ggplot2::scale_fill_gradient2(midpoint = 0) +
+    ggplot2::labs(title = title, x = NULL, y = NULL, fill = "Loading") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      legend.key = ggplot2::element_rect(fill = "white", color = NA)
+    )
+  
+  ggplot2::ggsave(out_png, plot = p, width = 9, height = max(4, 0.25 * length(ord)), dpi = 150, bg = "white")
+}
+
+plot_matrix_heatmap <- function(M, out_png, title = "Heatmap", value_name = "value") {
+  stopifnot(is.matrix(M) || is.data.frame(M))
+  M <- as.matrix(M)
+  rn <- rownames(M); cn <- colnames(M)
+  if (is.null(rn)) rn <- seq_len(nrow(M))
+  if (is.null(cn)) cn <- seq_len(ncol(M))
+  
+  df <- as.data.frame(as.table(M), stringsAsFactors = FALSE)
+  names(df) <- c("row", "col", value_name)
+  
+  # Keep original order (top-left = [1,1])
+  df$row <- factor(df$row, levels = rev(rn))
+  df$col <- factor(df$col, levels = cn)
+  
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = col, y = row, fill = .data[[value_name]])) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.1) +
+    ggplot2::scale_fill_gradient2(midpoint = 0) +
+    ggplot2::labs(title = title, x = NULL, y = NULL, fill = value_name) +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, vjust = 1),
+      panel.grid = ggplot2::element_blank(),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      legend.key = ggplot2::element_rect(fill = "white", color = NA)
+    )
+  
+  ggplot2::ggsave(out_png, plot = p, width = 9, height = 8, dpi = 150, bg = "white")
+}
+
 
 read_keys <- function(path_json) {
   stopifnot(fs::file_exists(path_json))
   jsonlite::fromJSON(path_json)
 }
 
-read_clean_master <- function(path_csv) {
-  stopifnot(fs::file_exists(path_csv))
-  # write.csv2 -> read.csv2 is the natural pair (sep=";", dec=",")
-  read.csv2(path_csv, stringsAsFactors = FALSE, na.strings = c("", "NA"))
+# Read the exported XLSX (single sheet)
+read_input_xlsx <- function(path_xlsx) {
+  stopifnot(fs::file_exists(path_xlsx))
+  df <- readxl::read_xlsx(path_xlsx)
+  as.data.frame(df, check.names = FALSE)
 }
 
-make_subscale_table <- function(keys) {
-  # Expect keys$items_by_subscale: list of scale/subscale/items
-  x <- keys$items_by_subscale
-  df <- tibble::tibble(
-    scale    = as.character(x$scale),
-    subscale = if ("subscale" %in% names(x)) as.character(x$subscale) else NA_character_,
-    items    = x$items
-  )
+# Resolve input file paths based on CFG$input_set + CFG$level
+resolve_input_paths <- function(cfg) {
+  set <- tolower(cfg$input_set)
+  lvl <- tolower(cfg$level)
   
-  df <- df %>%
-    mutate(
-      subscale = ifelse(is.na(subscale) | subscale == "", NA_character_, subscale),
-      subscale_id = ifelse(is.na(subscale), scale, paste0(scale, "__", subscale)),
-      n_items = lengths(items)
-    ) %>%
-    distinct(subscale_id, .keep_all = TRUE)
+  if (!set %in% c("hitop","complete")) stop("CFG$input_set must be 'hitop' or 'complete'.")
+  if (!lvl %in% c("items","subscales")) stop("CFG$level must be 'items' or 'subscales'.")
   
-  df
+  base <- paste0(cfg$sample, "_", if (set == "hitop") "HiTOP" else "complete")
+  
+  file <- if (lvl == "items") {
+    fs::path(cfg$analysis_input_dir, paste0(base, "_items.xlsx"))
+  } else {
+    fs::path(cfg$analysis_input_dir, paste0(base, "_subscales.xlsx"))
+  }
+  
+  if (!fs::file_exists(file)) {
+    stop("Input XLSX not found: ", file, call. = FALSE)
+  }
+  
+  list(data_xlsx = file)
 }
 
-score_one_subscale <- function(df_items, items, method = "sum", min_prop = 0.80) {
-  X <- df_items[, items, drop = FALSE]
-  X <- as.data.frame(lapply(X, function(v) suppressWarnings(as.numeric(v))))
-  
-  n_total <- ncol(X)
-  n_obs   <- apply(X, 1, function(r) sum(!is.na(r)))
-  ok      <- n_obs >= ceiling(min_prop * n_total)
-  
-  if (method == "sum") {
-    out <- apply(X, 1, function(r) if (all(is.na(r))) NA_real_ else sum(r, na.rm = TRUE))
-    out[!ok] <- NA_real_
-    return(out)
-  }
-  
-  if (method == "mean") {
-    out <- apply(X, 1, function(r) if (all(is.na(r))) NA_real_ else mean(r, na.rm = TRUE))
-    out[!ok] <- NA_real_
-    return(out)
-  }
-  
-  if (method == "prorated_sum") {
-    mn  <- apply(X, 1, function(r) if (all(is.na(r))) NA_real_ else mean(r, na.rm = TRUE))
-    out <- mn * n_total
-    out[!ok] <- NA_real_
-    return(out)
-  }
-  
-  stop("Unknown score_method: ", method)
-}
-
+# Convert numeric-ish vectors to ordered factors (for poly/tetra + WLSMV)
 as_ordered_factor <- function(x) {
-  # keep numeric ordering; drop NA
+  x <- suppressWarnings(as.numeric(x))
   vals <- sort(unique(x[!is.na(x)]))
   factor(x, levels = vals, ordered = TRUE)
 }
+as_numeric <- function(x) suppressWarnings(as.numeric(x))
 
-build_subscale_scores <- function(df_raw, sub_tbl, cfg) {
-  # Only keep items that actually exist in df_raw
-  has_items <- function(items) all(items %in% names(df_raw))
-  sub_tbl2 <- sub_tbl %>%
-    mutate(all_items_present = vapply(items, has_items, logical(1))) %>%
-    filter(all_items_present)
-  
-  scores <- lapply(seq_len(nrow(sub_tbl2)), function(i) {
-    id    <- sub_tbl2$subscale_id[i]
-    items <- sub_tbl2$items[[i]]
-    score_one_subscale(df_raw, items, cfg$score_method, cfg$min_prop_items) |>
-      setNames(id)
-  })
-  
-  df_scores <- as.data.frame(scores)
-  df_scores <- as.data.frame(lapply(df_scores, as_ordered_factor))
-  
-  list(scores = df_scores, subscale_table = sub_tbl2)
-}
-
-drop_low_variance <- function(df_ord, min_levels = 3) {
-  n_levels <- sapply(df_ord, function(v) length(unique(v[!is.na(v)])))
+drop_low_variance_levels <- function(df, min_levels = 3) {
+  n_levels <- sapply(df, function(v) length(unique(v[!is.na(v)])))
   keep <- names(n_levels)[n_levels >= min_levels]
   drop <- names(n_levels)[n_levels <  min_levels]
   list(keep = keep, drop = drop, n_levels = n_levels)
 }
 
-run_parallel_analysis <- function(df_ord, cfg) {
+psych_cor_arg <- function(corr) {
+  corr <- tolower(corr)
+  if (corr == "pearson") return("cor")
+  if (corr == "polychoric") return("poly")
+  if (corr == "tetrachoric") return("tet")
+  stop("Unknown corr: ", corr, " (use pearson|polychoric|tetrachoric)")
+}
+
+assert_binary_for_tetra <- function(df) {
+  levs <- sapply(df, function(v) length(unique(v[!is.na(v)])))
+  if (any(levs > 2)) {
+    bad <- names(levs)[levs > 2]
+    stop(
+      "Tetrachoric selected, but some indicators have >2 categories. Examples: ",
+      paste(head(bad, 10), collapse = ", "),
+      if (length(bad) > 10) " ..." else "",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
+run_parallel_analysis <- function(df, cfg) {
   set.seed(1)
+  cor_arg <- psych_cor_arg(cfg$corr)
+  
   pa <- psych::fa.parallel(
-    df_ord,
-    fa   = "fa",
-    cor  = "poly",
+    df,
+    fa     = "fa",
+    cor    = cor_arg,
     n.iter = cfg$pa_iter,
-    plot = FALSE
+    plot   = FALSE
   )
   
-  # Build a tidy table (observed vs simulated)
-  # fa.values: observed eigenvalues; fa.sim: mean simulated eigenvalues (psych)
   k <- seq_along(pa$fa.values)
   tibble::tibble(
     k = k,
@@ -189,8 +267,134 @@ run_parallel_analysis <- function(df_ord, cfg) {
   )
 }
 
-fit_efa_wlsmv <- function(df_ord, n_factors, rotation) {
-  vars <- colnames(df_ord)
+write_and_show_scree <- function(eigen_df, out_png_base, title, n_suggest = NULL) {
+  
+  # ----------------------------
+  # VERSION 1: WITH parallel
+  # ----------------------------
+  
+  png(paste0(out_png_base, "_withPA.png"), width = 1100, height = 750)
+  
+  plot(
+    eigen_df$k, eigen_df$eigen_observed,
+    type = "b",
+    pch = 16,
+    lwd = 2,
+    xlab = "Factor number",
+    ylab = "Eigenvalue",
+    main = title,
+    col = "black"
+  )
+  
+  # Parallel eigenvalues (light grey, unfilled)
+  lines(
+    eigen_df$k, eigen_df$eigen_sim_mean,
+    type = "b",
+    pch = 1,
+    lwd = 2,
+    lty = 2,
+    col = "grey60"
+  )
+  
+  # Kaiser rule
+  abline(h = 1, lty = 3, lwd = 2)
+  
+  # Suggested vertical line
+  if (!is.null(n_suggest)) {
+    abline(v = n_suggest, lty = 4, lwd = 2)
+  }
+  
+  legend(
+    "topright",
+    legend = c(
+      "Observed eigenvalues",
+      "Parallel analysis (simulated mean)",
+      "Kaiser criterion (Eigenvalue = 1)",
+      if (!is.null(n_suggest)) paste0("Parallel suggestion (k = ", n_suggest, ")")
+    ),
+    col = c("black", "grey60", "black", "black"),
+    lty = c(1, 2, 3, if (!is.null(n_suggest)) 4),
+    lwd = 2,
+    pch = c(16, 1, NA, NA),
+    pt.cex = 1,
+    bty = "n",
+    cex = 1
+  )
+  
+  dev.off()
+  
+  
+  # ----------------------------
+  # VERSION 2: WITHOUT parallel
+  # ----------------------------
+  
+  png(paste0(out_png_base, "_noPA.png"), width = 1100, height = 750)
+  
+  plot(
+    eigen_df$k, eigen_df$eigen_observed,
+    type = "b",
+    pch = 16,
+    lwd = 2,
+    xlab = "Factor number",
+    ylab = "Eigenvalue",
+    main = paste0(title, " (Observed only)"),
+    col = "black"
+  )
+  
+  abline(h = 1, lty = 3, lwd = 2)
+  
+  legend(
+    "topright",
+    legend = c(
+      "Observed eigenvalues",
+      "Kaiser criterion (Eigenvalue = 1)"
+    ),
+    col = c("black", "black"),
+    lty = c(1, 3),
+    lwd = 2,
+    pch = c(16, NA),
+    bty = "n",
+    cex = 1
+  )
+  
+  dev.off()
+}
+
+
+
+choose_n_factors <- function(cfg, pa_tbl) {
+  mode <- tolower(cfg$n_factors_mode)
+  
+  if (mode == "manual") return(as.integer(cfg$n_factors_manual))
+  
+  n_suggest <- sum(pa_tbl$eigen_observed > pa_tbl$eigen_sim_mean, na.rm = TRUE)
+  n_suggest <- max(1L, as.integer(n_suggest))
+  
+  if (mode == "parallel") return(n_suggest)
+  
+  if (mode == "scree_prompt") {
+    if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+      ans_txt <- rstudioapi::showPrompt(
+        title = "EFA: number of factors",
+        message = paste0("Enter number of factors (default ", n_suggest, "):"),
+        default = as.character(n_suggest)
+      )
+      ans_txt <- trimws(ans_txt)
+    } else {
+      ans_txt <- trimws(readline(paste0("Enter number of factors [default ", n_suggest, "]: ")))
+      if (!nzchar(ans_txt)) ans_txt <- as.character(n_suggest)
+    }
+    
+    ans <- suppressWarnings(as.integer(ans_txt))
+    if (is.na(ans) || ans < 1) return(n_suggest)
+    return(ans)
+  }
+  
+  stop("Unknown n_factors_mode: ", cfg$n_factors_mode, " (manual|parallel|scree_prompt)")
+}
+
+fit_efa <- function(df, n_factors, cfg) {
+  vars <- colnames(df)
   
   model <- paste(
     sapply(seq_len(n_factors), function(i) {
@@ -199,142 +403,476 @@ fit_efa_wlsmv <- function(df_ord, n_factors, rotation) {
     collapse = "\n"
   )
   
-  lavaan::cfa(
-    model,
-    data = df_ord,
-    ordered = vars,
-    estimator = "WLSMV",
-    rotation = rotation,
-    std.lv = TRUE,
-    missing = "pairwise",
-    parameterization = "theta"
-  )
+  est <- toupper(cfg$estimator)
+  
+  if (est == "WLSMV") {
+    lavaan::cfa(
+      model,
+      data = df,
+      ordered = vars,
+      estimator = "WLSMV",
+      rotation = cfg$rotation,
+      std.lv = TRUE,
+      missing = "pairwise",
+      parameterization = "theta"
+    )
+  } else if (est %in% c("ML", "MLR")) {
+    lavaan::cfa(
+      model,
+      data = df,
+      estimator = est,          # "ML" or "MLR"
+      rotation = cfg$rotation,
+      std.lv = TRUE,
+      missing = "fiml"
+    )
+  } else {
+    stop("Unknown estimator: ", cfg$estimator, " (ML|MLR|WLSMV)")
+  }
 }
 
 extract_solution_tables <- function(fit) {
   pe <- lavaan::parameterEstimates(fit, standardized = TRUE)
   
-  loadings <- pe %>%
-    filter(op == "=~") %>%
-    transmute(
-      factor = lhs,
-      indicator = rhs,
-      loading = est.std
-    ) %>%
-    tidyr::pivot_wider(names_from = factor, values_from = loading) %>%
-    arrange(indicator)
-  
-  factor_cor <- pe %>%
-    filter(op == "~~", lhs != rhs, grepl("^F\\d+$", lhs), grepl("^F\\d+$", rhs)) %>%
-    transmute(factor1 = lhs, factor2 = rhs, r = est.std)
-  
-  uniq <- pe %>%
-    filter(op == "~~", lhs == rhs, !grepl("^F\\d+$", lhs)) %>%
-    transmute(indicator = lhs, uniqueness = est.std)
-  
-  fit_tbl <- tibble::tibble(
-    measure = c("chisq.scaled", "df", "pvalue.scaled", "cfi.scaled", "tli.scaled", "rmsea.scaled", "srmr"),
-    value   = suppressWarnings(lavaan::fitMeasures(
-      fit,
-      c("chisq.scaled","df","pvalue.scaled","cfi.scaled","tli.scaled","rmsea.scaled","srmr")
-    ))
+  std_col <- dplyr::coalesce(
+    if ("est.std"  %in% names(pe)) pe$est.std else NA_real_,
+    if ("std.all"  %in% names(pe)) pe$std.all else NA_real_,
+    if ("std.lv"   %in% names(pe)) pe$std.lv  else NA_real_,
+    if ("std.nox"  %in% names(pe)) pe$std.nox else NA_real_
   )
+  pe2 <- dplyr::mutate(pe, .std = std_col)
+  
+  loadings <- pe2 %>%
+    dplyr::filter(op == "=~") %>%
+    dplyr::transmute(factor = lhs, indicator = rhs, loading = .std) %>%
+    tidyr::pivot_wider(names_from = factor, values_from = loading) %>%
+    dplyr::arrange(indicator)
+  
+  factor_cor <- pe2 %>%
+    dplyr::filter(op == "~~", lhs != rhs, grepl("^F\\d+$", lhs), grepl("^F\\d+$", rhs)) %>%
+    dplyr::transmute(factor1 = lhs, factor2 = rhs, r = .std)
+  
+  uniq <- pe2 %>%
+    dplyr::filter(op == "~~", lhs == rhs, !grepl("^F\\d+$", lhs)) %>%
+    dplyr::transmute(indicator = lhs, uniqueness = .std)
+  
+  measures <- c(
+    "chisq.scaled","df","pvalue.scaled","cfi.scaled","tli.scaled","rmsea.scaled","srmr",
+    "chisq","pvalue","cfi","tli","rmsea"
+  )
+  fm <- suppressWarnings(lavaan::fitMeasures(fit, measures))
+  fit_tbl <- tibble::tibble(measure = names(fm), value = as.numeric(fm))
   
   list(loadings = loadings, factor_cor = factor_cor, uniqueness = uniq, fit = fit_tbl)
 }
 
-write_scree_png <- function(eigen_df, out_png) {
-  png(out_png, width = 900, height = 600)
-  plot(
-    eigen_df$k, eigen_df$eigen_observed, type = "b",
-    xlab = "Component / factor number", ylab = "Eigenvalue",
-    main = "Scree plot (observed polychoric eigenvalues)"
+run_kmo <- function(X) {
+  R <- stats::cor(X, use = "pairwise.complete.obs")
+  k <- psych::KMO(R)
+  list(
+    kmo_overall = tibble::tibble(metric = "KMO_overall", value = unname(k$MSA)),
+    kmo_per_var = tibble::tibble(variable = names(k$MSAi), kmo = unname(k$MSAi))
   )
-  abline(h = 1, lty = 2)
-  dev.off()
+}
+
+read_strat_info <- function(path_xlsx, id_col = "vpid") {
+  stopifnot(fs::file_exists(path_xlsx))
+  df <- readxl::read_xlsx(path_xlsx)
+  
+  if (!id_col %in% names(df)) {
+    stop("Stratification file is missing ID column '", id_col, "'. Columns are: ",
+         paste(names(df), collapse = ", "), call. = FALSE)
+  }
+  
+  df %>%
+    dplyr::mutate(
+      project = as.character(project),
+      gender  = as.character(gender),
+      group   = dplyr::if_else(is.na(group) | trimws(as.character(group)) == "", "HC", as.character(group)),
+      age     = suppressWarnings(as.numeric(age)),
+      !!id_col := as.character(.data[[id_col]])
+    )
+}
+
+
+make_age_bins <- function(age, n_bins = 6) {
+  qs <- unique(as.numeric(stats::quantile(age, probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE)))
+  if (length(qs) < 3) return(factor(rep("all", length(age))))
+  cut(age, breaks = qs, include.lowest = TRUE, ordered_result = TRUE)
+}
+
+stratified_split_ids <- function(meta, frac_train = 0.5, seed = 1, age_bins = 6) {
+  set.seed(seed)
+  
+  meta2 <- meta %>%
+    dplyr::mutate(
+      age_bin = make_age_bins(age, n_bins = age_bins),
+      strata = interaction(age_bin, gender, project, group, drop = TRUE, sep = " | ")
+    )
+  
+  train_ids <- meta2 %>%
+    dplyr::group_by(strata) %>%
+    dplyr::slice_sample(prop = frac_train) %>%
+    dplyr::ungroup() %>%
+    dplyr::pull(participant_id)
+  
+  list(
+    train_ids = unique(train_ids),
+    test_ids  = setdiff(meta2$participant_id, unique(train_ids)),
+    meta = meta2
+  )
+}
+
+get_std_loading_matrix <- function(fit, vars) {
+  ss <- lavaan::standardizedSolution(fit)
+  std_name <- dplyr::coalesce(
+    if ("est.std" %in% names(ss)) "est.std" else NA_character_,
+    if ("std.all" %in% names(ss)) "std.all" else NA_character_,
+    if ("std.lv"  %in% names(ss)) "std.lv"  else NA_character_,
+    if ("std.nox" %in% names(ss)) "std.nox" else NA_character_
+  )
+  if (is.na(std_name)) stop("No standardized column found in standardizedSolution().")
+  
+  L <- ss %>%
+    dplyr::filter(op == "=~") %>%
+    dplyr::transmute(factor = lhs, indicator = rhs, loading = .data[[std_name]]) %>%
+    tidyr::pivot_wider(names_from = factor, values_from = loading)
+  
+  Lm <- as.matrix(L[, -1, drop = FALSE])
+  rownames(Lm) <- L$indicator
+  
+  # ensure same indicator order
+  Lm <- Lm[vars, , drop = FALSE]
+  
+  # hard fail if NA (prevents the cryptic NULL downstream)
+  if (any(is.na(Lm))) {
+    bad_rows <- rownames(Lm)[apply(Lm, 1, function(r) any(is.na(r)))]
+    stop("NA loadings in standardized solution for indicators (first 10): ",
+         paste(head(bad_rows, 10), collapse=", "),
+         call. = FALSE)
+  }
+  Lm
+}
+
+tucker_congruence_procrustes <- function(L_train, L_test) {
+  # sanity checks
+  if (is.null(L_train) || is.null(L_test)) stop("Loading matrices are NULL.", call. = FALSE)
+  if (!all(dim(L_train) == dim(L_test))) {
+    stop("Train/test loading matrices have different dimensions: ",
+         paste(dim(L_train), collapse="x"), " vs ",
+         paste(dim(L_test), collapse="x"), call. = FALSE)
+  }
+  if (any(!is.finite(L_train)) || any(!is.finite(L_test))) {
+    stop("Non-finite values (NA/Inf) in loading matrices. Check lavaan convergence/standardizedSolution.", call. = FALSE)
+  }
+  
+  # Procrustes alignment (psych has this; GPArotation exports can be inconsistent)
+  pr <- psych::Procrustes(L_train, L_test)
+  L_test_rot <- pr$loadings
+  
+  if (is.null(L_test_rot) || any(!is.finite(L_test_rot))) {
+    stop("Procrustes rotation produced NULL or non-finite loadings.", call. = FALSE)
+  }
+  
+  cong <- psych::factor.congruence(L_train, L_test_rot)
+  if (is.null(cong) || !is.matrix(cong)) {
+    stop("factor.congruence() returned NULL/non-matrix. This usually means unstable/degenerate solutions.", call. = FALSE)
+  }
+  
+  fac_cong <- diag(cong)
+  tibble::tibble(
+    factor = paste0("F", seq_along(fac_cong)),
+    congruence = as.numeric(fac_cong)
+  )
+}
+
+plot_congruence_png <- function(cong_tbl, out_png, title = "Tucker's congruence (train vs test)") {
+  p <- ggplot2::ggplot(cong_tbl, ggplot2::aes(x = factor, y = congruence)) +
+    ggplot2::geom_col() +
+    ggplot2::geom_hline(yintercept = 0.85, linetype = 2) +
+    ggplot2::geom_hline(yintercept = 0.95, linetype = 2) +
+    ggplot2::coord_cartesian(ylim = c(0, 1)) +
+    ggplot2::labs(title = title, x = NULL, y = "Congruence") +
+    ggplot2::theme_minimal()
+  ggplot2::ggsave(out_png, plot = p, width = 7, height = 4.5, dpi = 150)
 }
 
 # ---- Main -------------------------------------------------------------------
 
-keys <- read_keys(CFG$keys_json)
-sub_tbl0 <- make_subscale_table(keys)
+# Resolve input files
+paths <- resolve_input_paths(CFG)
+message("Using input XLSX: ", paths$data_xlsx)
 
-# scale include/exclude filters
-sub_tbl <- sub_tbl0
-if (!is.null(CFG$include_scales)) sub_tbl <- sub_tbl %>% filter(scale %in% CFG$include_scales)
-if (!is.null(CFG$exclude_scales)) sub_tbl <- sub_tbl %>% filter(!(scale %in% CFG$exclude_scales))
+# Read data matrix from XLSX (includes ID as first column)
+X_raw <- read_input_xlsx(paths$data_xlsx)
 
-df_raw <- read_clean_master(CFG$data_csv)
+# Identify / assert ID column
+id_col <- CFG$id_col_in_strat
+if (!id_col %in% names(X_raw)) {
+  stop("Input XLSX is missing ID column '", id_col, "'. Columns are: ",
+       paste(names(X_raw), collapse = ", "), call. = FALSE)
+}
 
-scored <- build_subscale_scores(df_raw, sub_tbl, CFG)
-df_sub <- scored$scores
-sub_tbl_used <- scored$subscale_table
+# Extract IDs + drop from analysis matrix
+ids <- as.character(X_raw[[id_col]])
+X_dat <- X_raw[, setdiff(names(X_raw), id_col), drop = FALSE]
 
-# Drop subscales with too few categories to support polychoric / WLSMV well
-var_check <- drop_low_variance(df_sub, min_levels = 3)
-df_sub2   <- df_sub[, var_check$keep, drop = FALSE]
+# Convert columns depending on corr/estimator
+if (tolower(CFG$corr) %in% c("polychoric","tetrachoric") || toupper(CFG$estimator) == "WLSMV") {
+  X0 <- as.data.frame(lapply(X_dat, as_ordered_factor), check.names = FALSE)
+} else {
+  X0 <- as.data.frame(lapply(X_dat, as_numeric), check.names = FALSE)
+}
+
+# Drop too-few-level indicators (COLUMNS only)
+var_check <- drop_low_variance_levels(X0, min_levels = CFG$min_levels_keep)
+X2 <- X0[, var_check$keep, drop = FALSE]
+
+if (ncol(X2) < 2) stop("After dropping low-level variables, <2 indicators remain.", call. = FALSE)
+
+# Tetrachoric validity check
+if (tolower(CFG$corr) == "tetrachoric") assert_binary_for_tetra(X2)
 
 # Parallel analysis + scree
-pa_tbl <- run_parallel_analysis(df_sub2, CFG)
-scree_png <- fs::path(DIR_OUT, paste0(CFG$sample, "_", CFG$tag, "_scree.png"))
-write_scree_png(pa_tbl, scree_png)
+pa_tbl <- run_parallel_analysis(X2, CFG)
+
+n_suggest_pa <- sum(pa_tbl$eigen_observed > pa_tbl$eigen_sim_mean, na.rm = TRUE)
+n_suggest_pa <- max(1L, as.integer(n_suggest_pa))
+
+scree_png_base <- fs::path(
+  DIR_OUT,
+  paste0(CFG$sample, "_", CFG$tag,
+         "_set-", CFG$input_set,
+         "_lvl-", CFG$level,
+         "_", CFG$corr,
+         "_scree")
+)
+
+write_and_show_scree(
+  pa_tbl,
+  scree_png_base,
+  title = paste0("Scree plot (", CFG$input_set, " / ", CFG$level, " / ", CFG$corr, ")"),
+  n_suggest = n_suggest_pa
+)
+
+
+# Decide number of factors
+n_fac <- choose_n_factors(CFG, pa_tbl)
 
 # Fit EFA
-fit <- fit_efa_wlsmv(df_sub2, CFG$n_factors, CFG$rotation)
+X_fit <- as.data.frame(scale(X2))
+fit <- fit_efa(X_fit, n_fac, CFG)
+pe <- lavaan::parameterEstimates(fit, standardized = FALSE)
+heywood <- pe |>
+  dplyr::filter(op == "~~", lhs == rhs, !grepl("^F\\d+$", lhs)) |>
+  dplyr::transmute(indicator = lhs, resid_var = est) |>
+  dplyr::filter(resid_var < 0) |>
+  dplyr::arrange(resid_var)
+
+heywood
+
+pe_std <- lavaan::parameterEstimates(fit, standardized = TRUE)
+heywood_std <- pe_std |>
+  dplyr::filter(op == "~~", lhs == rhs, !grepl("^F\\d+$", lhs)) |>
+  dplyr::transmute(indicator = lhs, resid_var_std = std.all) |>
+  dplyr::filter(resid_var_std < 0) |>
+  dplyr::arrange(resid_var_std)
+
+heywood_std
+
+R <- cor(X2, use="pairwise.complete.obs")
+which(abs(R) > .95 & upper.tri(R), arr.ind = TRUE)
+
 sol <- extract_solution_tables(fit)
 
-# Optional factor scores
+# ---- Visualization exports ---------------------------------------------------
+
+plot_tag <- paste0(
+  CFG$sample, "_", CFG$tag,
+  "_set-", CFG$input_set,
+  "_lvl-", CFG$level,
+  "_cor-", CFG$corr,
+  "_est-", tolower(CFG$estimator),
+  "_nf", n_fac,
+  "_rot-", CFG$rotation
+)
+
+# 1) Loadings heatmap
+png_load <- fs::path(DIR_OUT, paste0(plot_tag, "_loadings_heatmap.png"))
+plot_loadings_heatmap(
+  sol$loadings,
+  png_load,
+  title = paste0("Loadings heatmap (", CFG$input_set, " / ", CFG$level, ", nf=", n_fac, ")")
+)
+message("Saved: ", png_load)
+
+# 2) Factor correlation heatmap (only if present)
+if (!is.null(sol$factor_cor) && nrow(sol$factor_cor) > 0) {
+  facs <- sort(unique(c(sol$factor_cor$factor1, sol$factor_cor$factor2)))
+  Phi <- matrix(0, nrow = length(facs), ncol = length(facs), dimnames = list(facs, facs))
+  diag(Phi) <- 1
+  for (i in seq_len(nrow(sol$factor_cor))) {
+    f1 <- sol$factor_cor$factor1[i]
+    f2 <- sol$factor_cor$factor2[i]
+    r  <- sol$factor_cor$r[i]
+    Phi[f1, f2] <- r
+    Phi[f2, f1] <- r
+  }
+  
+  png_phi <- fs::path(DIR_OUT, paste0(plot_tag, "_factorcor_heatmap.png"))
+  plot_matrix_heatmap(Phi, png_phi, title = "Factor correlations (standardized)", value_name = "r")
+  message("Saved: ", png_phi)
+} else {
+  message("No factor correlations found (factor_cor table empty) -> skipping factor correlation heatmap.")
+}
+
+# 3) Observed-variable correlation heatmap (uses the data you actually fit)
+R_obs <- stats::cor(X_fit, use = "pairwise.complete.obs")
+png_r <- fs::path(DIR_OUT, paste0(plot_tag, "_observed_cor_heatmap.png"))
+plot_matrix_heatmap(R_obs, png_r, title = "Observed-variable correlations", value_name = "r")
+message("Saved: ", png_r)
+
+
+# ---- KMO / Bartlett ---------------------------------------------------------
+extra_summaries <- list()
+if (isTRUE(CFG$do_kmo)) {
+  kmo <- run_kmo(X2)
+  extra_summaries$kmo_overall <- kmo$kmo_overall
+  extra_summaries$kmo_per_var <- kmo$kmo_per_var
+}
+
+# ---- Split-half stability (stratified) --------------------------------------
+if (isTRUE(CFG$do_split_half)) {
+  
+  meta <- read_strat_info(CFG$strat_file, id_col = CFG$id_col_in_strat)
+  
+  # Keep only meta rows that exist in the analysis input, and reorder to match X2
+  meta2 <- meta %>% dplyr::filter(.data[[CFG$id_col_in_strat]] %in% ids)
+  ids_u <- unique(ids)
+  meta_ids_u <- unique(meta[[CFG$id_col_in_strat]])
+  
+  missing_meta <- setdiff(ids_u, meta_ids_u)
+  if (length(missing_meta)) {
+    warning("Some IDs are missing in stratification_info.xlsx (first 10): ",
+            paste(head(missing_meta, 10), collapse = ", "))
+  }
+  
+  # Reorder meta to match the XLSX row order
+  idx <- match(ids, meta2[[CFG$id_col_in_strat]])
+  if (any(is.na(idx))) {
+    stop("Split-half: could not match some IDs between input XLSX and stratification_info.xlsx.", call. = FALSE)
+  }
+  meta2 <- meta2[idx, , drop = FALSE]
+  
+  # Now meta2 rows align to X2 rows by construction
+  if (nrow(meta2) != nrow(X2)) {
+    stop("Split-half: after aligning by ID, nrow(meta) != nrow(X2).", call. = FALSE)
+  }
+  
+  sp <- stratified_split_ids(
+    meta = meta2 %>% dplyr::rename(participant_id = !!CFG$id_col_in_strat),
+    frac_train = CFG$split_frac_train,
+    seed = CFG$split_seed,
+    age_bins = CFG$age_bins
+  )
+  
+  is_train <- meta2[[CFG$id_col_in_strat]] %in% sp$train_ids
+  X_train <- X2[is_train, , drop = FALSE]
+  X_test  <- X2[!is_train, , drop = FALSE]
+  
+  fit_train <- fit_efa(X_train, n_fac, CFG)
+  fit_test  <- fit_efa(X_test,  n_fac, CFG)
+  
+  vars <- intersect(colnames(X_train), colnames(X_test))
+  X_train <- X_train[, vars, drop = FALSE]
+  X_test  <- X_test[, vars, drop = FALSE]
+  
+  L_train <- get_std_loading_matrix(fit_train, vars)
+  L_test  <- get_std_loading_matrix(fit_test,  vars)
+  
+  cong_tbl <- tucker_congruence_procrustes(L_train, L_test)
+  cong_png <- fs::path(DIR_OUT, paste0(CFG$sample, "_", CFG$tag, "_set-", CFG$input_set, "_split_congruence.png"))
+  plot_congruence_png(cong_tbl, cong_png)
+  
+  split_tbl <- tibble::tibble(
+    set = c("train","test"),
+    n = c(sum(is_train), sum(!is_train)),
+    frac = c(mean(is_train), mean(!is_train))
+  )
+  
+  extra_summaries$split_counts <- split_tbl
+  extra_summaries$tucker_congruence <- cong_tbl
+}
+
+# ---- Optional factor scores --------------------------------------------------
 scores_tbl <- NULL
 if (isTRUE(CFG$compute_factor_scores)) {
   fscores <- as.data.frame(lavaan::lavPredict(fit))
   scores_tbl <- tibble::as_tibble(fscores)
 }
 
-# Build nice metadata tables
+# ---- Metadata tables ---------------------------------------------------------
 settings_tbl <- tibble::tibble(
   setting = names(CFG),
   value   = vapply(CFG, function(x) paste(x, collapse = ", "), character(1))
-)
-
-subscales_tbl <- sub_tbl_used %>%
-  mutate(items = vapply(items, function(x) paste(x, collapse = ", "), character(1))) %>%
-  select(subscale_id, scale, subscale, n_items, items)
+) %>%
+  dplyr::bind_rows(tibble::tibble(setting = "n_factors_used", value = as.character(n_fac))) %>%
+  dplyr::bind_rows(tibble::tibble(setting = "n_indicators_used", value = as.character(ncol(X2))))
 
 coverage_tbl <- tibble::tibble(
-  subscale_id = names(df_sub2),
-  pct_missing = sapply(df_sub2, function(v) 100 * mean(is.na(v)))
-) %>% arrange(desc(pct_missing))
+  variable = names(X2),
+  pct_missing = sapply(X2, function(v) 100 * mean(is.na(v)))
+) %>% dplyr::arrange(dplyr::desc(pct_missing))
 
 dropped_tbl <- tibble::tibble(
-  dropped_subscales = var_check$drop
+  dropped_variables = var_check$drop,
+  reason = paste0("n_levels < ", CFG$min_levels_keep)
 )
 
-# Write XLSX
+# ---- Write XLSX --------------------------------------------------------------
 ts <- format(Sys.time(), "%Y-%m-%d_%H%M%S")
 out_xlsx <- fs::path(
   DIR_OUT,
   paste0("efa_", CFG$sample, "_", CFG$tag,
-         "_nf", CFG$n_factors,
+         "_set-", CFG$input_set,
+         "_lvl-", CFG$level,
+         "_cor-", CFG$corr,
+         "_est-", tolower(CFG$estimator),
+         "_nf", n_fac,
          "_rot-", CFG$rotation,
          "_", ts, ".xlsx")
 )
 
 sheets <- list(
-  "settings"        = settings_tbl,
-  "subscales_used"  = subscales_tbl,
-  "coverage"        = coverage_tbl,
-  "dropped_low_var" = dropped_tbl,
-  "parallel_analysis" = pa_tbl,
-  "loadings"        = sol$loadings,
-  "factor_cor"      = sol$factor_cor,
-  "uniqueness"      = sol$uniqueness,
-  "fit"             = sol$fit
+  "settings"           = settings_tbl,
+  "coverage"           = coverage_tbl,
+  "dropped_low_levels" = dropped_tbl,
+  "parallel_analysis"  = pa_tbl,
+  "loadings"           = sol$loadings,
+  "factor_cor"         = sol$factor_cor,
+  "uniqueness"         = sol$uniqueness,
+  "fit"                = sol$fit
 )
 
+if (length(extra_summaries)) sheets <- c(sheets, extra_summaries)
 if (!is.null(scores_tbl)) sheets[["factor_scores"]] <- scores_tbl
 
 writexl::write_xlsx(sheets, out_xlsx)
 
 message("Saved XLSX: ", out_xlsx)
-message("Saved scree plot: ", scree_png)
+message("Saved scree plot: ", scree_png_base)
 message("Done.")
+
+
+cat("\nROOT:\n", ROOT, "\n", sep="")
+cat("\nDIR_OUT:\n", DIR_OUT, "\n", sep="")
+
+cat("\nDIR_OUT exists? ", dir.exists(DIR_OUT), "\n", sep="")
+cat("Can I write there? ", file.access(DIR_OUT, 2) == 0, "\n", sep="")
+
+# write test
+testfile <- file.path(DIR_OUT, "___write_test.txt")
+ok <- tryCatch({ writeLines("hello", testfile); TRUE }, error = function(e) e)
+cat("Write test result: ", if (isTRUE(ok)) "OK" else paste("FAILED:", ok$message), "\n", sep="")
+
+cat("\nFiles currently in DIR_OUT:\n")
+print(list.files(DIR_OUT, all.files = TRUE))

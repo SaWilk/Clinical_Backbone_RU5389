@@ -61,7 +61,7 @@ script_dir <- function() {
 
 ROOT <- script_dir()
 
-DIR_QUESTIONNAIRES  <- fs::path(ROOT, "01_project_data", "all_projects_backbone", "questionnaires")
+DIR_QUESTIONNAIRES  <- fs::path(ROOT, "01_project_data","RU5389_Backbone_Data", "all_projects_backbone", "questionnaires")
 DIR_INFO            <- fs::path(ROOT, "information")
 DIR_EXPORT          <- fs::path(ROOT, "02_cleaned")
 DIR_KEYS            <- fs::path(DIR_EXPORT, "keys")
@@ -829,13 +829,67 @@ add_subscale_scores <- function(df, keys, scoring_df,
 
 # ---- Export helpers ----------------------------------------------------------
 
+# ---- Master export: normalize item column names ------------------------------
+
+normalize_master_item_id <- function(x) {
+  x %>%
+    as.character() %>%
+    stringr::str_trim() %>%
+    stringr::str_to_lower() %>%
+    stringr::str_replace_all("\\s+", "") %>%
+    stringr::str_replace_all("\\[|\\]", "") %>%  # remove brackets
+    stringr::str_replace_all("[^a-z0-9_]+", "")  # keep alnum/underscore only
+}
+
+is_item_like_col <- function(nm) {
+  # General rule: any column that ends in [digits] is treated as an item column
+  # (covers IDAS[001], APS[010], AQ[005], CAPEfreq[002], CAPEdistr[002], MAPA2[007], etc.)
+  grepl("\\[\\d+\\]$", nm)
+}
+
+rename_master_item_columns_inplace <- function(df) {
+  old <- names(df)
+  new <- old
+  
+  idx <- vapply(old, is_item_like_col, logical(1))
+  new[idx] <- vapply(old[idx], normalize_master_item_id, character(1))
+  
+  # Make sure names are unique after normalization
+  new <- make.unique(new, sep = "_dup")
+  
+  map_tbl <- tibble::tibble(old = old, new = new, renamed = old != new)
+  names(df) <- new
+  
+  list(df = df, map = map_tbl)
+}
+
+
 export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
-  write.csv2(df_clean,   fs::path(out_dir, glue::glue("{sample}_clean_master.csv")), row.names = FALSE)
-  write.csv2(df_discard, fs::path(out_dir, glue::glue("{sample}_discarded.csv")),     row.names = FALSE)
+  # ---- PATCH: normalize item column names BEFORE writing master ----
+  ren <- rename_master_item_columns_inplace(df_clean)
+  df_clean <- ren$df
+  map_tbl  <- ren$map
   
+  # Optional: write mapping for audit/debug (recommended)
+  ts <- format(Sys.time(), "%Y-%m-%d_%H%M%S")
+  map_path <- fs::path(out_dir, glue::glue("rename_map_master_items_{sample}_{ts}.csv"))
+  readr::write_csv(map_tbl, map_path)
+  log_msg("Wrote rename map: ", map_path, "  (renamed n=", sum(map_tbl$renamed), ")")
+  
+  # Master + discarded
+  master_path <- fs::path(out_dir, glue::glue("{sample}_clean_master.csv"))
+  disc_path   <- fs::path(out_dir, glue::glue("{sample}_discarded.csv"))
+  
+  write.csv2(df_clean,   master_path, row.names = FALSE)
+  write.csv2(df_discard, disc_path,   row.names = FALSE)
+  
+  log_msg("Wrote master (normalized items): ", master_path)
+  log_msg("Wrote discarded: ", disc_path)
+  
+  # Per-project split (uses the normalized df_clean that was just written)
   proj_col <- get_project_col(df_clean)
   if (is.null(proj_col)) {
     log_msg("No project column ('project' or 'p') — skipping per-project split.")
@@ -851,6 +905,7 @@ export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
   
   log_msg(glue::glue("Exported {length(df_split)} CSVs with BOM + sep='{delim}' for '{sample}'."))
 }
+
 
 
 save_keys <- function(keys, sample) {

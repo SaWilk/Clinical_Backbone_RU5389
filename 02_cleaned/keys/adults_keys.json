@@ -9,6 +9,10 @@
       "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
     },
     {
+      "scale": "ASRS",
+      "items": ["asrs001", "asrs002", "asrs003", "asrs004", "asrs005", "asrs006"]
+    },
+    {
       "scale": "BISBAS",
       "items": ["bisbas001", "bisbas002", "bisbas003", "bisbas004", "bisbas005", "bisbas006", "bisbas007", "bisbas008", "bisbas009", "bisbas010", "bisbas011", "bisbas012", "bisbas013", "bisbas014", "bisbas015", "bisbas016", "bisbas017", "bisbas018", "bisbas019", "bisbas020", "bisbas021", "bisbas022", "bisbas023", "bisbas024"]
     },
@@ -59,6 +63,10 @@
     {
       "scale": "AQ",
       "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+    },
+    {
+      "scale": "ASRS",
+      "items": ["asrs001", "asrs002", "asrs003", "asrs004", "asrs005", "asrs006"]
     },
     {
       "scale": "BISBAS",
@@ -303,6 +311,10 @@
       "items": ["bisbas002", "bisbas008", "bisbas013", "bisbas016", "bisbas019", "bisbas022", "bisbas024"]
     },
     {
+      "higher_order_subscale": "adhs",
+      "items": ["asrs001", "asrs002", "asrs003", "asrs004", "asrs005", "asrs006"]
+    },
+    {
       "higher_order_subscale": "autism",
       "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
     },
@@ -352,6 +364,19 @@
           "subscales": [
             {
               "items": ["aq005", "aq020", "aq027", "aq028", "aq031", "aq032", "aq036", "aq037", "aq041", "aq045"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scale": "ASRS",
+      "higher_order": [
+        {
+          "higher_order_subscale": "adhs",
+          "subscales": [
+            {
+              "items": ["asrs001", "asrs002", "asrs003", "asrs004", "asrs005", "asrs006"]
             }
           ]
         }
