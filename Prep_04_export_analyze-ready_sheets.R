@@ -48,7 +48,7 @@ ensure_packages(c(
 
 # ---- CONFIG ------------------------------------------------------------------
 CFG <- list(
-  sample = "adults",
+  sample = c("adolescents"),
   
   # Toggle exports
   export_hitop    = TRUE,

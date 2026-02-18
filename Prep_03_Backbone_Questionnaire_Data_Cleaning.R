@@ -1175,12 +1175,22 @@ process_sample <- function(sample,
     return(invisible(NULL))
   }
   if (is.null(iteminfo_path)) iteminfo_path <- latest_iteminfo_for_sample(sample)
-  if (is.null(scoring_df)) scoring_df <- read_scoring(latest_scoring())
+  
+  # --- NEW: fallback to adults Item Information if missing ---
+  if (is.null(iteminfo_path) || is.na(iteminfo_path) || !fs::file_exists(iteminfo_path)) {
+    fallback <- latest_iteminfo_for_sample("adults")
+    if (!is.na(fallback) && fs::file_exists(fallback)) {
+      log_msg("Item Information missing for sample '", sample,
+              "'. Falling back to adults Item Information: ", fallback)
+      iteminfo_path <- fallback
+    }
+  }
   
   q_raw <- read_questionnaire(questionnaire_path)
   ii_all <- read_item_info(iteminfo_path)
+  
   if (is.null(ii_all)) {
-    log_msg("Item Information missing; cannot proceed with mapping and reverse coding. Skipping sample.")
+    log_msg("Item Information missing even after fallback; cannot proceed. Skipping sample '", sample, "'.")
     return(invisible(NULL))
   }
   
@@ -1246,7 +1256,7 @@ process_sample <- function(sample,
 # ---- Main --------------------------------------------------------------------
 
 ALL_SAMPLES <- c("adolescents", "adults", "children_p6", "children_parents", "parents_p6")
-SAMPLES_TO_PROCESS <- c("adults")
+SAMPLES_TO_PROCESS <- c("adults", "adolescents")
 
 SCORING_PATH <- latest_scoring()
 if (is.na(SCORING_PATH)) {

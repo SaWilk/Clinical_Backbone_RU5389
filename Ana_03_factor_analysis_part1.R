@@ -84,7 +84,7 @@ CFG <- list(
   compute_factor_scores = FALSE,
   
   # Tag for output naming
-  tag = "v3_input_switch"
+  tag = ""
 )
 
 CFG <- within(CFG, {
@@ -269,6 +269,27 @@ run_parallel_analysis <- function(df, cfg) {
 
 write_and_show_scree <- function(eigen_df, out_png_base, title, n_suggest = NULL) {
   
+  # ---- Compute Gorsuch–Nelson index ----
+  eig <- eigen_df$eigen_observed
+  if (length(eig) >= 2) {
+    drops <- eig[-length(eig)] - eig[-1]
+    gn_index <- drops / eig[1]
+    gn_df <- data.frame(
+      k = seq_along(gn_index),
+      gn = gn_index
+    )
+    gn_suggest <- gn_df$k[which.max(gn_df$gn)]
+  } else {
+    gn_df <- NULL
+    gn_suggest <- NULL
+  }
+  
+  # Scale GN to eigenvalue range for overlay
+  if (!is.null(gn_df)) {
+    scale_factor <- max(eigen_df$eigen_observed, na.rm = TRUE)
+    gn_scaled <- gn_df$gn * scale_factor
+  }
+  
   # ----------------------------
   # VERSION 1: WITH parallel
   # ----------------------------
@@ -286,7 +307,7 @@ write_and_show_scree <- function(eigen_df, out_png_base, title, n_suggest = NULL
     col = "black"
   )
   
-  # Parallel eigenvalues (light grey, unfilled)
+  # Parallel eigenvalues
   lines(
     eigen_df$k, eigen_df$eigen_sim_mean,
     type = "b",
@@ -299,9 +320,30 @@ write_and_show_scree <- function(eigen_df, out_png_base, title, n_suggest = NULL
   # Kaiser rule
   abline(h = 1, lty = 3, lwd = 2)
   
-  # Suggested vertical line
+  # Parallel suggestion
   if (!is.null(n_suggest)) {
     abline(v = n_suggest, lty = 4, lwd = 2)
+  }
+  
+  # ---- Overlay GN index ----
+  if (!is.null(gn_df)) {
+    lines(
+      gn_df$k,
+      gn_scaled,
+      type = "b",
+      pch = 17,
+      lwd = 2,
+      col = "blue"
+    )
+    
+    # GN suggestion line
+    abline(v = gn_suggest, lty = 5, lwd = 2, col = "blue")
+    
+    # Add secondary axis
+    axis(4,
+         at = pretty(gn_scaled),
+         labels = round(pretty(gn_scaled) / scale_factor, 3))
+    mtext("Gorsuch–Nelson index", side = 4, line = 3)
   }
   
   legend(
@@ -310,55 +352,21 @@ write_and_show_scree <- function(eigen_df, out_png_base, title, n_suggest = NULL
       "Observed eigenvalues",
       "Parallel analysis (simulated mean)",
       "Kaiser criterion (Eigenvalue = 1)",
-      if (!is.null(n_suggest)) paste0("Parallel suggestion (k = ", n_suggest, ")")
+      if (!is.null(n_suggest)) paste0("Parallel suggestion (k = ", n_suggest, ")"),
+      if (!is.null(gn_df)) "Gorsuch–Nelson index",
+      if (!is.null(gn_df)) paste0("GN suggestion (k = ", gn_suggest, ")")
     ),
-    col = c("black", "grey60", "black", "black"),
-    lty = c(1, 2, 3, if (!is.null(n_suggest)) 4),
+    col = c("black", "grey60", "black", "black", "blue", "blue"),
+    lty = c(1, 2, 3, 4, 1, 5),
     lwd = 2,
-    pch = c(16, 1, NA, NA),
-    pt.cex = 1,
-    bty = "n",
-    cex = 1
-  )
-  
-  dev.off()
-  
-  
-  # ----------------------------
-  # VERSION 2: WITHOUT parallel
-  # ----------------------------
-  
-  png(paste0(out_png_base, "_noPA.png"), width = 1100, height = 750)
-  
-  plot(
-    eigen_df$k, eigen_df$eigen_observed,
-    type = "b",
-    pch = 16,
-    lwd = 2,
-    xlab = "Factor number",
-    ylab = "Eigenvalue",
-    main = paste0(title, " (Observed only)"),
-    col = "black"
-  )
-  
-  abline(h = 1, lty = 3, lwd = 2)
-  
-  legend(
-    "topright",
-    legend = c(
-      "Observed eigenvalues",
-      "Kaiser criterion (Eigenvalue = 1)"
-    ),
-    col = c("black", "black"),
-    lty = c(1, 3),
-    lwd = 2,
-    pch = c(16, NA),
+    pch = c(16, 1, NA, NA, 17, NA),
     bty = "n",
     cex = 1
   )
   
   dev.off()
 }
+
 
 
 
@@ -635,6 +643,32 @@ if (tolower(CFG$corr) == "tetrachoric") assert_binary_for_tetra(X2)
 # Parallel analysis + scree
 pa_tbl <- run_parallel_analysis(X2, CFG)
 
+# ---- Gorsuch–Nelson index ----------------------------------------------------
+
+compute_gn_index <- function(eigenvalues) {
+  eigenvalues <- as.numeric(eigenvalues)
+  if (length(eigenvalues) < 2) return(NULL)
+  
+  drops <- eigenvalues[-length(eigenvalues)] - eigenvalues[-1]
+  gn <- drops / eigenvalues[1]
+  
+  tibble::tibble(
+    k = seq_along(gn),
+    lambda_k = eigenvalues[seq_along(gn)],
+    lambda_kplus1 = eigenvalues[seq_along(gn) + 1],
+    drop = drops,
+    gn_index = gn
+  )
+}
+
+gn_tbl <- compute_gn_index(pa_tbl$eigen_observed)
+
+# Suggested factor number = position of largest GN index
+gn_suggest <- gn_tbl$k[which.max(gn_tbl$gn_index)]
+
+message("Gorsuch–Nelson suggested nf = ", gn_suggest)
+
+
 n_suggest_pa <- sum(pa_tbl$eigen_observed > pa_tbl$eigen_sim_mean, na.rm = TRUE)
 n_suggest_pa <- max(1L, as.integer(n_suggest_pa))
 
@@ -790,7 +824,7 @@ if (isTRUE(CFG$do_split_half)) {
   L_test  <- get_std_loading_matrix(fit_test,  vars)
   
   cong_tbl <- tucker_congruence_procrustes(L_train, L_test)
-  cong_png <- fs::path(DIR_OUT, paste0(CFG$sample, "_", CFG$tag, "_set-", CFG$input_set, "_split_congruence.png"))
+  cong_png <- fs::path(DIR_OUT, paste0(CFG$sample, "_", CFG$tag, "_nf", n_fac, "_set-", CFG$input_set, "_split_congruence.png"))
   plot_congruence_png(cong_tbl, cong_png)
   
   split_tbl <- tibble::tibble(

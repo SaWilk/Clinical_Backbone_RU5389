@@ -56,7 +56,7 @@ name <- switch(
 setwd(name)
 
 in_path          <- file.path("raw_data")
-out_path         <- file.path("01_project_data")
+out_path         <- file.path("01_project_data", "RU5389_Backbone_Data")
 function_path    <- file.path("functions")
 psytool_path     <- file.path("raw_data", "psytoolkit")
 cogtest_out_path <- file.path(out_path, "experiment_data")
