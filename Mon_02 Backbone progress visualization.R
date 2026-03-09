@@ -32,7 +32,7 @@ if (requireNamespace("here", quietly = TRUE)) {
   ROOT <- getwd()
 }
 
-library(colorspace)
+if (!require("colorspace")){ install.packages("colorspace")}; library(colorspace)
 
 # ---- Setup ----
 auto_install <- FALSE

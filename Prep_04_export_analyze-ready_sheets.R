@@ -28,7 +28,7 @@
 #   - IDAS, CAPE, AQ, SUQ, ASRS-5, BISBAS, IUS, APS, TICS, CTQ, MAP-SR
 #
 # Run:
-#   Rscript export_hitop_analysis_inputs.R --sample=adults
+#   Rscript export_hitop_analysis_inputs.R --sample=c(adults, adolescents)
 #   (or run in RStudio; recommended: source the file, not line-by-line)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -48,26 +48,15 @@ ensure_packages(c(
 
 # ---- CONFIG ------------------------------------------------------------------
 CFG <- list(
-  sample = c("adolescents"),
-  
-  # Toggle exports
-  export_hitop    = TRUE,
+  samples = c("adults", "adolescents"),
+  export_hitop = TRUE,
   export_complete = TRUE,
-  
-  # COMPLETE: only these questionnaire scales (explicit allow-list)
-  questionnaire_scales = c(
-    "IDAS","CAPE","AQ","SUQ","ASRS-5","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"
-  ),
-  
-  # Optional: handle exceptional score column names if your master deviates
-  # Names = scale in Item Information, values = explicit score column to use for TOTAL scale only.
-  # Example: c("ASRS-5" = "score_asrs5")  # if your master uses score_asrs5 instead of score_asrs_5
+  questionnaire_scales = c("IDAS","CAPE","AQ","SUQ","ASRS-5","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"),
   score_total_override = c(),
-  
-  # Paths (usually auto-resolved)
   clean_master = NULL,
-  item_info    = NULL
+  item_info = NULL
 )
+
 
 # ---- Helpers -----------------------------------------------------------------
 `%||%` <- function(x, y) if (!is.null(x) && !is.na(x) && nzchar(x)) x else y
@@ -100,6 +89,7 @@ parse_args <- function(args) {
   }
   out
 }
+
 
 normalize_sample_case <- function(sample) {
   stringr::str_replace_all(stringr::str_to_title(sample), "_", " ")
@@ -167,82 +157,48 @@ pick_first <- function(cands, nms) {
   if (length(hit)) hit[1] else NA_character_
 }
 
+resolve_iteminfo_with_fallback <- function(root, sample, fallback_sample = "adults") {
+  ii_path <- latest_iteminfo_for_sample(root, sample)
+  if (!is.na(ii_path) && fs::file_exists(ii_path)) return(ii_path)
+  
+  fb <- latest_iteminfo_for_sample(root, fallback_sample)
+  if (!is.na(fb) && fs::file_exists(fb)) {
+    message("ItemInfo missing for sample '", sample, "'. Falling back to '", fallback_sample, "': ", fb)
+    return(fb)
+  }
+  return(NA_character_)
+}
+
 # ---- Main --------------------------------------------------------------------
 ROOT <- script_dir()
 ARGS <- parse_args(commandArgs(trailingOnly = TRUE))
 
-sample <- (ARGS$sample %||% CFG$sample) |> tolower()
-CLEAN_MASTER <- (ARGS$clean_master %||% CFG$clean_master) %||% latest_clean_master_for_sample(ROOT, sample)
-ITEM_INFO    <- (ARGS$item_info    %||% CFG$item_info)    %||% latest_iteminfo_for_sample(ROOT, sample)
+# accept legacy --sample=adults as well
+if (is.null(ARGS$samples) && !is.null(ARGS$sample) && nzchar(ARGS$sample)) {
+  ARGS$samples <- ARGS$sample
+}
 
 OUT_DIR <- fs::path(ROOT, "03_analysis_input")
 fs::dir_create(OUT_DIR)
 
-stopifnot(!is.na(CLEAN_MASTER), fs::file_exists(CLEAN_MASTER))
-stopifnot(!is.na(ITEM_INFO), fs::file_exists(ITEM_INFO))
+# Samples: allow CLI override --samples=adults,adolescents (optional)
+samples_cli <- ARGS$samples %||% NA_character_
+samples <- if (!is.na(samples_cli) && nzchar(samples_cli)) {
+  strsplit(samples_cli, ",", fixed = TRUE)[[1]] |> trimws() |> tolower()
+} else {
+  CFG$samples |> tolower()
+}
 
-message("Sample:     ", sample)
-message("Master:     ", CLEAN_MASTER)
-message("ItemInfo:   ", ITEM_INFO)
+message("Samples:    ", paste(samples, collapse = ", "))
 message("Output dir: ", OUT_DIR)
 message("COMPLETE questionnaire scales: ", paste(CFG$questionnaire_scales, collapse = ", "))
 
-# Read master (CSV2 => semicolon separated)
-d <- readr::read_csv2(CLEAN_MASTER, show_col_types = FALSE, progress = FALSE) |> tibble::as_tibble()
+# Resolve ItemInfo ONCE (use adults fallback if needed)
+ITEM_INFO <- (ARGS$item_info %||% CFG$item_info) %||% resolve_iteminfo_with_fallback(ROOT, "adults", fallback_sample = "adults")
+stopifnot(!is.na(ITEM_INFO), fs::file_exists(ITEM_INFO))
+message("ItemInfo:   ", ITEM_INFO)
 
-# ---- ID column (needed for EFA split-half alignment) -------------------------
-# Prefer 'vp_id' exactly, but accept common alternatives
-id_col <- pick_first(
-  c("vp_id","vp","vpid","participant_id","participantid","id"),
-  names(d)
-)
-
-if (is.na(id_col)) {
-  stop(
-    "Could not find an ID column in master. Expected one of: vp_id, vp, vpid, participant_id, participantid, id",
-    call. = FALSE
-  )
-}
-
-message("Using ID column: ", id_col)
-
-# -----------------------------
-# OUTPUT C: STRATIFICATION INFO
-# -----------------------------
-proj_col   <- pick_first(c("project", "p"), names(d))
-age_col    <- pick_first(c("age_years", "age"), names(d))
-gender_col <- pick_first(c("gender"), names(d))
-group_col  <- pick_first(c("group"), names(d))
-
-missing_needed <- c(
-  if (is.na(proj_col))   "project/p" else NULL,
-  if (is.na(age_col))    "age_years/age" else NULL,
-  if (is.na(gender_col)) "gender" else NULL,
-  if (is.na(group_col))  "group" else NULL
-)
-
-if (length(missing_needed)) {
-  warning("Stratification export: missing columns in master: ",
-          paste(missing_needed, collapse = ", "),
-          call. = FALSE)
-}
-
-stratification_info <- tibble::tibble(
-  !!id_col := as.character(d[[id_col]]),
-  project  = if (!is.na(proj_col))   as.character(d[[proj_col]]) else NA_character_,
-  age      = if (!is.na(age_col))    suppressWarnings(as.numeric(d[[age_col]])) else NA_real_,
-  gender   = if (!is.na(gender_col)) as.character(d[[gender_col]]) else NA_character_,
-  group    = if (!is.na(group_col))  as.character(d[[group_col]]) else NA_character_
-)
-
-
-out_strat <- fs::path(OUT_DIR, "stratification_info.xlsx")
-writexl::write_xlsx(list(stratification_info = stratification_info), out_strat)
-message("Wrote: ", out_strat, "  (", ncol(stratification_info), " columns)")
-
-# -----------------------------
 # Read Item Information
-# -----------------------------
 ii <- readxl::read_excel(ITEM_INFO) |>
   janitor::clean_names()
 
@@ -258,46 +214,82 @@ ii <- ii |>
   ) |>
   dplyr::filter(is_nonempty(.data$item), is_nonempty(.data$scale))
 
-# Build map master colname -> normalized
-col_map <- tibble::tibble(
-  orig = names(d),
-  item_norm = normalize_id(names(d))
-) |>
-  dplyr::distinct(.data$item_norm, .keep_all = TRUE)
+# -----------------------------
+# Per-sample loader
+# -----------------------------
+read_one_sample_master <- function(sample) {
+  cm <- (ARGS$clean_master %||% CFG$clean_master)
+  master_path <- if (!is.null(cm) && !is.na(cm) && nzchar(cm)) cm else latest_clean_master_for_sample(ROOT, sample)
+  if (is.na(master_path) || !fs::file_exists(master_path)) {
+    stop("Missing clean master for sample '", sample, "'. Looked for: ", master_path, call. = FALSE)
+  }
+  d <- readr::read_csv2(master_path, show_col_types = FALSE, progress = FALSE) |> tibble::as_tibble()
+  
+  # ID column
+  id_col <- pick_first(c("vp_id","vp","vpid","participant_id","participantid","id"), names(d))
+  if (is.na(id_col)) {
+    stop("Could not find an ID column in master for sample '", sample, "'.", call. = FALSE)
+  }
+  
+  list(sample = sample, master_path = master_path, d = d, id_col = id_col)
+}
+
+masters <- purrr::map(samples, read_one_sample_master)
 
 # -----------------------------
-# Export helpers
+# Build stratification tables (one per sample + combined)
 # -----------------------------
-export_items_xlsx <- function(ii_rows, out_path, sheet_name = "items") {
+make_strat <- function(obj) {
+  d <- obj$d; id_col <- obj$id_col; sample <- obj$sample
+  proj_col   <- pick_first(c("project", "p"), names(d))
+  age_col    <- pick_first(c("age_years", "age"), names(d))
+  gender_col <- pick_first(c("gender"), names(d))
+  group_col  <- pick_first(c("group"), names(d))
+  
+  tibble::tibble(
+    sample  = sample,
+    !!id_col := as.character(d[[id_col]]),
+    project = if (!is.na(proj_col))   as.character(d[[proj_col]]) else NA_character_,
+    age     = if (!is.na(age_col))    suppressWarnings(as.numeric(d[[age_col]])) else NA_real_,
+    gender  = if (!is.na(gender_col)) as.character(d[[gender_col]]) else NA_character_,
+    group   = if (!is.na(group_col))  as.character(d[[group_col]]) else NA_character_
+  )
+}
+
+strat_list <- purrr::map(masters, make_strat)
+strat_combined <- dplyr::bind_rows(strat_list)
+
+# Write stratification workbook with per-sample sheets + combined
+out_strat <- fs::path(OUT_DIR, "stratification_info.xlsx")
+writexl::write_xlsx(list(strat_all = strat_combined), out_strat)
+message("Wrote: ", out_strat)
+
+# -----------------------------
+# Export builders (per sample)
+# -----------------------------
+export_items_tbl <- function(d, id_col, ii_rows) {
+  col_map <- tibble::tibble(orig = names(d), item_norm = normalize_id(names(d))) |>
+    dplyr::distinct(.data$item_norm, .keep_all = TRUE)
+  
   items_keep_norm <- unique(normalize_id(ii_rows$item))
   item_cols <- col_map |>
     dplyr::filter(.data$item_norm %in% items_keep_norm) |>
     dplyr::pull(.data$orig) |>
     unique()
   
-  if (!length(item_cols)) {
-    stop("No requested items were found as columns in the master file for: ", out_path, call. = FALSE)
-  }
+  if (!length(item_cols)) return(NULL)
   
-  # prepend ID column (kept with original name, e.g. vp_id)
-  d_items <- d |>
+  d |>
     dplyr::transmute(
       !!id_col := as.character(.data[[id_col]]),
       dplyr::across(dplyr::all_of(item_cols), ~ suppressWarnings(as.numeric(.x)))
     )
-  
-  writexl::write_xlsx(setNames(list(d_items), sheet_name), out_path)
-  message("Wrote: ", out_path, "  (", ncol(d_items), " columns incl. ID)")
 }
 
-
-export_scores_xlsx <- function(scales, out_path, sheet_name = "scores", total_override = c()) {
+export_scores_tbl <- function(d, id_col, scales, total_override = c()) {
   scales <- unique(as.character(scales))
   scales <- scales[is_nonempty(scales)]
-  if (!length(scales)) {
-    warning("No scales provided for score export: ", out_path, call. = FALSE)
-    return(invisible(NULL))
-  }
+  if (!length(scales)) return(NULL)
   
   sub_tbl <- ii |>
     dplyr::filter(.data$scale %in% scales) |>
@@ -314,11 +306,7 @@ export_scores_xlsx <- function(scales, out_path, sheet_name = "scores", total_ov
     sc_safe <- safe_score_name(sc)
     
     if (length(subs)) {
-      tibble::tibble(
-        scale = sc,
-        subscale = subs,
-        col = paste0("score_", sc_safe, "__", safe_score_name(subs))
-      )
+      tibble::tibble(scale = sc, subscale = subs, col = paste0("score_", sc_safe, "__", safe_score_name(subs)))
     } else {
       if (length(total_override) && sc %in% names(total_override)) {
         tibble::tibble(scale = sc, subscale = NA_character_, col = unname(total_override[[sc]]))
@@ -326,82 +314,96 @@ export_scores_xlsx <- function(scales, out_path, sheet_name = "scores", total_ov
         tibble::tibble(scale = sc, subscale = NA_character_, col = paste0("score_", sc_safe))
       }
     }
-  }) |>
-    dplyr::arrange(.data$scale, dplyr::if_else(is.na(.data$subscale), "", .data$subscale))
-  
-  missing_scores <- setdiff(wanted$col, names(d))
-  if (length(missing_scores)) {
-    warning(
-      "These requested score columns were not found in the master file and will be skipped:\n  - ",
-      paste(missing_scores, collapse = "\n  - "),
-      call. = FALSE
-    )
-  }
+  })
   
   present_scores <- intersect(wanted$col, names(d))
-  if (!length(present_scores)) {
-    warning("None of the requested score columns were found; not writing: ", out_path, call. = FALSE)
-    return(invisible(NULL))
-  }
+  if (!length(present_scores)) return(NULL)
   
-  # prepend ID column (kept with original name, e.g. vp_id)
-  d_sub <- d |>
+  d |>
     dplyr::transmute(
       !!id_col := as.character(.data[[id_col]]),
       dplyr::across(dplyr::all_of(present_scores), ~ suppressWarnings(as.numeric(.x)))
     )
-  
-  writexl::write_xlsx(setNames(list(d_sub), sheet_name), out_path)
-  message("Wrote: ", out_path, "  (", ncol(d_sub), " columns incl. ID)")
-}
-
-
-# -----------------------------
-# HiTOP exports (as before)
-# -----------------------------
-if (isTRUE(CFG$export_hitop)) {
-  hitop_cols <- grep("hi[_-]?top|hitop", names(ii), ignore.case = TRUE, value = TRUE)
-  
-  if (!length(hitop_cols)) {
-    warning(
-      "No HiTOP mapping columns found in Item Information; HiTOP outputs will be skipped. ",
-      "Columns I see are: ", paste(names(ii), collapse = ", "),
-      call. = FALSE
-    )
-  } else {
-    mapped_rows <- apply(ii[, hitop_cols, drop = FALSE], 1, function(r) any(is_nonempty(r)))
-    ii_hitop <- ii[mapped_rows, , drop = FALSE]
-    
-    if (nrow(ii_hitop)) {
-      out_items <- fs::path(OUT_DIR, paste0(sample, "_HiTOP_items.xlsx"))
-      export_items_xlsx(ii_hitop, out_items, sheet_name = "hitop_items")
-      
-      scales_hitop <- unique(ii_hitop$scale)
-      out_sub <- fs::path(OUT_DIR, paste0(sample, "_HiTOP_subscales.xlsx"))
-      export_scores_xlsx(scales_hitop, out_sub, sheet_name = "hitop_subscales", total_override = CFG$score_total_override)
-    } else {
-      warning("No HiTOP-mapped items found after filtering; HiTOP outputs skipped.", call. = FALSE)
-    }
-  }
 }
 
 # -----------------------------
-# COMPLETE exports (questionnaire-only, explicit allow-list)
+# HiTOP selection (from Item Info) once
 # -----------------------------
+hitop_cols <- grep("hi[_-]?top|hitop", names(ii), ignore.case = TRUE, value = TRUE)
+ii_hitop <- NULL
+if (isTRUE(CFG$export_hitop) && length(hitop_cols)) {
+  mapped_rows <- apply(ii[, hitop_cols, drop = FALSE], 1, function(r) any(is_nonempty(r)))
+  ii_hitop <- ii[mapped_rows, , drop = FALSE]
+}
+
+# -----------------------------
+# COMPLETE selection once
+# -----------------------------
+ii_complete <- NULL
 if (isTRUE(CFG$export_complete)) {
-  ii_complete <- ii |>
-    dplyr::filter(.data$scale %in% CFG$questionnaire_scales)
-  
-  if (!nrow(ii_complete)) {
-    stop("COMPLETE export: No Item Information rows match CFG$questionnaire_scales. Check spelling/case.", call. = FALSE)
-  }
-  
-  out_items_all <- fs::path(OUT_DIR, paste0(sample, "_complete_items.xlsx"))
-  export_items_xlsx(ii_complete, out_items_all, sheet_name = "complete_items")
-  
-  scales_all <- unique(ii_complete$scale)
-  out_scores_all <- fs::path(OUT_DIR, paste0(sample, "_complete_subscales.xlsx"))
-  export_scores_xlsx(scales_all, out_scores_all, sheet_name = "complete_subscales", total_override = CFG$score_total_override)
+  ii_complete <- ii |> dplyr::filter(.data$scale %in% CFG$questionnaire_scales)
+  if (!nrow(ii_complete)) stop("COMPLETE export: No Item Information rows match CFG$questionnaire_scales.", call. = FALSE)
 }
 
-message("Done.")
+# -----------------------------
+# Build multi-sheet workbooks
+# -----------------------------
+# Build per-sample tables then bind into ONE combined sheet each
+items_list  <- list()
+scores_list <- list()
+scales_hitop <- unique(ii_hitop$scale)
+
+for (obj in masters) {
+  tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_hitop)
+  tab_scores <- export_scores_tbl(obj$d, obj$id_col, scales_hitop, total_override = CFG$score_total_override)
+  
+  if (!is.null(tab_items)) {
+    tab_items <- tab_items %>% dplyr::mutate(sample = obj$sample, .before = 1)
+    items_list[[obj$sample]] <- tab_items
+  }
+  if (!is.null(tab_scores)) {
+    tab_scores <- tab_scores %>% dplyr::mutate(sample = obj$sample, .before = 1)
+    scores_list[[obj$sample]] <- tab_scores
+  }
+}
+
+hitop_items_combined  <- dplyr::bind_rows(items_list)
+hitop_scores_combined <- dplyr::bind_rows(scores_list)
+
+out_items <- fs::path(OUT_DIR, "HiTOP_items.xlsx")
+writexl::write_xlsx(list(hitop_items = hitop_items_combined), out_items)
+message("Wrote: ", out_items)
+
+out_scores <- fs::path(OUT_DIR, "HiTOP_subscales.xlsx")
+writexl::write_xlsx(list(hitop_subscales = hitop_scores_combined), out_scores)
+message("Wrote: ", out_scores)
+
+# COMPLETE items + scores
+items_list  <- list()
+scores_list <- list()
+scales_all <- unique(ii_complete$scale)
+
+for (obj in masters) {
+  tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_complete)
+  tab_scores <- export_scores_tbl(obj$d, obj$id_col, scales_all, total_override = CFG$score_total_override)
+  
+  if (!is.null(tab_items)) {
+    tab_items <- tab_items %>% dplyr::mutate(sample = obj$sample, .before = 1)
+    items_list[[obj$sample]] <- tab_items
+  }
+  if (!is.null(tab_scores)) {
+    tab_scores <- tab_scores %>% dplyr::mutate(sample = obj$sample, .before = 1)
+    scores_list[[obj$sample]] <- tab_scores
+  }
+}
+
+complete_items_combined  <- dplyr::bind_rows(items_list)
+complete_scores_combined <- dplyr::bind_rows(scores_list)
+
+out_items_all <- fs::path(OUT_DIR, "complete_items.xlsx")
+writexl::write_xlsx(list(complete_items = complete_items_combined), out_items_all)
+message("Wrote: ", out_items_all)
+
+out_scores_all <- fs::path(OUT_DIR, "complete_subscales.xlsx")
+writexl::write_xlsx(list(complete_subscales = complete_scores_combined), out_scores_all)
+message("Wrote: ", out_scores_all)

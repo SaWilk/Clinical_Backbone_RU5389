@@ -25,6 +25,8 @@ if (!require("purrr")){ install.packages("purrr")}; library(purrr)
 if (!require("stringr")){ install.packages("stringr")}; library(stringr)
 if (!require("rlang")){ install.packages("rlang")}; library(rlang)
 if (!require("readr")){ install.packages("readr")}; library(readr)
+if (!require("lubridate")){ install.packages("lubridate")}; library(lubridate)
+if (!require("openxlsx")){ install.packages("openxlsx")}; library(openxlsx)
 
 
 # Ensure proper number display -------------------------------------------------
@@ -56,7 +58,7 @@ name <- switch(
 setwd(name)
 
 in_path          <- file.path("raw_data")
-out_path         <- file.path("01_project_data", "RU5389_Backbone_Data")
+out_path         <- file.path("01_project_data")
 function_path    <- file.path("functions")
 psytool_path     <- file.path("raw_data", "psytoolkit")
 cogtest_out_path <- file.path(out_path, "experiment_data")
@@ -146,6 +148,70 @@ safe_read_csv <- function(path, tz = "Europe/Berlin") {
 .ensure_dir <- function(path, dry_run) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
 .is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
 .parse_pid <- function(lbl) { s <- trimws(as.character(lbl)); d <- gsub("\\D+", "", s); if (nzchar(d)) d else "unknown" }
+
+# ---- FORCE STABLE MASTER SCHEMA ---------------------------------------------
+
+pick_best_id_col <- function(df) {
+  # prefer vp_id if present, else pick the one with most non-missing values
+  cands <- intersect(c("vp_id","vpid","vp","participant_id","participantid","id"), names(df))
+  if (!length(cands)) return(NA_character_)
+  nn <- vapply(cands, function(cc) sum(!is.na(df[[cc]]) & trimws(as.character(df[[cc]])) != ""), numeric(1))
+  cands[which.max(nn)]
+}
+
+force_master_schema <- function(df) {
+  out <- df
+  
+  # --- ID: force to "vp_id" ---
+  id_col <- pick_best_id_col(out)
+  if (!is.na(id_col) && id_col != "vp_id") {
+    # if vp_id already exists too, coalesce into vp_id
+    if ("vp_id" %in% names(out)) {
+      out <- out %>%
+        dplyr::mutate(
+          vp_id = dplyr::coalesce(
+            as.character(.data$vp_id),
+            as.character(.data[[id_col]])
+          )
+        )
+    } else {
+      out <- out %>% dplyr::rename(vp_id = !!id_col)
+    }
+  } else if (is.na(id_col) && !"vp_id" %in% names(out)) {
+    # last-resort: create empty (keeps downstream scripts from breaking loudly later)
+    out$vp_id <- NA_character_
+  }
+  
+  # --- Project: force to "project" ---
+  proj_col <- if ("project" %in% names(out)) "project" else if ("p" %in% names(out)) "p" else NULL
+  if (!is.null(proj_col) && proj_col != "project") {
+    if ("project" %in% names(out)) {
+      out <- out %>%
+        dplyr::mutate(project = dplyr::coalesce(as.character(.data$project), as.character(.data[[proj_col]])))
+    } else {
+      out <- out %>% dplyr::rename(project = !!proj_col)
+    }
+  }
+  
+  # --- Group: force to "group" (usually already) ---
+  if ("Group" %in% names(out) && !"group" %in% names(out)) {
+    out <- out %>% dplyr::rename(group = Group)
+  }
+  
+  # --- Optional: force age_years to exist (if only "age" exists) ---
+  # (you already compute age_years in enrich_demographics_and_health_fields())
+  # Here we just make sure the column name is consistent if someone renamed it.
+  if ("age_year" %in% names(out) && !"age_years" %in% names(out)) {
+    out <- out %>% dplyr::rename(age_years = age_year)
+  }
+  
+  # Put canonical columns first (nice + stable)
+  front <- intersect(c("vp_id","project","group","age_years","gender"), names(out))
+  out <- out %>% dplyr::select(dplyr::all_of(front), dplyr::everything())
+  
+  out
+}
+
 
 ## Source required functions ---------------------------------------------------
 source(file.path(function_path, "separate_by_project.R"))
@@ -771,12 +837,34 @@ write_xlsx(all_trash_adolescents, file.path(out_path, "discarded", sprintf("dele
 # Separate the data by project and store on disk -------------------------------
 
 samples <- list(
-  adults          = dat_adults,
-  adolescents     = dat_adolescents,
-  children_parents= dat_children_parents,
-  children_p6     = dat_children_p6,
-  parents_p6      = dat_parents_p6
+  adults           = dat_adults,
+  adolescents      = dat_adolescents,
+  children_parents = dat_children_parents,
+  children_p6      = dat_children_p6,
+  parents_p6       = dat_parents_p6
 )
+
+# ---- FORCE stable schema for all questionnaire samples BEFORE slicing ----
+# (This guarantees vp_id + project exist with the same names everywhere.)
+samples <- lapply(names(samples), function(s) {
+  df <- samples[[s]]
+  # only do it for questionnaire-like tables (has vpid/vp/etc). Safe to run anyway.
+  df2 <- force_master_schema(df)
+  
+  # IMPORTANT: keep the original vpid too if you still rely on it elsewhere
+  # (optional but recommended during transition)
+  if (!"vpid" %in% names(df2) && "vp_id" %in% names(df2)) df2$vpid <- suppressWarnings(as.integer(df2$vp_id))
+  
+  df2
+})
+names(samples) <- c("adults","adolescents","children_parents","children_p6","parents_p6")
+
+# 1) prepare all preps first
+preps <- lapply(names(samples), function(s) {
+  prepare_project_slices(samples[[s]], out_path = out_path, sample = s,
+                         data_type = "questionnaires", metadata_info = quest_info)
+})
+
 
 # 1) prepare all preps first
 preps <- lapply(names(samples), function(s) {

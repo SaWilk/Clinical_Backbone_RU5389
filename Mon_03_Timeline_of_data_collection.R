@@ -53,6 +53,8 @@ if (auto_install) {
 invisible(lapply(pkgs, require, character.only = TRUE))
 if (!requireNamespace("patchwork", quietly = TRUE)) install.packages("patchwork")
 library(patchwork)
+if (!requireNamespace("sandwich", quietly = TRUE)) install.packages("sandwich")
+library(sandwich)
 
 # ---- Config ----
 png_width <- 12; png_height <- 8; png_dpi <- 300
