@@ -74,7 +74,8 @@ resolve_duplicates <- function(df,
                                data_type = "data",
                                lastpage_threshold = 17,
                                project_col = "project",
-                               logger = NULL) {
+                               logger = NULL,
+                               suppress_project8_form_warnings = FALSE) {
   # --- Required columns check ---
   if (!all(c(vp_col, submit_col) %in% names(df))) {
     stop(sprintf("[%s | %s] Missing required columns. Need at least: %s, %s",
@@ -87,23 +88,13 @@ resolve_duplicates <- function(df,
   
   if (dataset_name == "children_parents") {
     if (!has_form) stop("[children_parents] Missing required column: form")
-    if (!has_project) {
-      # (3) route through emit_warn to capture in $warnings
-      # message text mirrors original semantics without extra tags
-      # (emit_warn adds the standardized tag)
-      # NOTE: keep text identical except for removal of hard-coded dataset tag
-      #       to avoid duplicated tags in output.
-      #       "—" retained from original.
-      #       This is intentionally not using base warning().
-      #       See emit_warn definition below.
-      # placeholder: actual emit occurs after emit_warn is defined
-    }
   }
   
   # --- Helper: emit warning to console + logger ---
   out_warnings <- character(0)
-  emit_warn <- function(text) {
-    # (7) Gate Unicode symbol via option
+  emit_warn <- function(text, suppress = FALSE) {
+    if (isTRUE(suppress)) return(invisible(NULL))
+    
     prefix <- if (isTRUE(getOption("utf8_symbols", TRUE))) "⚠️ " else "WARNING: "
     tag <- sprintf("[%s | %s]", dataset_name, data_type)
     msg <- paste0(prefix, tag, " ", text, " — please resolve manually.")
@@ -114,7 +105,8 @@ resolve_duplicates <- function(df,
     }
     out_warnings <<- c(out_warnings, msg)
   }
-  # Emit the deferred no-project warning (3)
+  
+  # Emit no-project warning if relevant
   if (dataset_name == "children_parents" && !has_project) {
     emit_warn("No project column found — skipping project-based disambiguation.")
   }
@@ -136,13 +128,15 @@ resolve_duplicates <- function(df,
   
   # --- Build grouping key ---
   key <- id_chr
+  is_cp8_row <- rep(FALSE, nrow(df))
+  
   if (dataset_name == "children_parents" && has_project) {
     proj_num <- suppressWarnings(as.numeric(df[[project_col]]))
-    need_form_disambig <- !is.na(proj_num) & proj_num == 8
-    if (any(need_form_disambig)) {
+    is_cp8_row <- !is.na(proj_num) & proj_num == 8
+    if (any(is_cp8_row)) {
       form_chr <- trimws(as.character(df$form))
       key_cp8 <- paste(id_chr, form_chr, sep = "||")
-      key[need_form_disambig] <- key_cp8[need_form_disambig]
+      key[is_cp8_row] <- key_cp8[is_cp8_row]
     }
   }
   
@@ -160,6 +154,10 @@ resolve_duplicates <- function(df,
     form_vals <- if (has_form) unique(trimws(as.character(df$form[idx]))) else NA_character_
     form_lab  <- if (!all(is.na(form_vals)) && length(form_vals) == 1) form_vals else NA
     n_submit  <- sum(df$.__has_submit__.[idx], na.rm = TRUE)
+    
+    suppress_this_warning <- isTRUE(suppress_project8_form_warnings) &&
+      dataset_name == "children_parents" &&
+      any(is_cp8_row[idx])
     
     # 1. exactly one submit
     if (n_submit == 1) {
@@ -187,20 +185,23 @@ resolve_duplicates <- function(df,
                             vp_col, id_lab, submit_col)
         trash_bin <- rbind(trash_bin, tb)
       }
-      emit_warn(if (!is.na(form_lab))
-        sprintf("Multiple complete datasets for %s=%s, form=%s", vp_col, id_lab, form_lab)
-        else
+      emit_warn(
+        if (!is.na(form_lab)) {
+          sprintf("Multiple complete datasets for %s=%s, form=%s", vp_col, id_lab, form_lab)
+        } else {
           sprintf("Multiple complete datasets for %s=%s", vp_col, id_lab)
+        },
+        suppress = suppress_this_warning
       )
       
       # 3. no submit: check lastpage
     } else {
       if (has_lastpage) {
-        # (1) implement unique max(lastpage) > threshold selection
         lp_vals <- df$.__lp_num__.[idx]
         above_mask <- lp_vals > lastpage_threshold
         above_idx_local <- which(above_mask)
         keeper <- integer(0)
+        
         if (length(above_idx_local) == 1) {
           keeper <- idx[above_idx_local]
         } else if (length(above_idx_local) > 1) {
@@ -210,6 +211,7 @@ resolve_duplicates <- function(df,
             keeper <- idx[max_local]
           }
         }
+        
         if (length(keeper) == 1) {
           losers <- setdiff(idx, keeper)
           if (length(losers) > 0) {
@@ -223,17 +225,23 @@ resolve_duplicates <- function(df,
             trash_bin <- rbind(trash_bin, tb)
           }
         } else {
-          emit_warn(if (!is.na(form_lab))
-            sprintf("Multiple incomplete datasets for %s=%s, form=%s", vp_col, id_lab, form_lab)
-            else
+          emit_warn(
+            if (!is.na(form_lab)) {
+              sprintf("Multiple incomplete datasets for %s=%s, form=%s", vp_col, id_lab, form_lab)
+            } else {
               sprintf("Multiple incomplete datasets for %s=%s", vp_col, id_lab)
+            },
+            suppress = suppress_this_warning
           )
         }
       } else {
-        emit_warn(if (!is.na(form_lab))
-          sprintf("Multiple incomplete datasets for %s=%s, form=%s (no lastpage column)", vp_col, id_lab, form_lab)
-          else
+        emit_warn(
+          if (!is.na(form_lab)) {
+            sprintf("Multiple incomplete datasets for %s=%s, form=%s (no lastpage column)", vp_col, id_lab, form_lab)
+          } else {
             sprintf("Multiple incomplete datasets for %s=%s (no lastpage column)", vp_col, id_lab)
+          },
+          suppress = suppress_this_warning
         )
       }
     }
