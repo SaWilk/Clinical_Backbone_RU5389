@@ -27,6 +27,7 @@ if (!require("rlang")){ install.packages("rlang")}; library(rlang)
 if (!require("readr")){ install.packages("readr")}; library(readr)
 if (!require("lubridate")){ install.packages("lubridate")}; library(lubridate)
 if (!require("openxlsx")){ install.packages("openxlsx")}; library(openxlsx)
+if (!require("jsonlite")){ install.packages("jsonlite")}; library(jsonlite)
 
 
 # Ensure proper number display -------------------------------------------------
@@ -61,7 +62,7 @@ in_path          <- file.path("raw_data")
 out_path         <- file.path("01_project_data")
 function_path    <- file.path("functions")
 psytool_path     <- file.path("raw_data", "psytoolkit")
-cogtest_out_path <- file.path(out_path, "experiment_data")
+private_info_path <- file.path("private_information")
 
 # Specify the folder path
 discarded_path <- file.path(out_path, "discarded")
@@ -99,30 +100,6 @@ safe_read_csv <- function(path, tz = "Europe/Berlin") {
   df
 }
 
-
-.detect_script_dir <- function() {
-  args <- commandArgs(trailingOnly = FALSE)
-  idx <- grep("^--file=", args)
-  if (length(idx)) {
-    p <- sub("^--file=", "", args[idx[length(idx)]])
-    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
-  }
-  if (requireNamespace("rstudioapi", quietly = TRUE)) {
-    p <- tryCatch(rstudioapi::getActiveDocumentContext()$path, error = function(e) "")
-    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
-  }
-  if (requireNamespace("knitr", quietly = TRUE)) {
-    p <- tryCatch(knitr::current_input(dir = TRUE), error = function(e) "")
-    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
-  }
-  ""
-}
-.sanitize_base <- function(p) {
-  if (is.null(p)) return(NULL)
-  p2 <- normalizePath(p, winslash = "/", mustWork = FALSE)
-  tail <- tolower(basename(p2))
-  if (tail %in% c("experiment_data", "questionnaires")) dirname(p2) else p2
-}
 .normalize_sample <- function(x) {
   x <- tolower(x)
   if (grepl("parents_p6", x)) return("parents_p6")
@@ -133,21 +110,19 @@ safe_read_csv <- function(path, tz = "Europe/Berlin") {
   if (grepl("(?:^|[_\\.-])(adults)(?:$|[_\\.-])", x)) return("adults")
   "unknown"
 }
-.infer_sample_from_call <- function(df) {
-  txt1 <- tryCatch(paste(deparse(substitute(df)), collapse = ""), error = function(e) "")
-  s1 <- .normalize_sample(txt1); if (s1 != "unknown") return(s1)
-  mc <- tryCatch(match.call(expand.dots = FALSE)$df, error = function(e) NULL)
-  txt2 <- tryCatch(if (!is.null(mc)) paste(deparse(mc), collapse = "") else "", error = function(e) "")
-  s2 <- .normalize_sample(txt2); if (s2 != "unknown") return(s2)
-  pf <- parent.frame()
-  nms <- ls(envir = pf, all.names = TRUE)
-  cand <- nms[grepl("adults|adolescents|children_parents|children|parents_p6|children_p6", tolower(nms))]
-  for (nm in cand) { s3 <- .normalize_sample(nm); if (s3 != "unknown") return(s3) }
-  "unknown"
+
+pick_newest_matching_dir <- function(parent_dir, pattern) {
+  hits <- dir(parent_dir, pattern = pattern, full.names = TRUE)
+  
+  if (length(hits) == 0) {
+    return(NA_character_)
+  }
+  
+  info <- file.info(hits)
+  hits[which.max(info$mtime)]
 }
-.ensure_dir <- function(path, dry_run) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+
 .is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
-.parse_pid <- function(lbl) { s <- trimws(as.character(lbl)); d <- gsub("\\D+", "", s); if (nzchar(d)) d else "unknown" }
 
 # ---------- Project 3 experiment split helpers ----------
 
@@ -162,62 +137,86 @@ make_p3_exp2_id <- function(x) {
   x <- suppressWarnings(as.integer(as.character(x)))
   out <- x
   
-  # keep already-correct 32xxx ids as they are
   already_32 <- !is.na(x) & x >= 32000L & x < 33000L
   out[already_32] <- x[already_32]
   
-  # everything else gets mapped by keeping the last 3 digits
   idx <- !is.na(x) & !already_32
   out[idx] <- 32000L + (x[idx] %% 1000L)
   
   out
 }
 
-relabel_project3_exp2 <- function(df,
-                                  id_col,
-                                  project_col,
-                                  start_col,
-                                  cutoff_exp1_id = 30128L,
-                                  tz = "Europe/Berlin") {
+relabel_project3_exp2_from_duplicates <- function(df,
+                                                  id_col,
+                                                  project_col,
+                                                  start_col,
+                                                  tz = "Europe/Berlin") {
+  
   stopifnot(id_col %in% names(df), project_col %in% names(df), start_col %in% names(df))
   
+  ids   <- suppressWarnings(as.integer(as.character(df[[id_col]])))
+  proj  <- suppressWarnings(as.integer(as.character(df[[project_col]])))
+  start <- .as_posix_flex(df[[start_col]], tz = tz)
+  
   out <- df
+  out$.tmp_id    <- ids
+  out$.tmp_proj  <- proj
+  out$.tmp_start <- start
+  out$.tmp_row   <- seq_len(nrow(out))
   
-  ids   <- suppressWarnings(as.integer(as.character(out[[id_col]])))
-  proj  <- suppressWarnings(as.integer(as.character(out[[project_col]])))
-  start <- .as_posix_flex(out[[start_col]], tz = tz)
+  is_p3 <- !is.na(out$.tmp_proj) & out$.tmp_proj == 3L
+  p3 <- out[is_p3, , drop = FALSE]
   
-  is_p3 <- !is.na(proj) & proj == 3L
+  p3 <- p3 %>%
+    dplyr::group_by(.tmp_id) %>%
+    dplyr::arrange(.tmp_start, .tmp_row, .by_group = TRUE) %>%
+    dplyr::mutate(
+      .dup_n = dplyr::n(),
+      .dup_rank = dplyr::row_number(),
+      experiment_label = dplyr::case_when(
+        .dup_n == 1L    ~ "exp-1",
+        .dup_rank == 1L ~ "exp-1",
+        TRUE            ~ "exp-2"
+      )
+    ) %>%
+    dplyr::ungroup()
   
-  # boundary = latest timestamp among valid exp_1 rows (<= 30128)
-  boundary_candidates <- start[is_p3 & !is.na(ids) & ids <= cutoff_exp1_id]
-  boundary_time <- if (length(boundary_candidates) && any(!is.na(boundary_candidates))) {
-    suppressWarnings(max(boundary_candidates, na.rm = TRUE))
-  } else {
-    as.POSIXct(NA, tz = tz)
-  }
+  relabel_idx <- p3$.tmp_row[p3$experiment_label == "exp-2"]
   
-  is_exp2 <- is_p3 & !is.na(start) & !is.na(boundary_time) & start > boundary_time
-  
-  old_ids <- ids
   new_ids <- ids
-  new_ids[is_exp2] <- make_p3_exp2_id(ids[is_exp2])
+  new_ids[relabel_idx] <- make_p3_exp2_id(ids[relabel_idx])
   
   out[[id_col]] <- new_ids
+  out$experiment_label <- NA_character_
+  out$experiment_label[p3$.tmp_row] <- p3$experiment_label
   
-  relabeled <- out[is_exp2, , drop = FALSE]
-  if (nrow(relabeled) > 0) {
-    relabeled[[paste0(id_col, "_old")]] <- old_ids[is_exp2]
-    relabeled[[paste0(id_col, "_new")]] <- new_ids[is_exp2]
-    relabeled$experiment_label <- "exp_2"
-  }
+  relabeled <- out[relabel_idx, , drop = FALSE]
   
-  exp1_rows <- out[is_p3 & !is.na(new_ids) & new_ids >= 30000L & new_ids <= cutoff_exp1_id, , drop = FALSE]
-  exp2_rows <- out[is_p3 & !is.na(new_ids) & new_ids >= 32000L & new_ids < 33000L, , drop = FALSE]
+  exp1_rows <- out[out$experiment_label == "exp-1" & out[[project_col]] == 3, , drop = FALSE]
+  exp2_rows <- out[out$experiment_label == "exp-2" & out[[project_col]] == 3, , drop = FALSE]
+  
+  out$.tmp_id <- NULL
+  out$.tmp_proj <- NULL
+  out$.tmp_start <- NULL
+  out$.tmp_row <- NULL
+  
+  exp1_rows$.tmp_id <- NULL
+  exp1_rows$.tmp_proj <- NULL
+  exp1_rows$.tmp_start <- NULL
+  exp1_rows$.tmp_row <- NULL
+  
+  exp2_rows$.tmp_id <- NULL
+  exp2_rows$.tmp_proj <- NULL
+  exp2_rows$.tmp_start <- NULL
+  exp2_rows$.tmp_row <- NULL
+  
+  relabeled$.tmp_id <- NULL
+  relabeled$.tmp_proj <- NULL
+  relabeled$.tmp_start <- NULL
+  relabeled$.tmp_row <- NULL
   
   list(
     data = out,
-    boundary_time = boundary_time,
     relabeled_rows = relabeled,
     exp_1 = exp1_rows,
     exp_2 = exp2_rows
@@ -228,9 +227,10 @@ write_project3_exp_split_exports <- function(exp1_df,
                                              exp2_df,
                                              out_path,
                                              sample_label = "adults",
-                                             data_type = c("questionnaires", "experiment_data")) {
-  data_type <- match.arg(data_type)
+                                             data_type = c("questionnaires", "experiment_data"),
+                                             today = format(Sys.Date(), "%Y-%m-%d")) {
   
+  data_type <- match.arg(data_type)
   type_stub <- if (identical(data_type, "questionnaires")) "questionnaire" else "cogtest"
   
   roots <- c(
@@ -238,18 +238,18 @@ write_project3_exp_split_exports <- function(exp1_df,
     file.path(out_path, "all_projects_backbone", data_type)
   )
   
-  f_exp1 <- sprintf("data_%s_p_3_%s_exp_1.xlsx", sample_label, type_stub)
-  f_exp2 <- sprintf("data_%s_p_3_%s_exp_2.xlsx", sample_label, type_stub)
-  
   for (root in roots) {
-    writexl::write_xlsx(exp1_df, file.path(root, f_exp1))
-    writexl::write_xlsx(exp2_df, file.path(root, f_exp2))
+    dir.create(file.path(root, "exp-1"), recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(root, "exp-2"), recursive = TRUE, showWarnings = FALSE)
   }
   
-  invisible(list(
-    exp_1 = file.path(roots, f_exp1),
-    exp_2 = file.path(roots, f_exp2)
-  ))
+  f_exp1 <- sprintf("3_%s_%s_%s_exp-1.xlsx", today, sample_label, type_stub)
+  f_exp2 <- sprintf("3_%s_%s_%s_exp-2.xlsx", today, sample_label, type_stub)
+  
+  for (root in roots) {
+    writexl::write_xlsx(exp1_df, file.path(root, "exp-1", f_exp1))
+    writexl::write_xlsx(exp2_df, file.path(root, "exp-2", f_exp2))
+  }
 }
 
 # ---- FORCE STABLE MASTER SCHEMA ---------------------------------------------
@@ -374,27 +374,34 @@ dat_general  <- safe_read_csv(file.path(name, in_path, file_general))
 # PsyToolkit Tests
 file_psytool_info <- "data.csv"
 
-psytool_folder_name_adults = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_adults_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
-psytool_folder_name_children = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_children_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
-psytool_folder_name_adolescents = dir(file.path(name, psytool_path), pattern = "^PsyToolkitData_RU5389_BB_adolescents_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+psytool_dir_adults <- pick_newest_matching_dir(
+  file.path(name, psytool_path),
+  "^PsyToolkitData_RU5389_BB_adults_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+)
 
-# Build full paths to the data.csv that actually exist
+psytool_dir_adolescents <- pick_newest_matching_dir(
+  file.path(name, psytool_path),
+  "^PsyToolkitData_RU5389_BB_adolescents_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+)
+
+psytool_dir_children <- pick_newest_matching_dir(
+  file.path(name, psytool_path),
+  "^PsyToolkitData_RU5389_BB_children_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+)
+
 cog_paths <- c(
-  if (length(psytool_folder_name_adults)) 
-    file.path(name, psytool_path, psytool_folder_name_adults, file_psytool_info) else NA_character_,
-  if (length(psytool_folder_name_adolescents)) 
-    file.path(name, psytool_path, psytool_folder_name_adolescents, file_psytool_info) else NA_character_,
-  if (length(psytool_folder_name_children)) 
-    file.path(name, psytool_path, psytool_folder_name_children, file_psytool_info) else NA_character_
+  adults = if (!is.na(psytool_dir_adults)) file.path(psytool_dir_adults, file_psytool_info) else NA_character_,
+  adolescents = if (!is.na(psytool_dir_adolescents)) file.path(psytool_dir_adolescents, file_psytool_info) else NA_character_,
+  children_parents = if (!is.na(psytool_dir_children)) file.path(psytool_dir_children, file_psytool_info) else NA_character_
 )
 
 # Get metadata
 cogtest_info <- file.info(cog_paths)
 cogtest_info$sample <- c("adults","adolescents","children_parents")[seq_len(nrow(cogtest_info))]
 
-psytool_info_adults      <- safe_read_csv(cog_paths[1])
-psytool_info_children    <- safe_read_csv(cog_paths[3])
-psytool_info_adolescents <- safe_read_csv(cog_paths[2])
+psytool_info_adults      <- safe_read_csv(cog_paths["adults"])
+psytool_info_adolescents <- safe_read_csv(cog_paths["adolescents"])
+psytool_info_children    <- safe_read_csv(cog_paths["children_parents"])
 
 # Get item info
 
@@ -730,13 +737,13 @@ dat_adults[[vp_col]][which(dat_adults[[id_col]] == 606 & dat_adults[[project_col
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 708 & dat_adults[[project_col]] == PROJECT)] <- 30112
 # info on who to rename to what comes from Hendrik
 # relabel experiment-2 questionnaire IDs from 30xxx -> 32xxx ------
-p3_questionnaire_split <- relabel_project3_exp2(
+p3_questionnaire_split <- relabel_project3_exp2_from_duplicates(
   df = dat_adults,
   id_col = "vpid",
   project_col = "project",
-  start_col = "startdate",
-  cutoff_exp1_id = 30128L
+  start_col = "startdate"
 )
+
 dat_adults <- p3_questionnaire_split$data
 
 # keep vp_id in sync if present already
@@ -749,7 +756,7 @@ if (nrow(p3_questionnaire_split$relabeled_rows) > 0) {
   writexl::write_xlsx(
     list(
       exp_2_relabelled = p3_questionnaire_split$relabeled_rows %>%
-        dplyr::arrange(startdate, vpid_new),
+        dplyr::arrange(startdate, vpid),
       exp_1_reference = p3_questionnaire_split$exp_1 %>%
         dplyr::arrange(startdate, vpid)
     ),
@@ -853,18 +860,44 @@ dat_adolescents <- dat_adolescents %>% group_by(vpid, project) %>% arrange(submi
 
 # Project 8
 dat_children_parents <- dat_children_parents %>%
-  mutate(startdate = as.Date(startdate)) %>%
+  mutate(startdate_date = as.Date(startdate)) %>%
   group_by(vpid, form) %>%
-  filter(!(vpid == 80505 & form == "P" & startdate == max(startdate))) %>%
-  ungroup()
+  filter(!(vpid == 80505 & form == "P" & startdate_date == max(startdate_date, na.rm = TRUE))) %>%
+  ungroup() %>%
+  select(-startdate_date)
+
+# Project 8
+# Manual resolution of known duplicate form conflicts --------------------------
+
+# 80521: keep first complete duplicate for form C and P
+# 80529: keep first complete duplicate for form C
+# 80523: for incomplete duplicate C-forms, keep the one with highest lastpage
+
+
+# Manual resolution of known duplicate form conflicts --------------------------
+
+dat_children_parents <- dat_children_parents %>%
+  mutate(
+    .row = row_number(),
+    .lastpage_num = suppressWarnings(as.numeric(as.character(lastpage)))
+  ) %>%
+  group_by(vpid, form) %>%
+  filter(
+    !(vpid == 80521 & form %in% c("C", "P") & row_number() > 1),
+    !(vpid == 80529 & form == "C" & row_number() > 1),
+    !(vpid == 80523 & form == "C" & .row != .row[which.max(replace_na(.lastpage_num, -Inf))])
+  ) %>%
+  ungroup() %>%
+  select(-.row, -.lastpage_num)
 
 # Leo says they are not complete and cannot be salvaged:
 dat_adults <- dat_adults[!(dat_adults$vpid == 80018 & dat_adults$project == 8), ]
 dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), ]
+dat_adults <- dat_adults[!(dat_adults$vpid == 80011 & dat_adults$project == 8), ]
 
 
 # Project 9
-PROJECT = 9;
+PROJECT = 9
 dat_adults = dat_adults %>%
   filter(!(vpid == 90002 & lastpage == 11))
 
@@ -880,10 +913,9 @@ drop_answer_empty <- function(df, admin_like = c(
   "vpid","vp_id","id","project","p","proj","comp","submitdate","startdate",
   "datestamp","remid","remidcheck","warning","consent","end","seed","startlanguage"
 )) {
-  admin_rx <- paste0("^(?:", paste(admin_like, collapse="|"), ")$", collapse="")
   is_admin <- tolower(names(df)) %in% tolower(admin_like)
   # consider non-admin, numeric/character with actual values
-  sub <- df[!is_admin]
+  sub <- df[, !is_admin, drop = FALSE]
   if (!ncol(sub)) return(df)
   non_empty <- rowSums(!vapply(sub, function(x) {
     if (is.character(x)) is.na(x) | trimws(x) == "" else is.na(x)
@@ -922,6 +954,43 @@ res_adults <- resolve_duplicates(dat_adults, vp_col, submit_col,
 dat_adults    <- res_adults$cleaned
 trash_adults  <- res_adults$trash_bin
 
+# insert manually merged project 9 subject
+manual_90012 <- readxl::read_excel(
+  file.path(name, private_info_path, "Backbone_90012.xlsx")
+)
+
+manual_90012_row <- manual_90012[2, , drop = FALSE]
+manual_90012_row$vpid <- 90012L
+manual_90012_row$project <- 9L
+
+for (nm in setdiff(names(dat_adults), names(manual_90012_row))) {
+  manual_90012_row[[nm]] <- NA
+}
+
+manual_90012_row <- manual_90012_row[, names(dat_adults), drop = FALSE]
+manual_90012_row <- coerce_by_schema(manual_90012_row, schema)
+
+# force exact class match to dat_adults
+for (nm in intersect(names(manual_90012_row), names(dat_adults))) {
+  target <- dat_adults[[nm]]
+  
+  if (inherits(target, "POSIXct")) {
+    manual_90012_row[[nm]] <- as_time_safely(manual_90012_row[[nm]])
+    
+  } else if (is.integer(target)) {
+    manual_90012_row[[nm]] <- as_int_safely(manual_90012_row[[nm]])
+    
+  } else if (is.numeric(target)) {
+    manual_90012_row[[nm]] <- as_num_safely(manual_90012_row[[nm]])
+    
+  } else if (is.character(target)) {
+    manual_90012_row[[nm]] <- as.character(manual_90012_row[[nm]])
+  }
+}
+
+dat_adults <- dat_adults %>%
+  dplyr::filter(!(vpid == 90012 & project == 9)) %>%
+  dplyr::bind_rows(manual_90012_row)
 
 # Adolescents
 res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col,
@@ -1130,13 +1199,13 @@ psytool_info_adults <- psytool_info_adults %>%
 
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
 # relabel experiment-2 cogtest IDs from 30xxx -> 32xxx -------------
-p3_cogtest_split <- relabel_project3_exp2(
+p3_cogtest_split <- relabel_project3_exp2_from_duplicates(
   df = psytool_info_adults,
   id_col = "id",
   project_col = "p",
-  start_col = "TIME_start",
-  cutoff_exp1_id = 30128L
+  start_col = "TIME_start"
 )
+
 psytool_info_adults <- p3_cogtest_split$data
 
 # write relabel protocol
@@ -1144,7 +1213,7 @@ if (nrow(p3_cogtest_split$relabeled_rows) > 0) {
   writexl::write_xlsx(
     list(
       exp_2_relabelled = p3_cogtest_split$relabeled_rows %>%
-        dplyr::arrange(TIME_start, id_new),
+        dplyr::arrange(TIME_start, id),
       exp_1_reference = p3_cogtest_split$exp_1 %>%
         dplyr::arrange(TIME_start, id)
     ),
@@ -1574,105 +1643,3 @@ qc_results <- imap(datasets, function(dat, nm) {
   invisible(res)
 })
 
-# ---------- Project 3 experiment split helpers ----------
-
-.as_posix_flex <- function(x, tz = "Europe/Berlin") {
-  if (inherits(x, "POSIXct")) return(x)
-  out <- suppressWarnings(as.POSIXct(x, tz = tz))
-  if (any(!is.na(out))) return(out)
-  as_time_safely(x, tz = tz)
-}
-
-make_p3_exp2_id <- function(x) {
-  x <- suppressWarnings(as.integer(as.character(x)))
-  out <- x
-  
-  # keep already-correct 32xxx ids as they are
-  already_32 <- !is.na(x) & x >= 32000L & x < 33000L
-  out[already_32] <- x[already_32]
-  
-  # everything else gets mapped by keeping the last 3 digits
-  idx <- !is.na(x) & !already_32
-  out[idx] <- 32000L + (x[idx] %% 1000L)
-  
-  out
-}
-
-relabel_project3_exp2 <- function(df,
-                                  id_col,
-                                  project_col,
-                                  start_col,
-                                  cutoff_exp1_id = 30128L,
-                                  tz = "Europe/Berlin") {
-  stopifnot(id_col %in% names(df), project_col %in% names(df), start_col %in% names(df))
-  
-  out <- df
-  
-  ids   <- suppressWarnings(as.integer(as.character(out[[id_col]])))
-  proj  <- suppressWarnings(as.integer(as.character(out[[project_col]])))
-  start <- .as_posix_flex(out[[start_col]], tz = tz)
-  
-  is_p3 <- !is.na(proj) & proj == 3L
-  
-  # boundary = latest timestamp among valid exp_1 rows (<= 30128)
-  boundary_candidates <- start[is_p3 & !is.na(ids) & ids <= cutoff_exp1_id]
-  boundary_time <- if (length(boundary_candidates) && any(!is.na(boundary_candidates))) {
-    suppressWarnings(max(boundary_candidates, na.rm = TRUE))
-  } else {
-    as.POSIXct(NA, tz = tz)
-  }
-  
-  is_exp2 <- is_p3 & !is.na(start) & !is.na(boundary_time) & start > boundary_time
-  
-  old_ids <- ids
-  new_ids <- ids
-  new_ids[is_exp2] <- make_p3_exp2_id(ids[is_exp2])
-  
-  out[[id_col]] <- new_ids
-  
-  relabeled <- out[is_exp2, , drop = FALSE]
-  if (nrow(relabeled) > 0) {
-    relabeled[[paste0(id_col, "_old")]] <- old_ids[is_exp2]
-    relabeled[[paste0(id_col, "_new")]] <- new_ids[is_exp2]
-    relabeled$experiment_label <- "exp_2"
-  }
-  
-  exp1_rows <- out[is_p3 & !is.na(new_ids) & new_ids >= 30000L & new_ids <= cutoff_exp1_id, , drop = FALSE]
-  exp2_rows <- out[is_p3 & !is.na(new_ids) & new_ids >= 32000L & new_ids < 33000L, , drop = FALSE]
-  
-  list(
-    data = out,
-    boundary_time = boundary_time,
-    relabeled_rows = relabeled,
-    exp_1 = exp1_rows,
-    exp_2 = exp2_rows
-  )
-}
-
-write_project3_exp_split_exports <- function(exp1_df,
-                                             exp2_df,
-                                             out_path,
-                                             sample_label = "adults",
-                                             data_type = c("questionnaires", "experiment_data")) {
-  data_type <- match.arg(data_type)
-  
-  type_stub <- if (identical(data_type, "questionnaires")) "questionnaire" else "cogtest"
-  
-  roots <- c(
-    file.path(out_path, "3_backbone", data_type),
-    file.path(out_path, "all_projects_backbone", data_type)
-  )
-  
-  f_exp1 <- sprintf("data_%s_p_3_%s_exp_1.xlsx", sample_label, type_stub)
-  f_exp2 <- sprintf("data_%s_p_3_%s_exp_2.xlsx", sample_label, type_stub)
-  
-  for (root in roots) {
-    writexl::write_xlsx(exp1_df, file.path(root, f_exp1))
-    writexl::write_xlsx(exp2_df, file.path(root, f_exp2))
-  }
-  
-  invisible(list(
-    exp_1 = file.path(roots, f_exp1),
-    exp_2 = file.path(roots, f_exp2)
-  ))
-}
