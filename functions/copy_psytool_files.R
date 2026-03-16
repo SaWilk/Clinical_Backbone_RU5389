@@ -134,23 +134,23 @@ copy_psytool_files <- function(
   purged_projects <- character(0)
   purged_samples_all <- character(0)
   
-  ensure_experiment_dir <- function(project, middle_subdir, sample_for_regex = NULL) {
+  ensure_experiment_dir <- function(project) {
     project_block  <- sprintf("%s_backbone", project)
-    experiment_dir <- if (is.null(middle_subdir) || !nzchar(middle_subdir)) {
-      file.path(cogtest_out_path, project_block, "experiment_data")
-    } else {
-      file.path(cogtest_out_path, project_block, middle_subdir, "experiment_data")
-    }
+    experiment_dir <- file.path(cogtest_out_path, project_block, "experiment_data")
     if (!dir.exists(experiment_dir)) dir.create(experiment_dir, recursive = TRUE, showWarnings = FALSE)
     
     # purge once per project
     if (purge_old_dated && !(project %in% purged_projects)) {
       olds <- list.dirs(experiment_dir, full.names = TRUE, recursive = FALSE)
-      # keep only dated _cogtest_data folders (any sample)
-      olds <- olds[grepl("^[0-9A-Z]+_\\d{4}-\\d{2}-\\d{2}_.+_cogtest_data$", basename(olds), ignore.case = TRUE)]
-      if (length(olds)) for (od in olds) unlink(od, recursive = TRUE, force = TRUE)
+      olds <- olds[
+        grepl("^[0-9A-Z]+_\\d{4}-\\d{2}-\\d{2}_.+_cogtest_data(_exp-1|_exp-2)?$", basename(olds), ignore.case = TRUE)
+      ]
+      if (length(olds)) {
+        for (od in olds) unlink(od, recursive = TRUE, force = TRUE)
+      }
       purged_projects <<- c(purged_projects, project)
     }
+    
     experiment_dir
   }
   
@@ -189,26 +189,49 @@ copy_psytool_files <- function(
     date_tag <- date_for_sample(sample)
     
     # project-specific target
-    exp_dir <- ensure_experiment_dir(project, middle_subdir)
+    # interpret middle_subdir as suffix for P3 exp folders, not as real subfolder
+    suffix_tag <- NULL
+    if (!is.null(middle_subdir) && nzchar(middle_subdir)) {
+      suffix_tag <- gsub("_", "-", middle_subdir)
+    }
+    
+    # project-specific target
+    exp_dir <- ensure_experiment_dir(project)
     dated_folder_name <- sprintf("%s_%s_%s_cogtest_data", project, date_tag, sample)
+    if (!is.null(suffix_tag)) {
+      dated_folder_name <- paste0(dated_folder_name, "_", suffix_tag)
+    }
     dest_dir <- file.path(exp_dir, dated_folder_name)
     if (!dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
     
-    # ALL mirror (purge ONCE per sample; only that sample's folders)
+    # ALL mirror (purge ONCE per sample + suffix)
     if (isTRUE(write_all_projects)) {
       all_exp_dir <- file.path(cogtest_out_path, "all_projects_backbone", "experiment_data")
       if (!dir.exists(all_exp_dir)) dir.create(all_exp_dir, recursive = TRUE, showWarnings = FALSE)
       
-      if (purge_old_dated && !(sample %in% purged_samples_all)) {
+      purge_key <- paste(sample, ifelse(is.null(suffix_tag), "base", suffix_tag), sep = "::")
+      
+      if (purge_old_dated && !(purge_key %in% purged_samples_all)) {
         olds_all <- list.dirs(all_exp_dir, full.names = TRUE, recursive = FALSE)
-        # delete ONLY folders for this sample (safe!)
-        pat <- sprintf("^ALL_\\d{4}-\\d{2}-\\d{2}_%s_cogtest_data$", sample)
+        
+        if (is.null(suffix_tag)) {
+          pat <- sprintf("^ALL_\\d{4}-\\d{2}-\\d{2}_%s_cogtest_data$", sample)
+        } else {
+          pat <- sprintf("^ALL_\\d{4}-\\d{2}-\\d{2}_%s_cogtest_data_%s$", sample, suffix_tag)
+        }
+        
         olds_all <- olds_all[grepl(pat, basename(olds_all), ignore.case = TRUE)]
-        if (length(olds_all)) for (od in olds_all) unlink(od, recursive = TRUE, force = TRUE)
-        purged_samples_all <<- c(purged_samples_all, sample)
+        if (length(olds_all)) {
+          for (od in olds_all) unlink(od, recursive = TRUE, force = TRUE)
+        }
+        purged_samples_all <<- c(purged_samples_all, purge_key)
       }
       
       all_dated_name <- sprintf("ALL_%s_%s_cogtest_data", date_tag, sample)
+      if (!is.null(suffix_tag)) {
+        all_dated_name <- paste0(all_dated_name, "_", suffix_tag)
+      }
+      
       dest_all_dir <- file.path(all_exp_dir, all_dated_name)
       if (!dir.exists(dest_all_dir)) dir.create(dest_all_dir, recursive = TRUE, showWarnings = FALSE)
     } else {

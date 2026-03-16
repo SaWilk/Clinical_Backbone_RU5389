@@ -18,37 +18,54 @@ write_project_slices <- function(
     d <- info$df
     if (info$pid %in% c("0","99","unknown") || .is_empty_df(d)) next
     .ensure_dir(info$pid_dir, dry_run)
+    
     if (!dry_run) {
-      if (export_csv) utils::write.csv(d, file.path(info$pid_dir, paste0(info$file_base, ".csv")), row.names = FALSE, na = "")
+      if (export_csv) {
+        utils::write.csv(d, file.path(info$pid_dir, paste0(info$file_base, ".csv")), row.names = FALSE, na = "")
+      }
       writexl::write_xlsx(d, file.path(info$pid_dir, paste0(info$file_base, ".xlsx")))
     }
+    
     if (verbose) message("Saved: ", file.path(info$pid_dir, paste0(info$file_base, ".xlsx")), " | env: ", info$varname)
     collected_dirs <- c(collected_dirs, info$pid_dir)
   }
   
   # ---- composite (ALL) cleanup + write ---------------------------------------
-  # skip for pilot adults per your rule
   if (!(isTRUE(prep$pilot_mode) && identical(prep$sample_name, "adults"))) {
-    comp_df <- if (!is.null(prep$composite_var) && exists(prep$composite_var, envir = .GlobalEnv))
-      get(prep$composite_var, envir = .GlobalEnv) else NULL
+    comp_df <- if (!is.null(prep$composite_var) && exists(prep$composite_var, envir = .GlobalEnv)) {
+      get(prep$composite_var, envir = .GlobalEnv)
+    } else {
+      NULL
+    }
+    
     if (!is.null(comp_df)) {
       all_projects_dir <- file.path(prep$base_dir, "all_projects_backbone", prep$subfolder_main)
       .ensure_dir(all_projects_dir, dry_run)
       
-      # NEW: delete old composite xlsx files for this (sample, suffix)
-      # Example names we generate: ALL_<date>[_PILOT]?_<sample>_<suffix>.xlsx
       if (!dry_run) {
-        pat <- sprintf("^ALL_.*_%s_%s\\.xlsx$", prep$sample_name, prep$file_suffix)
-        olds <- list.files(all_projects_dir, pattern = pat, full.names = TRUE, ignore.case = TRUE)
-        if (length(olds)) file.remove(olds)
+        pat_xlsx <- sprintf("^ALL_.*_%s_%s\\.xlsx$", prep$sample_name, prep$file_suffix)
+        olds_xlsx <- list.files(all_projects_dir, pattern = pat_xlsx, full.names = TRUE, ignore.case = TRUE)
+        if (length(olds_xlsx)) file.remove(olds_xlsx)
+        
+        if (export_csv) {
+          pat_csv <- sprintf("^ALL_.*_%s_%s\\.csv$", prep$sample_name, prep$file_suffix)
+          olds_csv <- list.files(all_projects_dir, pattern = pat_csv, full.names = TRUE, ignore.case = TRUE)
+          if (length(olds_csv)) file.remove(olds_csv)
+        }
       }
       
-      comp_base <- paste(c("ALL", prep$date_str, if (prep$pilot_mode) "PILOT" else NULL,
-                           prep$sample_name, prep$file_suffix), collapse = "_")
+      comp_base <- paste(
+        c("ALL", prep$date_str, if (prep$pilot_mode) "PILOT" else NULL, prep$sample_name, prep$file_suffix),
+        collapse = "_"
+      )
+      
       if (!dry_run) {
-        if (export_csv) utils::write.csv(comp_df, file.path(all_projects_dir, paste0(comp_base, ".csv")), row.names = FALSE, na = "")
+        if (export_csv) {
+          utils::write.csv(comp_df, file.path(all_projects_dir, paste0(comp_base, ".csv")), row.names = FALSE, na = "")
+        }
         writexl::write_xlsx(comp_df, file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
       }
+      
       if (verbose) message("Saved composite sample dataset: ", file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
     }
   } else if (verbose) {
@@ -61,5 +78,6 @@ write_project_slices <- function(
   } else {
     names(collected_dirs) <- basename(dirname(collected_dirs))
   }
+  
   collected_dirs
 }

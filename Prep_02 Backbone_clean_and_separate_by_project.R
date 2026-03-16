@@ -122,104 +122,108 @@ pick_newest_matching_dir <- function(parent_dir, pattern) {
   hits[which.max(info$mtime)]
 }
 
+.ensure_dir <- function(path, dry_run) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
 .is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
 
-# ---------- Project 3 experiment split helpers ----------
-
-.as_posix_flex <- function(x, tz = "Europe/Berlin") {
+# --- Robust POSIXct parser (works for your LimeSurvey + PsyToolkit formats) ---
+as_time_safely <- function(x, tz = "Europe/Berlin") {
   if (inherits(x, "POSIXct")) return(x)
-  out <- suppressWarnings(as.POSIXct(x, tz = tz))
-  if (any(!is.na(out))) return(out)
-  as_time_safely(x, tz = tz)
-}
-
-make_p3_exp2_id <- function(x) {
-  x <- suppressWarnings(as.integer(as.character(x)))
-  out <- x
+  x <- as.character(x)
+  x <- trimws(x)
+  x[x %in% c("", "NA","NaN","null")] <- NA
   
-  already_32 <- !is.na(x) & x >= 32000L & x < 33000L
-  out[already_32] <- x[already_32]
+  fmts <- c(
+    "%Y-%m-%d %H:%M:%S %Z",
+    "%Y-%m-%d %H:%M:%S %z",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d-%H-%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+    "%d.%m.%Y %H:%M:%S",
+    "%d.%m.%Y %H:%M",
+    "%d.%m.%Y"
+  )
   
-  idx <- !is.na(x) & !already_32
-  out[idx] <- 32000L + (x[idx] %% 1000L)
-  
+  out <- rep(as.POSIXct(NA, tz = tz), length(x))
+  for (f in fmts) {
+    miss <- is.na(out) & !is.na(x)
+    if (!any(miss)) break
+    parsed <- suppressWarnings(as.POSIXct(x[miss], format = f, tz = tz))
+    out[miss] <- parsed
+  }
   out
 }
 
-relabel_project3_exp2_from_duplicates <- function(df,
-                                                  id_col,
-                                                  project_col,
-                                                  start_col,
-                                                  tz = "Europe/Berlin") {
+# --- ID remap: 30xxx -> 32xxx (keep last 3 digits); keep existing 32xxx untouched ---
+make_p3_exp2_id <- function(id_vec) {
+  x <- suppressWarnings(as.integer(as.character(id_vec)))
+  out <- x
+  already_32 <- !is.na(x) & x >= 32000L & x < 33000L
+  idx <- !is.na(x) & !already_32
+  out[idx] <- 32000L + (x[idx] %% 1000L)
+  out
+}
+
+# =============================================================================
+# Project 3 exp split EXACTLY as you specified
+# Step 1: extract start time of 30128
+# Step 2: any row with starttime > boundary gets renamed to 32xxx
+# Step 3: exp-2 are the rows whose (final) id starts with 32xxx
+# =============================================================================
+p3_split_after_30128 <- function(df,
+                                 id_col,
+                                 project_col,
+                                 start_col,
+                                 boundary_id = 30128L,
+                                 tz = "Europe/Berlin",
+                                 verbose = TRUE) {
   
   stopifnot(id_col %in% names(df), project_col %in% names(df), start_col %in% names(df))
   
-  ids   <- suppressWarnings(as.integer(as.character(df[[id_col]])))
-  proj  <- suppressWarnings(as.integer(as.character(df[[project_col]])))
-  start <- .as_posix_flex(df[[start_col]], tz = tz)
-  
   out <- df
-  out$.tmp_id    <- ids
-  out$.tmp_proj  <- proj
-  out$.tmp_start <- start
-  out$.tmp_row   <- seq_len(nrow(out))
   
-  is_p3 <- !is.na(out$.tmp_proj) & out$.tmp_proj == 3L
-  p3 <- out[is_p3, , drop = FALSE]
+  ids   <- suppressWarnings(as.integer(as.character(out[[id_col]])))
+  proj  <- suppressWarnings(as.integer(as.character(out[[project_col]])))
+  start <- as_time_safely(out[[start_col]], tz = tz)
   
-  p3 <- p3 %>%
-    dplyr::group_by(.tmp_id) %>%
-    dplyr::arrange(.tmp_start, .tmp_row, .by_group = TRUE) %>%
-    dplyr::mutate(
-      .dup_n = dplyr::n(),
-      .dup_rank = dplyr::row_number(),
-      experiment_label = dplyr::case_when(
-        .dup_n == 1L    ~ "exp-1",
-        .dup_rank == 1L ~ "exp-1",
-        TRUE            ~ "exp-2"
-      )
-    ) %>%
-    dplyr::ungroup()
+  is_p3 <- !is.na(proj) & proj == 3L
   
-  relabel_idx <- p3$.tmp_row[p3$experiment_label == "exp-2"]
+  # Step 1: boundary time = start time of ID 30128 (if multiple, take the latest one)
+  boundary_candidates <- start[is_p3 & !is.na(ids) & ids == boundary_id]
+  if (!length(boundary_candidates) || all(is.na(boundary_candidates))) {
+    stop(sprintf("Could not find a parseable %s for P3 %s == %d.", start_col, id_col, boundary_id))
+  }
+  boundary_time <- max(boundary_candidates, na.rm = TRUE)
   
-  new_ids <- ids
-  new_ids[relabel_idx] <- make_p3_exp2_id(ids[relabel_idx])
+  # Step 2: rename any row strictly AFTER boundary_time
+  idx_after <- which(is_p3 & !is.na(start) & start > boundary_time)
+  if (length(idx_after)) {
+    out[[id_col]][idx_after] <- make_p3_exp2_id(out[[id_col]][idx_after])
+  }
   
-  out[[id_col]] <- new_ids
-  out$experiment_label <- NA_character_
-  out$experiment_label[p3$.tmp_row] <- p3$experiment_label
+  # Step 3: exp-2 = IDs that start with 32xxx (after renaming)
+  ids_new <- suppressWarnings(as.integer(as.character(out[[id_col]])))
+  exp2_mask <- is_p3 & !is.na(ids_new) & ids_new >= 32000L & ids_new < 33000L
+  exp1_mask <- is_p3 & !is.na(ids_new) & ids_new >= 30000L & ids_new < 32000L
   
-  relabeled <- out[relabel_idx, , drop = FALSE]
-  
-  exp1_rows <- out[out$experiment_label == "exp-1" & out[[project_col]] == 3, , drop = FALSE]
-  exp2_rows <- out[out$experiment_label == "exp-2" & out[[project_col]] == 3, , drop = FALSE]
-  
-  out$.tmp_id <- NULL
-  out$.tmp_proj <- NULL
-  out$.tmp_start <- NULL
-  out$.tmp_row <- NULL
-  
-  exp1_rows$.tmp_id <- NULL
-  exp1_rows$.tmp_proj <- NULL
-  exp1_rows$.tmp_start <- NULL
-  exp1_rows$.tmp_row <- NULL
-  
-  exp2_rows$.tmp_id <- NULL
-  exp2_rows$.tmp_proj <- NULL
-  exp2_rows$.tmp_start <- NULL
-  exp2_rows$.tmp_row <- NULL
-  
-  relabeled$.tmp_id <- NULL
-  relabeled$.tmp_proj <- NULL
-  relabeled$.tmp_start <- NULL
-  relabeled$.tmp_row <- NULL
+  if (isTRUE(verbose)) {
+    message(sprintf(
+      "P3 split: boundary_id=%d at %s | renamed=%d | exp-1=%d | exp-2=%d | NA starttimes in P3=%d",
+      boundary_id,
+      format(boundary_time, "%Y-%m-%d %H:%M:%S"),
+      length(idx_after),
+      sum(exp1_mask, na.rm=TRUE),
+      sum(exp2_mask, na.rm=TRUE),
+      sum(is_p3 & is.na(start), na.rm=TRUE)
+    ))
+  }
   
   list(
     data = out,
-    relabeled_rows = relabeled,
-    exp_1 = exp1_rows,
-    exp_2 = exp2_rows
+    boundary_time = boundary_time,
+    exp_1 = out[exp1_mask, , drop = FALSE],
+    exp_2 = out[exp2_mask, , drop = FALSE]
   )
 }
 
@@ -231,27 +235,22 @@ write_project3_exp_split_exports <- function(exp1_df,
                                              today = format(Sys.Date(), "%Y-%m-%d")) {
   
   data_type <- match.arg(data_type)
-  type_stub <- if (identical(data_type, "questionnaires")) "questionnaire" else "cogtest"
+  type_stub <- if (identical(data_type, "questionnaires")) "questionnaire" else "cogtests"
   
   roots <- c(
     file.path(out_path, "3_backbone", data_type),
     file.path(out_path, "all_projects_backbone", data_type)
   )
   
-  for (root in roots) {
-    dir.create(file.path(root, "exp-1"), recursive = TRUE, showWarnings = FALSE)
-    dir.create(file.path(root, "exp-2"), recursive = TRUE, showWarnings = FALSE)
-  }
-  
   f_exp1 <- sprintf("3_%s_%s_%s_exp-1.xlsx", today, sample_label, type_stub)
   f_exp2 <- sprintf("3_%s_%s_%s_exp-2.xlsx", today, sample_label, type_stub)
   
   for (root in roots) {
-    writexl::write_xlsx(exp1_df, file.path(root, "exp-1", f_exp1))
-    writexl::write_xlsx(exp2_df, file.path(root, "exp-2", f_exp2))
+    dir.create(root, recursive = TRUE, showWarnings = FALSE)
+    writexl::write_xlsx(exp1_df, file.path(root, f_exp1))
+    writexl::write_xlsx(exp2_df, file.path(root, f_exp2))
   }
 }
-
 # ---- FORCE STABLE MASTER SCHEMA ---------------------------------------------
 
 pick_best_id_col <- function(df) {
@@ -432,26 +431,6 @@ schema <- read_json(file.path("information", "recommended_schema.json"), simplif
 as_num_safely <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x), fixed = FALSE)))
 as_int_safely <- function(x) suppressWarnings(as.integer(as_num_safely(x)))
 
-as_time_safely <- function(x, tz = "Europe/Berlin") {
-  x <- as.character(x)
-  # try several known formats
-  for (fmt in c("%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d-%H-%M",
-                "%Y-%m-%d",
-                "%d.%m.%Y %H:%M:%S",
-                "%d.%m.%Y %H:%M",
-                "%d.%m.%Y")) {
-    out <- try(as.POSIXct(x, format = fmt, tz = tz), silent = TRUE)
-    if (!inherits(out, "try-error") && any(!is.na(out))) {
-      # fill non-matching with NA, keep vector length
-      good <- !is.na(out)
-      if (!all(good)) out[!good] <- NA
-      return(out)
-    }
-  }
-  # fallback: return NA POSIXct vector
-  as.POSIXct(rep(NA, length(x)), origin = "1970-01-01", tz = tz)
-}
 
 coerce_by_schema <- function(df, schema) {
   if (is.null(df) || !ncol(df)) return(df)
@@ -578,6 +557,9 @@ if ("id" %in% names(psytool_info_adults))      psytool_info_adults$id      <- as
 if ("id" %in% names(psytool_info_adolescents)) psytool_info_adolescents$id <- as_int_safely(psytool_info_adolescents$id)
 if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as_int_safely(psytool_info_children$id)
 
+# --- Project 4 Special-case Probanden-Fix: TIME_end (UTC) -> id = 40016 ----------------
+
+psytool_info_adults$id[psytool_info_adults$TIME_end == as.POSIXct("2025-10-23 06:39:00", tz = "UTC")] <- 40016L
 
 # ---------- Remove empty Rows ----------
 LAST_P_EMPTY <- 7
@@ -737,31 +719,18 @@ dat_adults[[vp_col]][which(dat_adults[[id_col]] == 606 & dat_adults[[project_col
 dat_adults[[vp_col]][which(dat_adults[[id_col]] == 708 & dat_adults[[project_col]] == PROJECT)] <- 30112
 # info on who to rename to what comes from Hendrik
 # relabel experiment-2 questionnaire IDs from 30xxx -> 32xxx ------
-p3_questionnaire_split <- relabel_project3_exp2_from_duplicates(
+p3_questionnaire_split <- p3_split_after_30128(
   df = dat_adults,
   id_col = "vpid",
   project_col = "project",
-  start_col = "startdate"
+  start_col = "startdate",
+  boundary_id = 30128L
 )
-
 dat_adults <- p3_questionnaire_split$data
 
 # keep vp_id in sync if present already
 if ("vp_id" %in% names(dat_adults)) {
   dat_adults$vp_id <- dat_adults$vpid
-}
-
-# write relabel protocol
-if (nrow(p3_questionnaire_split$relabeled_rows) > 0) {
-  writexl::write_xlsx(
-    list(
-      exp_2_relabelled = p3_questionnaire_split$relabeled_rows %>%
-        dplyr::arrange(startdate, vpid),
-      exp_1_reference = p3_questionnaire_split$exp_1 %>%
-        dplyr::arrange(startdate, vpid)
-    ),
-    file.path(out_path, "discarded", sprintf("project3_questionnaires_relabelled_%s.xlsx", today))
-  )
 }
 
 # Project 4
@@ -770,6 +739,7 @@ PROJECT <- 4
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4001 & dat_adults[[project_col]] == PROJECT)] <- 40001
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4002 & dat_adults[[project_col]] == PROJECT)] <- 40002
 dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT)] <- 40003
+dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4033 & dat_adults[[project_col]] == PROJECT)] <- 40033
 
 # falesly named datasets
 dat_adults[[vp_col]][which(dat_adults$id == 630 & dat_adults[[project_col]] == PROJECT)] <- 40016
@@ -1199,27 +1169,14 @@ psytool_info_adults <- psytool_info_adults %>%
 
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
 # relabel experiment-2 cogtest IDs from 30xxx -> 32xxx -------------
-p3_cogtest_split <- relabel_project3_exp2_from_duplicates(
+p3_cogtest_split <- p3_split_after_30128(
   df = psytool_info_adults,
   id_col = "id",
   project_col = "p",
-  start_col = "TIME_start"
+  start_col = "TIME_start",
+  boundary_id = 30128L
 )
-
 psytool_info_adults <- p3_cogtest_split$data
-
-# write relabel protocol
-if (nrow(p3_cogtest_split$relabeled_rows) > 0) {
-  writexl::write_xlsx(
-    list(
-      exp_2_relabelled = p3_cogtest_split$relabeled_rows %>%
-        dplyr::arrange(TIME_start, id),
-      exp_1_reference = p3_cogtest_split$exp_1 %>%
-        dplyr::arrange(TIME_start, id)
-    ),
-    file.path(out_path, "discarded", sprintf("project3_cogtests_relabelled_%s.xlsx", today))
-  )
-}
 
 # Project 4
 PROJECT <- 4
@@ -1462,7 +1419,7 @@ copy_psytool_files(
   meta_env_name     = "cogtest_info",
   test_cols         = NULL,
   allowed_projects  = "3",
-  middle_subdir     = "exp_1",
+  middle_subdir     = "exp-1",
   purge_old_dated   = FALSE,
   write_all_projects= TRUE
 )
@@ -1473,7 +1430,7 @@ copy_psytool_files(
   meta_env_name     = "cogtest_info",
   test_cols         = NULL,
   allowed_projects  = "3",
-  middle_subdir     = "exp_2",
+  middle_subdir     = "exp-2",
   purge_old_dated   = FALSE,
   write_all_projects= TRUE
 )
