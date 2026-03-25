@@ -13,6 +13,8 @@
 # NOTE:
 # - Loadings are 1-factor FA loadings (minres), computed overall per dataset
 # - Filtered rerun affects omega only (not the original loadings sheets)
+# - Separate datasets keep separate filtering logic
+# - Combined dataset uses combined filtering logic
 # ------------------------------------------------------------------------------
 
 rm(list = ls(all.names = TRUE)); invisible(gc())
@@ -665,9 +667,21 @@ if (isTRUE(CFG$export_loading_filtered)) {
   
   message(glue::glue("== ROUND 2: omega after dropping items with loading < {CFG$loading_threshold} =="))
   for (nm in names(dataset_defs)) {
-    dset_flags <- flagged_items %>% dplyr::filter(.data$dataset == nm)
-    message(glue::glue("---- Filtered dataset: {nm} | flagged items: {nrow(dset_flags)} ----"))
-    omega_round2[[nm]] <- build_omega_rows(dataset_defs[[nm]], logger = logger, flagged_tbl = dset_flags)
+    if (identical(nm, CFG$combined_label)) {
+      dset_flags <- flagged_items %>%
+        dplyr::filter(.data$dataset == CFG$combined_label)
+      message(glue::glue("---- Filtered dataset: {nm} | using pooled flags ({nrow(dset_flags)} items) ----"))
+    } else {
+      dset_flags <- flagged_items %>%
+        dplyr::filter(.data$dataset == nm)
+      message(glue::glue("---- Filtered dataset: {nm} | using sample-specific flags ({nrow(dset_flags)} items) ----"))
+    }
+    
+    omega_round2[[nm]] <- build_omega_rows(
+      dataset_defs[[nm]],
+      logger = logger,
+      flagged_tbl = dset_flags
+    )
   }
 }
 

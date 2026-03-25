@@ -677,6 +677,55 @@ preprocess_suq_wide <- function(df, item_info) {
   df
 }
 
+# ---- Adolescent-only fix for filtered substance items ------------------------
+# ---- Adolescent-only fix for hidden substance items --------------------------
+fill_adolescent_hidden_items <- function(df, sample, items = c("and2", "hal2", "opi2"), fill_value = 0) {
+  if (tolower(sample) != "adolescents") return(df)
+  
+  col_map <- tibble::tibble(
+    orig = names(df),
+    norm = normalize_id(names(df))
+  ) %>%
+    dplyr::distinct(.data$norm, .keep_all = TRUE)
+  
+  target_norm <- normalize_id(items)
+  cols_present <- col_map$orig[match(target_norm, col_map$norm)]
+  names(cols_present) <- target_norm
+  cols_present <- cols_present[!is.na(cols_present)]
+  
+  if (!length(cols_present)) {
+    log_msg(
+      "Adolescent hidden-item fix: none of the target items were found. Looked for normalized names: ",
+      paste(target_norm, collapse = ", ")
+    )
+    return(df)
+  }
+  
+  for (target in names(cols_present)) {
+    cc <- cols_present[[target]]
+    x <- suppressWarnings(as.numeric(df[[cc]]))
+    idx <- is.na(x)
+    
+    if (any(idx)) {
+      x[idx] <- fill_value
+      df[[cc]] <- x
+      log_msg(
+        "Adolescent hidden-item fix: filled ", sum(idx),
+        " NA values in raw column '", cc,
+        "' (normalized target '", target, "') with ", fill_value, "."
+      )
+    } else {
+      df[[cc]] <- x
+      log_msg(
+        "Adolescent hidden-item fix: no NA values to fill in raw column '", cc,
+        "' (normalized target '", target, "')."
+      )
+    }
+  }
+  
+  df
+}
+
 
 # ---- Scoring: per-scale + per-subscale scores (wide) ------------------------
 
@@ -1225,6 +1274,8 @@ process_sample <- function(sample,
   
   # NEW: SUQ preprocessing – branching + recode Q2 (1..6 -> 0..5), NO scoring
   q_final <- preprocess_suq_wide(q_final, ii_all)
+  
+  q_final <- fill_adolescent_hidden_items(q_final, sample, items = c("and2", "hal2", "opi2"), fill_value = 0)
   
   q_final <- q_final %>%
     dplyr::select(dplyr::any_of(id_cols), dplyr::everything())
