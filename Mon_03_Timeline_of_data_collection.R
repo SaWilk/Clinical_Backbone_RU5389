@@ -563,7 +563,7 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
   
   # Titles / captions
   main_title <- "Sample size over time via complete backbone datasets"
-  perc_sub_emp  <- "Top: absolute | Bottom: percent of target sample size"
+  perc_sub_emp  <- "Top: absolute | Bottom: percent of integration target sample size"
   perc_sub_pred <- paste0(
     perc_sub_emp,
     " \u2022 Shaded: 95% Newey\u2013West CI = \u0177\u0302 \u00B1 t\u2080.\u2089\u2087\u2085,df \u221A(x\u2032 V\u2099\u2093 x)"
@@ -643,7 +643,7 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
     ggplot2::scale_x_date(breaks = breaks, labels = scales::label_date(format = "%d.%m.%Y"),
                           expand = ggplot2::expansion(mult = c(0, 0.01))) +
     ggplot2::scale_y_continuous(limits = c(0, 100), breaks = c(0,25,50,75,100)) +
-    ggplot2::labs(x = NULL, y = "Percent of target sample size",
+    ggplot2::labs(x = NULL, y = "Percent of integration target sample size",
                   subtitle = if (has_pred) perc_sub_pred else if (has_ideal) perc_sub_ideal else perc_sub_emp) +
     ggplot2::theme_minimal(base_size = 12) +
     ggplot2::theme(legend.position = "right", legend.box = "vertical") +
@@ -766,10 +766,125 @@ fastest <- rates_vanilla_week %>%
   dplyr::filter(is.finite(current_rate_per_week)) %>%
   dplyr::slice_max(current_rate_per_week, n = 1, with_ties = FALSE)
 
+# ---- Forecast table: expected recruited participants by 31.12.2026 ----
+forecast_end_date <- ideal_goal_date   # = 2026-12-31
+
+make_forecast_table <- function(df_cum, id_cols = c("label"),
+                                forecast_date = forecast_end_date,
+                                cap_at_target = TRUE) {
+  df_cum %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(id_cols))) %>%
+    dplyr::group_modify(~{
+      grp <- .x %>% dplyr::arrange(date)
+      
+      tgt <- dplyr::last(grp$target)
+      last_obs_date <- dplyr::last(grp$date)
+      last_obs_cum  <- dplyr::last(grp$cum_n)
+      
+      fitinfo <- fit_project_lm(grp %>% dplyr::select(date, cum_n))
+      
+      if (is.null(fitinfo)) {
+        pred_raw <- last_obs_cum
+        lwr_raw  <- NA_real_
+        upr_raw  <- NA_real_
+        method   <- "last_observed"
+      } else {
+        pr <- predict_lm_ci_nw(fitinfo, as.Date(forecast_date))
+        pred_raw <- pr$fit[1]
+        lwr_raw  <- pr$lwr[1]
+        upr_raw  <- pr$upr[1]
+        method   <- "linear_projection"
+      }
+      
+      pred_use <- pred_raw
+      lwr_use  <- lwr_raw
+      upr_use  <- upr_raw
+      
+      if (isTRUE(cap_at_target) && !is.na(tgt) && is.finite(tgt) && tgt > 0) {
+        pred_use <- pmin(pred_use, tgt)
+        lwr_use  <- pmin(lwr_use, tgt)
+        upr_use  <- pmin(upr_use, tgt)
+      }
+      
+      tibble::tibble(
+        target = tgt,
+        last_obs_date = last_obs_date,
+        last_obs_cum = last_obs_cum,
+        forecast_date = as.Date(forecast_date),
+        predicted_cum_n = pred_use,
+        predicted_lwr = lwr_use,
+        predicted_upr = upr_use,
+        additional_expected_until_year_end = pmax(0, pred_use - last_obs_cum),
+        predicted_pct_of_target = ifelse(
+          is.na(tgt) | tgt <= 0,
+          NA_real_,
+          100 * pred_use / tgt
+        ),
+        method = method
+      )
+    }) %>%
+    dplyr::ungroup()
+}
+
+forecast_vanilla_2026 <- make_forecast_table(
+  vanilla_cum,
+  id_cols = c("label"),
+  forecast_date = forecast_end_date,
+  cap_at_target = TRUE
+) %>%
+  dplyr::rename(project = label) %>%
+  dplyr::left_join(
+    vanilla_cum %>% dplyr::select(label, project_num = project) %>% dplyr::distinct(),
+    by = c("project" = "label")
+  ) %>%
+  dplyr::select(
+    project_num, project, target,
+    last_obs_date, last_obs_cum,
+    forecast_date, predicted_cum_n, predicted_lwr, predicted_upr,
+    additional_expected_until_year_end, predicted_pct_of_target, method
+  ) %>%
+  dplyr::mutate(
+    dplyr::across(
+      c(target, last_obs_cum, predicted_cum_n, predicted_lwr, predicted_upr,
+        additional_expected_until_year_end, predicted_pct_of_target),
+      ~ round(.x, round_digits)
+    )
+  ) %>%
+  dplyr::arrange(project_num)
+
+forecast_split_2026 <- make_forecast_table(
+  split_cum,
+  id_cols = c("label"),
+  forecast_date = forecast_end_date,
+  cap_at_target = TRUE
+) %>%
+  dplyr::rename(series = label) %>%
+  dplyr::left_join(
+    split_cum %>% dplyr::select(label, project, sample) %>% dplyr::distinct(),
+    by = c("series" = "label")
+  ) %>%
+  dplyr::select(
+    project, sample, series, target,
+    last_obs_date, last_obs_cum,
+    forecast_date, predicted_cum_n, predicted_lwr, predicted_upr,
+    additional_expected_until_year_end, predicted_pct_of_target, method
+  ) %>%
+  dplyr::mutate(
+    dplyr::across(
+      c(target, last_obs_cum, predicted_cum_n, predicted_lwr, predicted_upr,
+        additional_expected_until_year_end, predicted_pct_of_target),
+      ~ round(.x, round_digits)
+    )
+  ) %>%
+  dplyr::arrange(project, sample, series)
+
+
 writexl::write_xlsx(
   list(
     rates_vanilla_weekly = rates_vanilla_week,
     rates_split_weekly   = rates_split_week,
+    forecast_vanilla_2026 = forecast_vanilla_2026,
+    forecast_split_2026   = forecast_split_2026,
     summary              = rate_summary,
     slowest              = slowest,
     fastest              = fastest

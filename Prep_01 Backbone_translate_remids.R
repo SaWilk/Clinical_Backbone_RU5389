@@ -262,20 +262,23 @@ if (nrow(dups) > 0) {
 
 # 2) Correct mis-typed remid (and remidcheck) in raw survey data (805199 → 80519)
 fix_mistyped_both <- function(df) {
-  if ("remid" %in% names(df)) {
     if (is.numeric(df$remid)) {
       df$remid[df$remid == 805199] <- 80519
     } else {
       df$remid[df$remid == "805199"] <- "80519"
     }
-  }
-  if ("remidcheck" %in% names(df)) {
+
     if (is.numeric(df$remidcheck)) {
       df$remidcheck[df$remidcheck == 805199] <- 80519
     } else {
       df$remidcheck[df$remidcheck == "805199"] <- "80519"
     }
-  }
+  
+    if (is.numeric(df$remidcheck)) {
+      df$remidcheck[df$remidcheck == 90144] <- 90365
+    } else {
+      df$remidcheck[df$remidcheck == "90144"] <- "90365"
+    }
   df
 }
 dat_children_parents <- fix_mistyped_both(dat_children_parents)

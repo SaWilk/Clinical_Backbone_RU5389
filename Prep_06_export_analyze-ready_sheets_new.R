@@ -39,7 +39,7 @@ CFG <- list(
   missing_threshold = 0.20,
   
   questionnaire_scales = c(
-    "IDAS","CAPE","AQ","SUQ","ASRS-5","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"
+    "IDAS","CAPE","AQ","SUQ","ASRS","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"
   ),
   
   protected_hidden_items = c("and2", "and3", "hal2", "hal3", "opi2", "opi3"),

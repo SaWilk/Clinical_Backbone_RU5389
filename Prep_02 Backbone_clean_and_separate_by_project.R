@@ -588,6 +588,13 @@ empty_ad_4 <- dat_adults[ which(mask_ad_4), , drop = FALSE ]
 dat_adults <- dat_adults[ -which(mask_ad_4), , drop = FALSE ]
 .diag("P4 adults", dat_adults, mask_ad_4)
 
+## Project 5
+PROJECT <- 5
+mask_ad_5 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
+empty_ad_5 <- dat_adults[ which(mask_ad_5), , drop = FALSE ]
+dat_adults <- dat_adults[ -which(mask_ad_5), , drop = FALSE ]
+.diag("P5 adults", dat_adults, mask_ad_5)
+
 ## Project 6 (different questionnaire; no project split for _p6 forms)
 LAST_P_EMPTY <- 3
 mask_ch_6 <- .lp_is_below(dat_children_p6, last_page, LAST_P_EMPTY)
@@ -642,6 +649,7 @@ if (!exists("empty_ad_3"))      empty_ad_3      <- .empty_like(dat_adults)
 if (!exists("empty_ch_3"))      empty_ch_3      <- .empty_like(dat_children_parents)
 if (!exists("empty_ch_4"))      empty_ch_4      <- .empty_like(dat_children_parents)
 if (!exists("empty_ad_4"))      empty_ad_4      <- .empty_like(dat_adults)
+if (!exists("empty_ad_5"))      empty_ad_5      <- .empty_like(dat_adults)
 if (!exists("empty_ch_6"))      empty_ch_6      <- .empty_like(dat_children_p6)
 if (!exists("empty_p_6"))       empty_p_6       <- .empty_like(dat_parents_p6)
 if (!exists("empty_ad_7"))      empty_ad_7      <- .empty_like(dat_adults)
@@ -651,7 +659,7 @@ if (!exists("empty_ch_8"))      empty_ch_8      <- .empty_like(dat_children_pare
 if (!exists("empty_ad_9"))      empty_ad_9      <- .empty_like(dat_adults)
 
 # Recreate the legacy lists the downstream code expects
-ads <- list(empty_ad_3, empty_ad_4, empty_ad_7, empty_ad_8, empty_ad_9)
+ads <- list(empty_ad_3, empty_ad_4, empty_ad_5, empty_ad_7, empty_ad_8, empty_ad_9)
 ch  <- list(empty_ch_3, empty_ch_4, empty_ch_8)
 
 # Keep only the non-empty ones
@@ -1134,6 +1142,17 @@ psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2046 & psyt
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2048 & psytool_info_adults[[project_col]] == PROJECT)] <- 20048
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2051 & psytool_info_adults[[project_col]] == PROJECT)] <- 20051
 psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2052 & psytool_info_adults[[project_col]] == PROJECT)] <- 20052
+psytool_info_adults <- psytool_info_adults %>%
+  group_by(.data[[vp_col]]) %>%
+  mutate(
+    "{vp_col}" := if_else(
+      .data[[vp_col]] == 20069 & .data[[start_col]] == max(.data[[start_col]]),
+      20066,
+      .data[[vp_col]]
+    )
+  ) %>%
+  ungroup()
+
 
 # Project 3
 PROJECT <- 3

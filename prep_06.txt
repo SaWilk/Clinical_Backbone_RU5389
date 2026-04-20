@@ -464,7 +464,7 @@ if (!"subscale" %in% names(ii)) ii$subscale <- NA_character_
 
 ii <- ii |>
   dplyr::mutate(
-    item     = as.character(.data$item),
+    item     = normalize_id(.data$item),
     scale    = as.character(.data$scale),
     subscale = as.character(.data$subscale)
   ) |>
