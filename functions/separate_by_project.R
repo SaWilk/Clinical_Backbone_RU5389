@@ -315,48 +315,6 @@ separate_by_project <- function(
     )
   }
   
-  # ===== Stage B: compute rushing flag on combined data (per sample) ==============
-  # Only if typical questionnaire columns exist
-  can_flag <- any(vapply(split_list, function(x) all(c("vpid", "interviewtime") %in% names(x$df)), logical(1)))
-  cutoff_seconds <- NA_real_
-  center_seconds <- NA_real_
-  log_mean <- NA_real_; log_sd <- NA_real_
-  
-  if (can_flag) {
-    # combine only valid per-project slices (exclude unknown/empty)
-    all_valid <- lapply(split_list, function(x) {
-      d <- x$df
-      if (x$pid %in% c("0","99","unknown") || is_empty_df(d)) return(NULL)
-      # ensure numeric
-      d$interviewtime <- suppressWarnings(as.numeric(d$interviewtime))
-      d$.pid <- x$pid
-      d
-    })
-    all_valid <- do.call(rbind, all_valid)
-    
-    if (!is.null(all_valid) && nrow(all_valid) > 0) {
-      idx <- !is.na(all_valid$interviewtime) & all_valid$interviewtime > 0
-      if (sum(idx) > 1L) {
-        log_times <- log(all_valid$interviewtime[idx])
-        log_mean  <- mean(log_times)
-        log_sd    <- stats::sd(log_times)
-        cutoff_log <- log_mean - 2 * log_sd
-        center_seconds <- exp(log_mean)
-        cutoff_seconds <- exp(cutoff_log)
-      } else {
-        if (verbose) message("Not enough positive interviewtime values to compute log-based cutoff for sample '", sample_name, "'.")
-        can_flag <- FALSE
-      }
-    } else {
-      can_flag <- FALSE
-    }
-  }
-  
-  if (verbose && isTRUE(can_flag)) {
-    message(sprintf("Rushing rule (sample='%s'): log mean = %.4f, log SD = %.4f, cutoff(seconds) = %.2f", 
-                    sample_name, log_mean, log_sd, cutoff_seconds))
-  }
-  
   # ===== Stage C: augment, write per-project, and collect output dirs =============
   collected_dirs <- character(0)
   

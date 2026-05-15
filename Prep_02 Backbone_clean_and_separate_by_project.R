@@ -568,43 +568,43 @@ LAST_P_EMPTY <- 7
 PROJECT <- 3
 mask_ad_3 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_3 <- dat_adults[ which(mask_ad_3), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_3), , drop = FALSE ]
+dat_adults <- dat_adults[!mask_ad_3, , drop = FALSE]
 .diag("P3 adults", dat_adults, mask_ad_3)
 
 mask_ch_3 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ch_3 <- dat_children_parents[ which(mask_ch_3), , drop = FALSE ]
-dat_children_parents <- dat_children_parents[ -which(mask_ch_3), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ !mask_ch_3, , drop = FALSE ]
 .diag("P3 children", dat_children_parents, mask_ch_3)
 
 ## Project 4
 PROJECT <- 4
 mask_ch_4 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ch_4 <- dat_children_parents[ which(mask_ch_4), , drop = FALSE ]
-dat_children_parents <- dat_children_parents[ -which(mask_ch_4), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ !mask_ch_4, , drop = FALSE ]
 .diag("P4 children", dat_children_parents, mask_ch_4)
 
 mask_ad_4 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_4 <- dat_adults[ which(mask_ad_4), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_4), , drop = FALSE ]
+dat_adults <- dat_adults[ !mask_ad_4, , drop = FALSE ]
 .diag("P4 adults", dat_adults, mask_ad_4)
 
 ## Project 5
 PROJECT <- 5
 mask_ad_5 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_5 <- dat_adults[ which(mask_ad_5), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_5), , drop = FALSE ]
+dat_adults <- dat_adults[ !mask_ad_5, , drop = FALSE ]
 .diag("P5 adults", dat_adults, mask_ad_5)
 
 ## Project 6 (different questionnaire; no project split for _p6 forms)
 LAST_P_EMPTY <- 3
 mask_ch_6 <- .lp_is_below(dat_children_p6, last_page, LAST_P_EMPTY)
 empty_ch_6 <- dat_children_p6[ which(mask_ch_6), , drop = FALSE ]
-dat_children_p6 <- dat_children_p6[ -which(mask_ch_6), , drop = FALSE ]
+dat_children_p6 <- dat_children_p6[ !mask_ch_6, , drop = FALSE ]
 .diag("P6 children_p6", dat_children_p6, mask_ch_6)
 
 mask_p_6 <- .lp_is_below(dat_parents_p6, last_page, LAST_P_EMPTY)
 empty_p_6 <- dat_parents_p6[ which(mask_p_6), , drop = FALSE ]
-dat_parents_p6 <- dat_parents_p6[ -which(mask_p_6), , drop = FALSE ]
+dat_parents_p6 <- dat_parents_p6[ !mask_p_6, , drop = FALSE ]
 .diag("P6 parents_p6", dat_parents_p6, mask_p_6)
 
 ## Project 7
@@ -613,31 +613,31 @@ LAST_P_EMPTY <- 7
 
 mask_ad_7 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_7 <- dat_adults[ which(mask_ad_7), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_7), , drop = FALSE ]
+dat_adults <- dat_adults[ !mask_ad_7, , drop = FALSE ]
 .diag("P7 adults", dat_adults, mask_ad_7)
 
 mask_adlsc_7 <- .drop_mask(dat_adolescents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_adlsc_7 <- dat_adolescents[ which(mask_adlsc_7), , drop = FALSE ]
-dat_adolescents <- dat_adolescents[ -which(mask_adlsc_7), , drop = FALSE ]
+dat_adolescents <- dat_adolescents[ !mask_adlsc_7, , drop = FALSE ]
 .diag("P7 adolescents", dat_adolescents, mask_adlsc_7)
 
 ## Project 8
 PROJECT <- 8
 mask_ad_8 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_8 <- dat_adults[ which(mask_ad_8), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_8), , drop = FALSE ]
+dat_adults <- dat_adults[ !mask_ad_8, , drop = FALSE ]
 .diag("P8 adults", dat_adults, mask_ad_8)
 
 mask_ch_8 <- .drop_mask(dat_children_parents, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ch_8 <- dat_children_parents[ which(mask_ch_8), , drop = FALSE ]
-dat_children_parents <- dat_children_parents[ -which(mask_ch_8), , drop = FALSE ]
+dat_children_parents <- dat_children_parents[ !mask_ch_8, , drop = FALSE ]
 .diag("P8 children", dat_children_parents, mask_ch_8)
 
 ## Project 9
 PROJECT <- 9
 mask_ad_9 <- .drop_mask(dat_adults, PROJECT, project_col, link_col, last_page, LAST_P_EMPTY)
 empty_ad_9 <- dat_adults[ which(mask_ad_9), , drop = FALSE ]
-dat_adults <- dat_adults[ -which(mask_ad_9), , drop = FALSE ]
+dat_adults <- dat_adults[ !mask_ad_9, , drop = FALSE ]
 .diag("P9 adults", dat_adults, mask_ad_9)
 # ---- collect "empty" rows in the old shape so the next code stays flush ----
 

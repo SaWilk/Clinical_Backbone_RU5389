@@ -40,12 +40,21 @@ CFG <- list(
   export_combined = TRUE,
   combined_label = "adults_adolescents",
   
-  delim = ";",                 # German Excel
-  min_prop_items = 0.50,       # >= 50% items required
+  delim = ";",
   omega_timeout_sec = 20,
   
   export_loading_filtered = TRUE,
-  loading_threshold = 0.30
+  loading_threshold = 0.30,
+  
+  # Speed / relevance controls
+  exclude_scales = c(
+    "FHSfamilytree", "health", "demographics", "times",
+    "date", "id", "project"
+  ),
+  skip_na_subscales = TRUE,
+  compute_group_omega = FALSE,
+  compute_project_omega = FALSE,
+  verbose_item_matching = TRUE
 )
 
 # ===== Path helpers =====
@@ -216,6 +225,30 @@ make_col_map <- function(df) {
     dplyr::distinct(.data$item_norm, .keep_all = TRUE)
 }
 
+is_excluded_scale <- function(x) {
+  toupper(trimws(as.character(x))) %in% toupper(trimws(CFG$exclude_scales))
+}
+
+is_blank_or_na_subscale <- function(x) {
+  x_chr <- trimws(as.character(x))
+  is.na(x) | x_chr == "" | toupper(x_chr) == "NA"
+}
+
+filter_key_tables <- function(key_tbls) {
+  key_tbls$scale_tbl <- key_tbls$scale_tbl %>%
+    dplyr::filter(!is_excluded_scale(.data$scale))
+  
+  key_tbls$sub_tbl <- key_tbls$sub_tbl %>%
+    dplyr::filter(!is_excluded_scale(.data$scale))
+  
+  if (isTRUE(CFG$skip_na_subscales)) {
+    key_tbls$sub_tbl <- key_tbls$sub_tbl %>%
+      dplyr::filter(!is_blank_or_na_subscale(.data$subscale))
+  }
+  
+  key_tbls
+}
+
 read_sample_bundle <- function(sample) {
   master_csv <- fs::path(DIR_EXPORT, sample, glue::glue("{sample}_clean_master.csv"))
   keys_json  <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.json"))
@@ -225,6 +258,7 @@ read_sample_bundle <- function(sample) {
     normalize_group_col()
   
   key_tbls <- flatten_keys(keys_json)
+  key_tbls <- filter_key_tables(key_tbls)
   
   q_file <- latest_questionnaire_for_sample(sample, DIR_QUESTIONNAIRES)
   
@@ -317,29 +351,28 @@ compute_omega_safe <- function(items_df, timeout_sec = CFG$omega_timeout_sec) {
   on.exit(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), add = TRUE)
   
   out <- tryCatch({
-    capture.output(
-      res <- psych::omega(items_df, nfactors = 1, sl = FALSE, plot = FALSE, warnings = FALSE),
-      file = NULL
-    )
-    res
-  }, error = function(e) NULL)
+    fa_out <- suppressWarnings(suppressMessages(
+      psych::fa(items_df, nfactors = 1, rotate = "none", fm = "minres", warnings = FALSE)
+    ))
+    
+    loadings <- as.numeric(fa_out$loadings[, 1])
+    uniqueness <- as.numeric(fa_out$uniquenesses)
+    
+    if (!length(loadings) || !length(uniqueness)) return(NA_real_)
+    if (any(!is.finite(loadings)) || any(!is.finite(uniqueness))) return(NA_real_)
+    
+    numerator <- sum(loadings)^2
+    denominator <- numerator + sum(uniqueness)
+    
+    if (!is.finite(denominator) || denominator <= 0) return(NA_real_)
+    
+    numerator / denominator
+  }, error = function(e) NA_real_)
   
-  if (is.null(out)) return(NA_real_)
-  
-  cand <- c("omega.t","omega.tot","omega.totale","omega.totals","omega.totalscore")
-  for (nm in cand) {
-    if (!is.null(out[[nm]]) && is.numeric(out[[nm]])) return(as.numeric(out[[nm]]))
-  }
-  
-  if (!is.null(out$omega) && is.data.frame(out$omega) && "omega.tot" %in% names(out$omega)) {
-    return(as.numeric(out$omega[, "omega.tot", drop = TRUE]))
-  }
-  
-  NA_real_
+  as.numeric(out)
 }
 
 omega_for <- function(d, col_map, items, logger,
-                      min_prop = CFG$min_prop_items,
                       scale_label = NULL, sub_label = NULL) {
   items_norm <- normalize_id(items)
   keep_norm  <- intersect(items_norm, col_map$item_norm)
@@ -349,19 +382,9 @@ omega_for <- function(d, col_map, items, logger,
   X <- d[, orig_cols, drop = FALSE]
   X[] <- lapply(X, function(z) suppressWarnings(as.numeric(z)))
   
-  n_nonmiss <- rowSums(!is.na(as.matrix(X)))
-  thresh    <- ceiling(min_prop * ncol(X))
-  skip      <- n_nonmiss < thresh
+  has_any_item <- rowSums(!is.na(as.matrix(X))) > 0
+  X <- X[has_any_item, , drop = FALSE]
   
-  if (any(skip)) {
-    ids <- get_id_vec(d)
-    lbl <- paste0(scale_label %||% "?", if (!is.null(sub_label)) paste0(" / ", sub_label) else "")
-    for (j in which(skip)) {
-      logger$write(glue::glue("⚠️ Omega: skipping participant {ids[j]} for {lbl}: missing items >= {100*(1-min_prop)}%"))
-    }
-  }
-  
-  X <- X[!skip, , drop = FALSE]
   if (nrow(X) < 10L) return(NA_real_)
   compute_omega_safe(X)
 }
@@ -401,7 +424,6 @@ compute_loadings_safe <- function(items_df, timeout_sec = CFG$omega_timeout_sec)
 }
 
 loadings_for <- function(d, col_map, items,
-                         min_prop = CFG$min_prop_items,
                          level = "scale",
                          scale = NA_character_,
                          subscale = NA_character_,
@@ -414,9 +436,8 @@ loadings_for <- function(d, col_map, items,
   X <- d[, orig_cols, drop = FALSE]
   X[] <- lapply(X, function(z) suppressWarnings(as.numeric(z)))
   
-  n_nonmiss <- rowSums(!is.na(as.matrix(X)))
-  thresh <- ceiling(min_prop * ncol(X))
-  X <- X[n_nonmiss >= thresh, , drop = FALSE]
+  has_any_item <- rowSums(!is.na(as.matrix(X))) > 0
+  X <- X[has_any_item, , drop = FALSE]
   
   L <- compute_loadings_safe(X)
   if (is.null(L) || !nrow(L)) return(tibble::tibble())
@@ -443,7 +464,9 @@ omega_block <- function(dset, items, level, scale, subscale = NA_character_,
   overall_all <- omega_for(df, col_map, items, logger, scale_label = scale, sub_label = if (level == "subscale") subscale else NULL)
   
   overall_hc <- overall_patient <- NA_real_
-  if ("group" %in% names(df) && any(df$group %in% c("HC", "patient"), na.rm = TRUE)) {
+  if (isTRUE(CFG$compute_group_omega) &&
+      "group" %in% names(df) &&
+      any(df$group %in% c("HC", "patient"), na.rm = TRUE)) {
     overall_hc <- omega_for(
       dplyr::filter(df, .data$group %in% "HC"),
       col_map, items, logger,
@@ -470,7 +493,7 @@ omega_block <- function(dset, items, level, scale, subscale = NA_character_,
     omega_patient = as.numeric(overall_patient)
   )
   
-  if (!is.null(proj_col)) {
+  if (isTRUE(CFG$compute_project_omega) && !is.null(proj_col)) {
     proj_vals <- unique(df[[proj_col]])
     proj_vals <- proj_vals[!is.na(proj_vals)]
     
@@ -482,7 +505,9 @@ omega_block <- function(dset, items, level, scale, subscale = NA_character_,
                           sub_label = if (level == "subscale") subscale else NULL)
       
       om_hc <- om_pat <- NA_real_
-      if ("group" %in% names(d_proj) && any(d_proj$group %in% c("HC", "patient"), na.rm = TRUE)) {
+      if (isTRUE(CFG$compute_group_omega) &&
+          "group" %in% names(d_proj) &&
+          any(d_proj$group %in% c("HC", "patient"), na.rm = TRUE)) {
         d_hc  <- dplyr::filter(d_proj, .data$group %in% "HC")
         d_pat <- dplyr::filter(d_proj, .data$group %in% "patient")
         
@@ -530,7 +555,9 @@ build_omega_rows <- function(dset, logger, flagged_tbl = NULL) {
       )
       
       mchk <- match_items(dset$col_map, items_use)
-      message(glue::glue("[{dset$label}] SCALE {scale}: {mchk$n_found}/{length(items_use)} items found after filtering"))
+      if (isTRUE(CFG$verbose_item_matching)) {
+        message(glue::glue("[{dset$label}] SCALE {scale}: {mchk$n_found}/{length(items_use)} items found after filtering"))
+      }
       if (mchk$n_found < 2) {
         return(tibble::tibble())
       }
@@ -559,7 +586,9 @@ build_omega_rows <- function(dset, logger, flagged_tbl = NULL) {
       )
       
       mchk <- match_items(dset$col_map, items_use)
-      message(glue::glue("[{dset$label}] SUBSCALE {scale} / {subscale}: {mchk$n_found}/{length(items_use)} items found after filtering"))
+      if (isTRUE(CFG$verbose_item_matching)) {
+        message(glue::glue("[{dset$label}] SUBSCALE {scale} / {subscale}: {mchk$n_found}/{length(items_use)} items found after filtering"))
+      }
       if (mchk$n_found < 2) {
         return(tibble::tibble())
       }
@@ -656,14 +685,73 @@ flagged_items <- tibble::tibble()
 
 omega_round2 <- list()
 if (isTRUE(CFG$export_loading_filtered)) {
-  flagged_items <- loadings_combined %>%
-    dplyr::filter(!is.na(.data$loading), abs(.data$loading) < CFG$loading_threshold) %>%
-    dplyr::mutate(
-      loading_threshold = CFG$loading_threshold,
-      flagged_for_removal = TRUE,
-      abs_loading = abs(.data$loading)
-    ) %>%
-    dplyr::arrange(.data$dataset, .data$level, .data$scale, .data$subscale, .data$loading)
+  get_suq_item_num <- function(x) {
+    suppressWarnings(as.integer(stringr::str_extract(normalize_id(x), "[123]$")))
+  }
+  
+  get_suq_pair_key <- function(x) {
+    stringr::str_remove(normalize_id(x), "[123]$")
+  }
+  
+  make_flagged_items <- function(loadings_tbl, threshold) {
+    x <- loadings_tbl %>%
+      dplyr::mutate(
+        scale_norm = toupper(trimws(as.character(.data$scale))),
+        subscale_join = dplyr::if_else(
+          is.na(.data$subscale),
+          "__NA__",
+          as.character(.data$subscale)
+        ),
+        suq_item_num = get_suq_item_num(.data$item),
+        suq_pair_key = get_suq_pair_key(.data$item),
+        abs_loading = abs(.data$loading)
+      )
+    
+    non_suq_flagged <- x %>%
+      dplyr::filter(
+        .data$scale_norm != "SUQ",
+        !is.na(.data$loading),
+        .data$abs_loading < threshold
+      )
+    
+    suq_low_pairs <- x %>%
+      dplyr::filter(
+        .data$scale_norm == "SUQ",
+        .data$suq_item_num %in% c(2L, 3L),
+        !is.na(.data$loading),
+        .data$abs_loading < threshold
+      ) %>%
+      dplyr::distinct(
+        .data$dataset,
+        .data$level,
+        .data$scale,
+        .data$subscale_join,
+        .data$suq_pair_key
+      )
+    
+    suq_paired_flagged <- x %>%
+      dplyr::filter(
+        .data$scale_norm == "SUQ",
+        .data$suq_item_num %in% c(2L, 3L)
+      ) %>%
+      dplyr::semi_join(
+        suq_low_pairs,
+        by = c("dataset", "level", "scale", "subscale_join", "suq_pair_key")
+      )
+    
+    dplyr::bind_rows(non_suq_flagged, suq_paired_flagged) %>%
+      dplyr::mutate(
+        loading_threshold = threshold,
+        flagged_for_removal = TRUE
+      ) %>%
+      dplyr::distinct(.data$dataset, .data$level, .data$scale, .data$subscale, .data$item, .keep_all = TRUE) %>%
+      dplyr::select(
+        -dplyr::any_of(c("scale_norm", "subscale_join", "suq_item_num", "suq_pair_key"))
+      ) %>%
+      dplyr::arrange(.data$dataset, .data$level, .data$scale, .data$subscale, .data$item)
+  }
+  
+  flagged_items <- make_flagged_items(loadings_combined, CFG$loading_threshold)
   
   message(glue::glue("== ROUND 2: omega after dropping items with loading < {CFG$loading_threshold} =="))
   for (nm in names(dataset_defs)) {

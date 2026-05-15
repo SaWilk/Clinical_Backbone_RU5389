@@ -19,18 +19,21 @@ ensure_packages <- function(pkgs) {
 }
 
 ensure_packages(c(
-  "readxl", "readr", "writexl", "janitor", "dplyr", "stringr", "tibble",
-  "purrr", "fs", "glue", "jsonlite", "rprojroot"
+  "readxl", "readr", "janitor", "dplyr", "stringr", "tibble",
+  "purrr", "fs", "glue", "rprojroot"
 ))
-
-`%||%` <- function(a, b) if (!is.null(a)) a else b
 
 CFG <- list(
   samples = c("adults", "adolescents"),
-  min_prop_items_default = 0.50,
   export_filtered_scores = TRUE,
+  export_combined_filtered_scores = TRUE,
   loading_threshold = 0.30,
-  combined_label = "adults_adolescents"
+  combined_label = "adults_adolescents",
+  min_prop_items_default = 0.30
+)
+NON_SCORABLE_SCALES <- c(
+  "FHSfamilytree", "health", "demographics", "times",
+  "date", "id", "project"
 )
 
 script_dir <- function() {
@@ -152,16 +155,76 @@ read_flagged_items <- function(path, dataset_label, threshold_value) {
   req <- c("dataset", "level", "scale", "subscale", "item", "loading")
   if (!all(req %in% names(x))) return(tibble::tibble())
   
-  x %>%
+  to_logical_flag <- function(z) {
+    if (is.logical(z)) return(z)
+    if (is.numeric(z)) return(z != 0)
+    z0 <- tolower(trimws(as.character(z)))
+    z0 %in% c("true", "t", "1", "yes", "y")
+  }
+  
+  get_suq_item_num_local <- function(z) {
+    suppressWarnings(as.integer(stringr::str_extract(normalize_id_local(z), "[123]$")))
+  }
+  
+  get_suq_pair_key_local <- function(z) {
+    stringr::str_remove(normalize_id_local(z), "[123]$")
+  }
+  
+  x <- x %>%
     dplyr::mutate(
       dataset = as.character(.data$dataset),
       level = as.character(.data$level),
       scale = as.character(.data$scale),
       subscale = as.character(.data$subscale),
       item = as.character(.data$item),
-      loading = as.numeric(.data$loading)
+      loading = suppressWarnings(as.numeric(.data$loading)),
+      flagged_for_removal = if ("flagged_for_removal" %in% names(.)) {
+        to_logical_flag(.data$flagged_for_removal)
+      } else {
+        !is.na(.data$loading) & abs(.data$loading) < threshold_value
+      }
     ) %>%
-    dplyr::filter(.data$dataset == dataset_label, !is.na(.data$loading), abs(.data$loading) < threshold_value)
+    dplyr::filter(
+      .data$dataset == dataset_label,
+      .data$flagged_for_removal %in% TRUE
+    ) %>%
+    dplyr::mutate(
+      scale_norm = toupper(trimws(as.character(.data$scale))),
+      suq_item_num = get_suq_item_num_local(.data$item),
+      suq_pair_key = get_suq_pair_key_local(.data$item)
+    )
+  
+  # SUQ rule:
+  # - ignore Q1 completely
+  # - if Q2 or Q3 is flagged, remove both Q2 and Q3
+  x <- x %>%
+    dplyr::filter(!(.data$scale_norm == "SUQ" & .data$suq_item_num == 1L))
+  
+  suq_pair_mates <- x %>%
+    dplyr::filter(
+      .data$scale_norm == "SUQ",
+      .data$suq_item_num %in% c(2L, 3L)
+    ) %>%
+    dplyr::mutate(
+      item = dplyr::if_else(
+        .data$suq_item_num == 2L,
+        paste0(.data$suq_pair_key, "3"),
+        paste0(.data$suq_pair_key, "2")
+      ),
+      loading = NA_real_,
+      flagged_for_removal = TRUE
+    )
+  
+  out <- dplyr::bind_rows(x, suq_pair_mates) %>%
+    dplyr::select(-dplyr::any_of(c("scale_norm", "suq_item_num", "suq_pair_key"))) %>%
+    dplyr::distinct(.data$dataset, .data$level, .data$scale, .data$subscale, .data$item, .keep_all = TRUE)
+  
+  log_msg(
+    "Read ", nrow(out), " flagged items for dataset '", dataset_label,
+    "' from helper file."
+  )
+  
+  out
 }
 
 drop_flagged_items_from_keys <- function(keys, flagged_tbl) {
@@ -228,22 +291,12 @@ get_scale_scoring_mode <- function(scoring_df, scale, default = "mean") {
   default
 }
 
-get_scale_min_prop <- function(scoring_df, scale, default = CFG$min_prop_items_default) {
-  if (is.null(scoring_df) || !"scale" %in% names(scoring_df)) return(default)
-  
-  cand_cols <- intersect(names(scoring_df), c("min_prop_items","min_prop","minprop","min_prop_item"))
-  if (!length(cand_cols)) return(default)
-  
-  sc_key <- toupper(trimws(scale))
-  s_key  <- toupper(trimws(as.character(scoring_df$scale)))
-  idx    <- which(s_key == sc_key)
-  if (!length(idx)) return(default)
-  
-  v <- suppressWarnings(as.numeric(scoring_df[[cand_cols[1]]][idx[1]]))
-  if (is.na(v)) default else v
+make_col_map <- function(df) {
+  tibble::tibble(orig = names(df), item_norm = normalize_id_local(names(df))) %>%
+    dplyr::distinct(item_norm, .keep_all = TRUE)
 }
 
-score_items_wide <- function(d, items, col_map, agg = c("mean","sum"), min_prop = CFG$min_prop_items_default) {
+score_items_wide <- function(d, items, col_map, agg = c("mean","sum")) {
   agg <- match.arg(agg)
   
   items_norm <- normalize_id_local(items)
@@ -258,10 +311,104 @@ score_items_wide <- function(d, items, col_map, agg = c("mean","sum"), min_prop 
   M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
   
   n_nonmiss <- rowSums(!is.na(as.matrix(M)))
-  thresh    <- ceiling(min_prop * ncol(M))
-  
   out <- if (agg == "sum") rowSums(M, na.rm = TRUE) else rowMeans(M, na.rm = TRUE)
-  out[n_nonmiss < thresh] <- NA_real_
+  out[n_nonmiss == 0] <- NA_real_
+  out
+}
+
+get_suq_q2_q3_cols <- function(items, col_map) {
+  items_chr <- as.character(items)
+  
+  items_tbl <- tibble::tibble(
+    item = items_chr,
+    item_norm = normalize_id_local(items_chr),
+    item_num = suppressWarnings(as.integer(stringr::str_extract(items_chr, "[123]$")))
+  )
+  
+  mapped <- items_tbl %>%
+    dplyr::inner_join(col_map, by = "item_norm") %>%
+    dplyr::filter(.data$item_num %in% c(2L, 3L))
+  
+  q2_col <- mapped$orig[mapped$item_num == 2L][1]
+  q3_col <- mapped$orig[mapped$item_num == 3L][1]
+  
+  ok <- !is.na(q2_col) &&
+    !is.na(q3_col) &&
+    q2_col %in% col_map$orig &&
+    q3_col %in% col_map$orig
+  
+  list(ok = ok, q2_col = q2_col, q3_col = q3_col)
+}
+
+can_score_suq_subscale_wide <- function(items, col_map) {
+  pair <- get_suq_q2_q3_cols(items, col_map)
+  isTRUE(pair$ok)
+}
+
+has_scorable_suq_subscales <- function(keys, col_map) {
+  if (is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) {
+    return(FALSE)
+  }
+  
+  suq_subs <- keys$items_by_subscale %>%
+    dplyr::filter(toupper(trimws(as.character(.data$scale))) == "SUQ") %>%
+    dplyr::filter(!is.na(.data$subscale), .data$subscale != "")
+  
+  if (!nrow(suq_subs)) return(FALSE)
+  
+  any(vapply(
+    seq_len(nrow(suq_subs)),
+    function(i) can_score_suq_subscale_wide(suq_subs$items[[i]], col_map),
+    logical(1)
+  ))
+}
+
+score_suq_subscale_wide <- function(d, items, col_map) {
+  pair <- get_suq_q2_q3_cols(items, col_map)
+  
+  if (!isTRUE(pair$ok)) {
+    return(rep(NA_real_, nrow(d)))
+  }
+  
+  q2 <- suppressWarnings(as.numeric(d[[pair$q2_col]]))
+  q3 <- suppressWarnings(as.numeric(d[[pair$q3_col]]))
+  
+  q2 * q3
+}
+
+score_suq_total_wide <- function(d, keys, col_map) {
+  if (is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) {
+    return(rep(NA_real_, nrow(d)))
+  }
+  
+  suq_subs <- keys$items_by_subscale %>%
+    dplyr::filter(toupper(trimws(as.character(.data$scale))) == "SUQ") %>%
+    dplyr::filter(!is.na(.data$subscale), .data$subscale != "")
+  
+  if (!nrow(suq_subs)) return(rep(NA_real_, nrow(d)))
+  
+  can_score <- vapply(
+    seq_len(nrow(suq_subs)),
+    function(i) can_score_suq_subscale_wide(suq_subs$items[[i]], col_map),
+    logical(1)
+  )
+  
+  suq_subs <- suq_subs[can_score, , drop = FALSE]
+  
+  if (!nrow(suq_subs)) {
+    return(rep(NA_real_, nrow(d)))
+  }
+  
+  S <- purrr::map_dfc(seq_len(nrow(suq_subs)), function(i) {
+    nm <- safe_score_name(suq_subs$subscale[i])
+    tibble::tibble(
+      !!nm := score_suq_subscale_wide(d, suq_subs$items[[i]], col_map)
+    )
+  })
+  
+  n_nonmiss <- rowSums(!is.na(as.matrix(S)))
+  out <- rowSums(S, na.rm = TRUE)
+  out[n_nonmiss == 0] <- NA_real_
   out
 }
 
@@ -271,8 +418,7 @@ add_scale_scores <- function(df, keys, scoring_df,
                              exclude_scales = character(0)) {
   if (is.null(keys) || is.null(keys$items_by_scale) || !nrow(keys$items_by_scale)) return(df)
   
-  col_map <- tibble::tibble(orig = names(df), item_norm = normalize_id_local(names(df))) %>%
-    dplyr::distinct(item_norm, .keep_all = TRUE)
+  col_map <- make_col_map(df)
   
   scales_tbl <- keys$items_by_scale %>%
     dplyr::filter(!is.na(scale), scale != "") %>%
@@ -285,11 +431,26 @@ add_scale_scores <- function(df, keys, scoring_df,
     items <- scales_tbl$items[[i]]
     if (length(items) < 1L) next
     
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
-    mp_i   <- get_scale_min_prop(scoring_df, sc, default = default_min_prop)
-    
     new_col <- paste0(prefix, safe_score_name(sc))
-    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i, min_prop = mp_i)
+    
+    if (toupper(trimws(sc)) == "SUQ") {
+      if (!has_scorable_suq_subscales(keys, col_map)) {
+        log_msg(
+          "Skipped scale '", sc, "' -> ", new_col,
+          " because no complete SUQ Q2/Q3 subscale pairs remained after filtering."
+        )
+        next
+      }
+      
+      df[[new_col]] <- score_suq_total_wide(df, keys, col_map)
+      log_msg("Scored scale '", sc, "' -> ", new_col, " (mode=sum of SUQ Q2*Q3 subscale scores)")
+      next
+    }
+    
+    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
+    mp_i <- default_min_prop
+
+    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i)
     
     log_msg("Scored scale '", sc, "' -> ", new_col, " (mode=", mode_i, ", min_prop=", mp_i, ")")
   }
@@ -303,8 +464,7 @@ add_subscale_scores <- function(df, keys, scoring_df,
                                 exclude_scales = character(0)) {
   if (is.null(keys) || is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) return(df)
   
-  col_map <- tibble::tibble(orig = names(df), item_norm = normalize_id_local(names(df))) %>%
-    dplyr::distinct(item_norm, .keep_all = TRUE)
+  col_map <- make_col_map(df)
   
   subs_tbl <- keys$items_by_subscale %>%
     dplyr::filter(!is.na(scale), scale != "") %>%
@@ -320,17 +480,196 @@ add_subscale_scores <- function(df, keys, scoring_df,
     items <- subs_tbl$items[[i]]
     if (length(items) < 1L) next
     
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
-    mp_i   <- get_scale_min_prop(scoring_df, sc, default = default_min_prop)
-    
     new_col <- paste0(prefix, safe_score_name(sc), "__", safe_score_name(sub))
-    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i, min_prop = mp_i)
+    
+    if (toupper(trimws(sc)) == "SUQ") {
+      if (!can_score_suq_subscale_wide(items, col_map)) {
+        log_msg(
+          "Skipped subscale '", sc, " / ", sub, "' -> ", new_col,
+          " because the SUQ Q2/Q3 pair was incomplete after filtering."
+        )
+        next
+      }
+      
+      df[[new_col]] <- score_suq_subscale_wide(df, items, col_map)
+      log_msg("Scored subscale '", sc, " / ", sub, "' -> ", new_col,
+              " (mode=SUQ Q2*Q3)")
+      next
+    }
+    
+    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
+    mp_i <- default_min_prop
+
+    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i)
     
     log_msg("Scored subscale '", sc, " / ", sub, "' -> ", new_col,
             " (mode=", mode_i, ", min_prop=", mp_i, ")")
   }
   
   df
+}
+
+get_id_output_df <- function(df) {
+  id_candidates <- c("vpid", "vp_id", "vp", "participantid", "participant_id", "id")
+  id_col <- intersect(id_candidates, names(df))[1]
+  if (is.na(id_col)) {
+    return(tibble::tibble(id = seq_len(nrow(df))))
+  }
+  tibble::tibble(id = df[[id_col]])
+}
+
+get_scale_items_from_keys <- function(keys, scale_name) {
+  scale_key <- toupper(trimws(scale_name))
+  
+  if (!is.null(keys$items_by_scale) && nrow(keys$items_by_scale)) {
+    hit <- keys$items_by_scale %>%
+      dplyr::filter(toupper(trimws(as.character(.data$scale))) == scale_key)
+    
+    if (nrow(hit) && length(hit$items[[1]])) {
+      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
+    }
+  }
+  
+  if (!is.null(keys$items_by_subscale) && nrow(keys$items_by_subscale)) {
+    hit <- keys$items_by_subscale %>%
+      dplyr::filter(toupper(trimws(as.character(.data$scale))) == scale_key)
+    
+    if (nrow(hit)) {
+      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
+    }
+  }
+  
+  character(0)
+}
+
+get_scale_subscale_items_from_keys <- function(keys, scale_name, subscale_name) {
+  scale_key <- toupper(trimws(scale_name))
+  sub_key   <- tolower(trimws(subscale_name))
+  
+  if (!is.null(keys$items_by_subscale) && nrow(keys$items_by_subscale)) {
+    hit <- keys$items_by_subscale %>%
+      dplyr::mutate(
+        scale_key_tmp = toupper(trimws(as.character(.data$scale))),
+        sub_key_tmp   = tolower(trimws(as.character(.data$subscale)))
+      ) %>%
+      dplyr::filter(
+        .data$scale_key_tmp == scale_key,
+        .data$sub_key_tmp == sub_key
+      )
+    
+    if (nrow(hit)) {
+      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
+    }
+  }
+  
+  character(0)
+}
+
+sum_items_from_key_vector <- function(df, items, col_map = make_col_map(df)) {
+  if (!length(items)) return(rep(NA_real_, nrow(df)))
+  
+  items_norm <- normalize_id_local(items)
+  keep_norm  <- intersect(items_norm, col_map$item_norm)
+  if (!length(keep_norm)) return(rep(NA_real_, nrow(df)))
+  
+  orig_cols <- col_map$orig[match(keep_norm, col_map$item_norm)]
+  orig_cols <- orig_cols[!is.na(orig_cols)]
+  if (!length(orig_cols)) return(rep(NA_real_, nrow(df)))
+  
+  M <- df[, orig_cols, drop = FALSE]
+  M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
+  
+  n_nonmiss <- rowSums(!is.na(as.matrix(M)))
+  out <- rowSums(M, na.rm = TRUE)
+  out[n_nonmiss == 0] <- NA_real_
+  out
+}
+
+compute_cape_sum <- function(df, keys) {
+  col_map <- make_col_map(df)
+  cape_items <- get_scale_items_from_keys(keys, "CAPE")
+  sum_items_from_key_vector(df, cape_items, col_map = col_map)
+}
+
+compute_cape_sum_components <- function(df, keys) {
+  col_map <- make_col_map(df)
+  
+  cape_items <- get_scale_items_from_keys(keys, "CAPE")
+  cape_frequency_items <- get_scale_subscale_items_from_keys(keys, "CAPE", "frequency")
+  cape_distress_items  <- get_scale_subscale_items_from_keys(keys, "CAPE", "distress")
+  
+  tibble::tibble(
+    cape_sum = sum_items_from_key_vector(df, cape_items, col_map = col_map),
+    cape_sum_frequency = sum_items_from_key_vector(df, cape_frequency_items, col_map = col_map),
+    cape_sum_distress = sum_items_from_key_vector(df, cape_distress_items, col_map = col_map)
+  )
+}
+
+write_cape_sum_table <- function(df, keys, sample, suffix = NULL) {
+  out_dir <- fs::path(DIR_EXPORT, sample)
+  fs::dir_create(out_dir)
+  
+  cape_scores <- compute_cape_sum_components(df, keys)
+  
+  if (any(is.na(cape_scores$cape_sum))) {
+    stop("CAPE sum table for sample '", sample, "' contains missing total CAPE sum values.")
+  }
+  
+  if (any(is.na(cape_scores$cape_sum_frequency))) {
+    log_msg("WARNING: CAPE frequency sum table for sample '", sample, "' contains missing values.")
+  }
+  
+  if (any(is.na(cape_scores$cape_sum_distress))) {
+    log_msg("WARNING: CAPE distress sum table for sample '", sample, "' contains missing values.")
+  }
+  
+  out <- get_id_output_df(df) %>%
+    dplyr::bind_cols(cape_scores)
+  
+  fname <- if (is.null(suffix) || !nzchar(suffix)) {
+    glue::glue("{sample}_cape_sum_scores.csv")
+  } else {
+    glue::glue("{sample}_cape_sum_scores_{suffix}.csv")
+  }
+  
+  out_path <- fs::path(out_dir, fname)
+  write.csv2(out, out_path, row.names = FALSE)
+  log_msg("Wrote CAPE sum table: ", out_path)
+  out_path
+}
+
+
+assert_no_missing_scores <- function(df, sample, suffix = NULL) {
+  score_cols <- grep("^score_", names(df), value = TRUE)
+  if (!length(score_cols)) {
+    log_msg("No score columns found for sample '", sample, "'.")
+    return(invisible(TRUE))
+  }
+  
+  allow_missing <- grepl("^score_cape__distress$", score_cols)
+  check_cols <- score_cols[!allow_missing]
+  
+  miss <- vapply(check_cols, function(cc) sum(is.na(df[[cc]])), integer(1))
+  miss <- miss[miss > 0]
+  
+  label <- if (is.null(suffix) || !nzchar(suffix)) "unfiltered" else suffix
+  
+  if (length(miss)) {
+    stop(
+      "Missing values detected in scored output for sample '", sample,
+      "' (", label, "): ",
+      paste(names(miss), miss, sep = "=", collapse = ", ")
+    )
+  }
+  
+  if (any(allow_missing)) {
+    log_msg("Missing-score check for sample '", sample, "' (", label,
+            "): passed; CAPE distress missing values were allowed as structural NA.")
+  } else {
+    log_msg("Missing-score check for sample '", sample, "' (", label, "): passed.")
+  }
+  
+  invisible(TRUE)
 }
 
 write_master_variant <- function(df, sample, suffix = NULL) {
@@ -362,32 +701,92 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
   
   # round 1: unfiltered scores
   df_scored <- df
-  df_scored <- add_scale_scores(df_scored, keys, scoring_df, prefix = "score_")
-  df_scored <- add_subscale_scores(df_scored, keys, scoring_df, prefix = "score_")
+  df_scored <- add_scale_scores(
+    df_scored, keys, scoring_df,
+    prefix = "score_",
+    exclude_scales = NON_SCORABLE_SCALES
+  )
+  df_scored <- add_subscale_scores(
+    df_scored, keys, scoring_df,
+    prefix = "score_",
+    exclude_scales = NON_SCORABLE_SCALES
+  )
+  assert_no_missing_scores(df_scored, sample)
   write_master_variant(df_scored, sample)
+  write_cape_sum_table(df_scored, keys, sample)
   
   # round 2: filtered scores
   if (isTRUE(CFG$export_filtered_scores)) {
-    flagged_tbl <- read_flagged_items(
-      path = flag_helper_path,
-      dataset_label = sample,
-      threshold_value = CFG$loading_threshold
-    )
-    
-    if (nrow(flagged_tbl)) {
+    if (!is.na(flag_helper_path) && fs::file_exists(flag_helper_path)) {
+      flagged_tbl <- read_flagged_items(
+        path = flag_helper_path,
+        dataset_label = sample,
+        threshold_value = CFG$loading_threshold
+      )
+      
       log_msg("Applying filtered scoring for sample '", sample, "' with ", nrow(flagged_tbl), " flagged items.")
       keys_filt <- drop_flagged_items_from_keys(keys, flagged_tbl)
       
       df_scored_f <- df
-      df_scored_f <- add_scale_scores(df_scored_f, keys_filt, scoring_df, prefix = "score_")
-      df_scored_f <- add_subscale_scores(df_scored_f, keys_filt, scoring_df, prefix = "score_")
+      df_scored_f <- add_scale_scores(
+        df_scored_f, keys_filt, scoring_df,
+        prefix = "score_",
+        exclude_scales = NON_SCORABLE_SCALES
+      )
+      df_scored_f <- add_subscale_scores(
+        df_scored_f, keys_filt, scoring_df,
+        prefix = "score_",
+        exclude_scales = NON_SCORABLE_SCALES
+      )
       
-      write_master_variant(df_scored_f, sample, suffix = make_threshold_tag(CFG$loading_threshold))
+      suffix_tag <- make_threshold_tag(CFG$loading_threshold)
+      assert_no_missing_scores(df_scored_f, sample, suffix = suffix_tag)
+      write_master_variant(df_scored_f, sample, suffix = suffix_tag)
+      write_cape_sum_table(df_scored_f, keys_filt, sample, suffix = suffix_tag)
     } else {
-      log_msg("No flagged items found for sample '", sample, "'. Skipping filtered scored master.")
+      log_msg("No flagged-item helper found. Skipping filtered scored master.")
     }
   }
-  
+  # round 3: combined-filtered scores for Step 4 analysis-input exports
+  # These use the pooled/combined loading flags, but are written sample-wise,
+  # so Step 4 can combine adults + adolescents without recomputing scores.
+  if (isTRUE(CFG$export_filtered_scores) && isTRUE(CFG$export_combined_filtered_scores)) {
+    if (!is.na(flag_helper_path) && fs::file_exists(flag_helper_path)) {
+      flagged_tbl_combined <- read_flagged_items(
+        path = flag_helper_path,
+        dataset_label = CFG$combined_label,
+        threshold_value = CFG$loading_threshold
+      )
+      
+      log_msg(
+        "Applying combined-filtered scoring for sample '", sample,
+        "' using dataset label '", CFG$combined_label,
+        "' with ", nrow(flagged_tbl_combined), " flagged items."
+      )
+      
+      keys_combined_filt <- drop_flagged_items_from_keys(keys, flagged_tbl_combined)
+      
+      df_scored_combined_f <- df
+      df_scored_combined_f <- add_scale_scores(
+        df_scored_combined_f, keys_combined_filt, scoring_df,
+        prefix = "score_",
+        exclude_scales = NON_SCORABLE_SCALES
+      )
+      df_scored_combined_f <- add_subscale_scores(
+        df_scored_combined_f, keys_combined_filt, scoring_df,
+        prefix = "score_",
+        exclude_scales = NON_SCORABLE_SCALES
+      )
+      
+      suffix_tag_combined <- paste0(make_threshold_tag(CFG$loading_threshold), "_combined")
+      
+      assert_no_missing_scores(df_scored_combined_f, sample, suffix = suffix_tag_combined)
+      write_master_variant(df_scored_combined_f, sample, suffix = suffix_tag_combined)
+      write_cape_sum_table(df_scored_combined_f, keys_combined_filt, sample, suffix = suffix_tag_combined)
+    } else {
+      log_msg("No flagged-item helper found. Skipping combined-filtered scored master.")
+    }
+  }
   log_msg("--- Done scoring sample: ", sample, " ---\n")
 }
 

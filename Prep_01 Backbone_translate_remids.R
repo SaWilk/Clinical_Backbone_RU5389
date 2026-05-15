@@ -124,7 +124,7 @@ is_blank <- function(x) {
   is.na(y) | y == ""
 }
 
-# Canonicalize Remote_ID by stripping an optional single leading R/r
+# Canonicalize Remote_ID by stripping all R from the IDs
 canon_remote <- function(x) {
   y <- toupper(trimws(as.character(x)))
   # Strip ALL leading R/r characters (one or more)
@@ -417,7 +417,6 @@ translate_and_log <- function(df, map_tbl, eligible_rows, dataset_name) {
   df$remidcheck[can_translate] <- NA
   
   # log for 'XXXXX' fallbacks (kept: CSV in 01_project_data/logs)
-  used_check <- xmask & !is_blank(check_chr) & is_valid_5digit_remote(check_chr)
   used_check <- xmask & !is_blank(check_chr) & is_valid_5digit_remote(check_chr)
   x_rows <- which(used_check & eligible_rows)
   log_df <- NULL

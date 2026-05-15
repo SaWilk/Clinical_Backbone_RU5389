@@ -18,13 +18,13 @@
 #   A) <samples>_HiTOP_items.xlsx
 #      - ONLY item columns that have ANY HiTOP mapping in Item Information
 #   B) <samples>_HiTOP_subscales.xlsx
-#      - recomputed score_* columns for the SAME HiTOP-mapped scales
+#      - existing score_* columns created by prep05 for the SAME HiTOP-mapped scales
 #
 #   COMPLETE (questionnaire-only, explicitly configured below):
 #   D) <samples>_complete_items.xlsx
 #      - ALL item columns belonging to CFG$questionnaire_scales
 #   E) <samples>_complete_subscales.xlsx
-#      - recomputed score_* columns belonging to CFG$questionnaire_scales
+#      - existing score_* columns created by prep05 belonging to CFG$questionnaire_scales
 #
 # Optional filtered exports:
 #   same filenames with suffix _lt020 (or whatever threshold tag applies)
@@ -58,14 +58,19 @@ CFG <- list(
   export_loading_filtered = TRUE,
   loading_threshold = 0.30,   # make more aggressive by increasing this, e.g. 0.30 / 0.35
   
-  questionnaire_scales = c("IDAS","CAPE","AQ","SUQ","ASRS-5","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"),
-  score_total_override = c(),
+  questionnaire_scales = c("IDAS","CAPE","AQ","SUQ","ASRS","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"),
   clean_master = NULL,
   item_info = NULL,
-  min_prop_items_default = 0.50
+  score_total_override = c()
 )
 
 # ---- Helpers -----------------------------------------------------------------
+make_export_sheets <- function(x, combined_sheet = "combined") {
+  x <- x[!vapply(x, is.null, logical(1))]
+  x[[combined_sheet]] <- dplyr::bind_rows(x)
+  x
+}
+
 `%||%` <- function(x, y) if (!is.null(x) && !is.na(x) && nzchar(x)) x else y
 
 script_dir <- function() {
@@ -127,16 +132,25 @@ latest_clean_master_for_sample <- function(root, sample) {
   files[order(dts, decreasing = TRUE)][1]
 }
 
+latest_scored_master_for_sample <- function(root, sample, suffix = NULL) {
+  folder <- fs::path(root, "02_cleaned", sample)
+  
+  fname <- if (is.null(suffix) || !nzchar(suffix)) {
+    paste0(sample, "_clean_master_scored.csv")
+  } else {
+    paste0(sample, "_clean_master_scored_", suffix, ".csv")
+  }
+  
+  cand <- fs::path(folder, fname)
+  if (fs::file_exists(cand)) return(cand)
+  
+  NA_character_
+}
+
 latest_iteminfo_for_sample <- function(root, sample) {
   info_dir <- fs::path(root, "information")
   SampleCap <- normalize_sample_case(sample)
   patt <- glue::glue("^\\d{{4}}-\\d{{2}}-\\d{{2}}_Item_Information_{SampleCap}\\.xlsx$")
-  latest_file_by_pattern(info_dir, patt)
-}
-
-latest_scoring <- function(root) {
-  info_dir <- fs::path(root, "information")
-  patt <- "^\\d{4}-\\d{2}-\\d{2}_Scoring\\.xlsx$"
   latest_file_by_pattern(info_dir, patt)
 }
 
@@ -193,155 +207,25 @@ read_master_csv_robust <- function(master_csv, default_delim = ";") {
   first_line <- readr::read_lines(master_csv, n_max = 1)
   delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
     sub("^sep=", "", first_line, ignore.case = TRUE)
-  } else default_delim
+  } else {
+    default_delim
+  }
   
   skip_n <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) 1L else 0L
   
   suppressMessages(
     readr::read_delim(
-      master_csv, delim = delim, skip = skip_n, show_col_types = FALSE,
+      master_csv,
+      delim = delim,
+      skip = skip_n,
+      show_col_types = FALSE,
       locale = readr::locale(encoding = "UTF-8")
     )
-  ) %>% tibble::as_tibble()
-}
-
-read_scoring <- function(filepath) {
-  stopifnot(is.character(filepath), length(filepath) == 1, fs::file_exists(filepath))
-  suppressMessages(readxl::read_excel(filepath)) |>
-    janitor::clean_names() |>
-    dplyr::mutate(dplyr::across(c(min, max), as.numeric))
+  ) %>%
+    tibble::as_tibble()
 }
 
 # ---- Keys / scoring helpers --------------------------------------------------
-get_scale_scoring_mode <- function(scoring_df, scale, default = "mean") {
-  if (toupper(trimws(scale)) == "SUQ") return("sum")
-  
-  if (is.null(scoring_df) || !"scale" %in% names(scoring_df)) return(default)
-  
-  cand_cols <- intersect(
-    names(scoring_df),
-    c("mode","scoring","method","aggregation","score_type","score_method","compute")
-  )
-  if (!length(cand_cols)) return(default)
-  
-  sc_key <- toupper(trimws(scale))
-  s_key  <- toupper(trimws(as.character(scoring_df$scale)))
-  idx    <- which(s_key == sc_key)
-  if (!length(idx)) return(default)
-  
-  for (cc in cand_cols) {
-    v <- scoring_df[[cc]][idx[1]]
-    if (is.na(v)) next
-    v0 <- tolower(trimws(as.character(v)))
-    if (grepl("sum|total", v0)) return("sum")
-    if (grepl("mean|avg|average", v0)) return("mean")
-  }
-  default
-}
-
-get_scale_min_prop <- function(scoring_df, scale, default = CFG$min_prop_items_default) {
-  if (is.null(scoring_df) || !"scale" %in% names(scoring_df)) return(default)
-  
-  cand_cols <- intersect(names(scoring_df), c("min_prop_items","min_prop","minprop","min_prop_item"))
-  if (!length(cand_cols)) return(default)
-  
-  sc_key <- toupper(trimws(scale))
-  s_key  <- toupper(trimws(as.character(scoring_df$scale)))
-  idx    <- which(s_key == sc_key)
-  if (!length(idx)) return(default)
-  
-  v <- suppressWarnings(as.numeric(scoring_df[[cand_cols[1]]][idx[1]]))
-  if (is.na(v)) default else v
-}
-
-score_items_wide <- function(d, items, col_map, agg = c("mean","sum"), min_prop = CFG$min_prop_items_default) {
-  agg <- match.arg(agg)
-  
-  items_norm <- normalize_id(items)
-  keep_norm  <- intersect(items_norm, col_map$item_norm)
-  if (!length(keep_norm)) return(rep(NA_real_, nrow(d)))
-  
-  orig_cols <- col_map$orig[match(keep_norm, col_map$item_norm)]
-  orig_cols <- orig_cols[!is.na(orig_cols)]
-  if (!length(orig_cols)) return(rep(NA_real_, nrow(d)))
-  
-  M <- d[, orig_cols, drop = FALSE]
-  M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
-  
-  n_nonmiss <- rowSums(!is.na(as.matrix(M)))
-  thresh    <- ceiling(min_prop * ncol(M))
-  
-  out <- if (agg == "sum") rowSums(M, na.rm = TRUE) else rowMeans(M, na.rm = TRUE)
-  out[n_nonmiss < thresh] <- NA_real_
-  out
-}
-
-add_scale_scores <- function(df, keys, scoring_df,
-                             prefix = "score_",
-                             default_min_prop = CFG$min_prop_items_default,
-                             exclude_scales = character(0)) {
-  if (is.null(keys) || is.null(keys$items_by_scale) || !nrow(keys$items_by_scale)) return(df)
-  
-  col_map <- tibble::tibble(
-    orig      = names(df),
-    item_norm = normalize_id(names(df))
-  ) %>% dplyr::distinct(item_norm, .keep_all = TRUE)
-  
-  scales_tbl <- keys$items_by_scale %>%
-    dplyr::filter(!is.na(scale), scale != "") %>%
-    dplyr::filter(!(toupper(scale) %in% toupper(exclude_scales)))
-  
-  if (!nrow(scales_tbl)) return(df)
-  
-  for (i in seq_len(nrow(scales_tbl))) {
-    sc    <- as.character(scales_tbl$scale[i])
-    items <- scales_tbl$items[[i]]
-    if (!length(items)) next
-    
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
-    mp_i   <- get_scale_min_prop(scoring_df, sc, default = default_min_prop)
-    
-    new_col <- paste0(prefix, safe_score_name(sc))
-    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i, min_prop = mp_i)
-  }
-  
-  df
-}
-
-add_subscale_scores <- function(df, keys, scoring_df,
-                                prefix = "score_",
-                                default_min_prop = CFG$min_prop_items_default,
-                                exclude_scales = character(0)) {
-  if (is.null(keys) || is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) return(df)
-  
-  col_map <- tibble::tibble(
-    orig      = names(df),
-    item_norm = normalize_id(names(df))
-  ) %>% dplyr::distinct(item_norm, .keep_all = TRUE)
-  
-  subs_tbl <- keys$items_by_subscale %>%
-    dplyr::filter(!is.na(scale), scale != "") %>%
-    dplyr::filter(!is.na(subscale), subscale != "") %>%
-    dplyr::filter(!(toupper(scale) %in% toupper(exclude_scales))) %>%
-    dplyr::distinct(scale, subscale, .keep_all = TRUE)
-  
-  if (!nrow(subs_tbl)) return(df)
-  
-  for (i in seq_len(nrow(subs_tbl))) {
-    sc    <- as.character(subs_tbl$scale[i])
-    sub   <- as.character(subs_tbl$subscale[i])
-    items <- subs_tbl$items[[i]]
-    if (!length(items)) next
-    
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
-    mp_i   <- get_scale_min_prop(scoring_df, sc, default = default_min_prop)
-    
-    new_col <- paste0(prefix, safe_score_name(sc), "__", safe_score_name(sub))
-    df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i, min_prop = mp_i)
-  }
-  
-  df
-}
 
 drop_flagged_items_from_keys <- function(keys, flagged_tbl) {
   if (is.null(flagged_tbl) || !nrow(flagged_tbl)) return(keys)
@@ -407,17 +291,35 @@ read_flagged_items <- function(path, dataset_label, threshold_value) {
   req <- c("dataset", "level", "scale", "subscale", "item", "loading")
   if (!all(req %in% names(x))) return(tibble::tibble())
   
-  x %>%
+  to_logical_flag <- function(z) {
+    if (is.logical(z)) return(z)
+    if (is.numeric(z)) return(z != 0)
+    z0 <- tolower(trimws(as.character(z)))
+    z0 %in% c("true", "t", "1", "yes", "y")
+  }
+  
+  x <- x %>%
     dplyr::mutate(
-      dataset  = as.character(.data$dataset),
-      item     = as.character(.data$item),
-      loading  = suppressWarnings(as.numeric(.data$loading))
-    ) %>%
+      dataset = as.character(.data$dataset),
+      level = as.character(.data$level),
+      scale = as.character(.data$scale),
+      subscale = as.character(.data$subscale),
+      item = as.character(.data$item),
+      loading = suppressWarnings(as.numeric(.data$loading))
+    )
+  
+  if ("flagged_for_removal" %in% names(x)) {
+    x$flagged_for_removal <- to_logical_flag(x$flagged_for_removal)
+  } else {
+    x$flagged_for_removal <- !is.na(x$loading) & abs(x$loading) < threshold_value
+  }
+  
+  x %>%
     dplyr::filter(
       .data$dataset == dataset_label,
-      !is.na(.data$loading),
-      abs(.data$loading) < threshold_value
-    )
+      .data$flagged_for_removal %in% TRUE
+    ) %>%
+    dplyr::distinct(.data$dataset, .data$level, .data$scale, .data$subscale, .data$item, .keep_all = TRUE)
 }
 
 # ---- Main --------------------------------------------------------------------
@@ -451,10 +353,6 @@ ITEM_INFO <- (ARGS$item_info %||% CFG$item_info) %||%
 stopifnot(!is.na(ITEM_INFO), fs::file_exists(ITEM_INFO))
 message("ItemInfo:   ", ITEM_INFO)
 
-SCORING_PATH <- latest_scoring(ROOT)
-stopifnot(!is.na(SCORING_PATH), fs::file_exists(SCORING_PATH))
-message("Scoring:    ", SCORING_PATH)
-
 ii <- readxl::read_excel(ITEM_INFO) |>
   janitor::clean_names()
 
@@ -470,14 +368,17 @@ ii <- ii |>
   ) |>
   dplyr::filter(is_nonempty(.data$item), is_nonempty(.data$scale))
 
-scoring_df <- read_scoring(SCORING_PATH)
-
 # -----------------------------
 # Per-sample loader
 # -----------------------------
 read_one_sample_master <- function(sample) {
   cm <- (ARGS$clean_master %||% CFG$clean_master)
-  master_path <- if (!is.null(cm) && !is.na(cm) && nzchar(cm)) cm else latest_clean_master_for_sample(ROOT, sample)
+  master_path <- if (!is.null(cm) && !is.na(cm) && nzchar(cm)) {
+    cm
+  } else {
+    latest_clean_master_for_sample(ROOT, sample)
+  }
+  
   if (is.na(master_path) || !fs::file_exists(master_path)) {
     stop("Missing clean master for sample '", sample, "'. Looked for: ", master_path, call. = FALSE)
   }
@@ -488,7 +389,40 @@ read_one_sample_master <- function(sample) {
   }
   
   d <- read_master_csv_robust(master_path)
-  id_col <- pick_first(c("vp_id","vp","vpid","participant_id","participantid","id"), names(d))
+  
+  scored_full_path <- latest_scored_master_for_sample(ROOT, sample)
+  if (is.na(scored_full_path) || !fs::file_exists(scored_full_path)) {
+    stop("Missing unfiltered scored master for sample '", sample, "'. Run Step 3 first.", call. = FALSE)
+  }
+  
+  scored_filtered_path <- latest_scored_master_for_sample(
+    ROOT,
+    sample,
+    suffix = threshold_tag
+  )
+  
+  scored_combined_suffix <- paste0(threshold_tag, "_combined")
+  scored_combined_path <- latest_scored_master_for_sample(
+    ROOT,
+    sample,
+    suffix = scored_combined_suffix
+  )
+  
+  d_scored_full <- read_master_csv_robust(scored_full_path)
+  
+  d_scored_filtered <- if (!is.na(scored_filtered_path) && fs::file_exists(scored_filtered_path)) {
+    read_master_csv_robust(scored_filtered_path)
+  } else {
+    NULL
+  }
+  
+  d_scored_combined <- if (!is.na(scored_combined_path) && fs::file_exists(scored_combined_path)) {
+    read_master_csv_robust(scored_combined_path)
+  } else {
+    NULL
+  }
+  
+  id_col <- pick_first(c("vp_id", "vp", "vpid", "participant_id", "participantid", "id"), names(d))
   if (is.na(id_col)) {
     stop("Could not find an ID column in master for sample '", sample, "'.", call. = FALSE)
   }
@@ -499,7 +433,13 @@ read_one_sample_master <- function(sample) {
     keys_path = keys_path,
     d = d,
     id_col = id_col,
-    keys = readRDS(keys_path)
+    keys = readRDS(keys_path),
+    d_scored_full = d_scored_full,
+    d_scored_filtered = d_scored_filtered,
+    d_scored_combined = d_scored_combined,
+    scored_full_path = scored_full_path,
+    scored_filtered_path = scored_filtered_path,
+    scored_combined_path = scored_combined_path
   )
 }
 
@@ -554,60 +494,17 @@ export_items_tbl <- function(d, id_col, ii_rows) {
     )
 }
 
-recompute_scores_tbl <- function(d, id_col, keys_obj, scales, scoring_df,
-                                 total_override = c(),
-                                 dataset_label = NA_character_) {
+expected_score_cols_from_keys <- function(keys_obj, scales, total_override = c()) {
   scales <- unique(as.character(scales))
   scales <- scales[is_nonempty(scales)]
-  if (!length(scales)) return(NULL)
   
-  d_scored <- d
-  
-  # --- score totals from keys ---
-  keys_scale <- list(
-    items_by_scale = if (!is.null(keys_obj$items_by_scale) && nrow(keys_obj$items_by_scale)) {
-      dplyr::filter(keys_obj$items_by_scale, .data$scale %in% scales)
-    } else {
-      tibble::tibble()
-    },
-    items_by_subscale = tibble::tibble()
-  )
-  
-  d_scored <- add_scale_scores(
-    d_scored,
-    keys = keys_scale,
-    scoring_df = scoring_df,
-    prefix = "score_"
-  )
-  
-  # --- score subscales from keys ---
-  keys_sub <- list(
-    items_by_scale = tibble::tibble(),
-    items_by_subscale = if (!is.null(keys_obj$items_by_subscale) && nrow(keys_obj$items_by_subscale)) {
-      dplyr::filter(keys_obj$items_by_subscale, .data$scale %in% scales)
-    } else {
-      tibble::tibble()
-    }
-  )
-  
-  d_scored <- add_subscale_scores(
-    d_scored,
-    keys = keys_sub,
-    scoring_df = scoring_df,
-    prefix = "score_"
-  )
-  
-  # --- expected total score names from keys ---
   expected_total <- tibble::tibble()
-  
   if (!is.null(keys_obj$items_by_scale) && nrow(keys_obj$items_by_scale)) {
     expected_total <- keys_obj$items_by_scale %>%
       dplyr::filter(.data$scale %in% scales) %>%
       dplyr::mutate(
         level = "scale",
-        subscale = NA_character_
-      ) %>%
-      dplyr::mutate(
+        subscale = NA_character_,
         col = if (length(total_override)) {
           dplyr::if_else(
             .data$scale %in% names(total_override),
@@ -621,7 +518,6 @@ recompute_scores_tbl <- function(d, id_col, keys_obj, scales, scoring_df,
       dplyr::select(.data$level, .data$scale, .data$subscale, .data$col)
   }
   
-  # --- expected subscale names from keys ---
   expected_sub <- tibble::tibble()
   if (!is.null(keys_obj$items_by_subscale) && nrow(keys_obj$items_by_subscale)) {
     expected_sub <- keys_obj$items_by_subscale %>%
@@ -635,14 +531,27 @@ recompute_scores_tbl <- function(d, id_col, keys_obj, scales, scoring_df,
       dplyr::distinct()
   }
   
-  expected <- dplyr::bind_rows(expected_total, expected_sub) %>%
+  dplyr::bind_rows(expected_total, expected_sub) %>%
     dplyr::distinct()
+}
+
+export_existing_scores_tbl <- function(d_scored, id_col, keys_obj, scales,
+                                       total_override = c(),
+                                       dataset_label = NA_character_) {
+  if (is.null(d_scored)) {
+    stop("Score export requested, but scored data is NULL", call. = FALSE)
+  }
+  
+  expected <- expected_score_cols_from_keys(
+    keys_obj = keys_obj,
+    scales = scales,
+    total_override = total_override
+  )
   
   if (!nrow(expected)) return(NULL)
   
   present <- intersect(expected$col, names(d_scored))
   
-  # --- log columns that were expected but never created ---
   missing_not_created <- expected %>%
     dplyr::filter(!(.data$col %in% present))
   
@@ -653,53 +562,31 @@ recompute_scores_tbl <- function(d, id_col, keys_obj, scales, scoring_df,
       } else {
         paste0(missing_not_created$scale[i], " / ", missing_not_created$subscale[i])
       }
-      msg <- paste0(
+      message(
         "Score export: expected ", missing_not_created$level[i], " '", lbl,
-        "' was not created and will be omitted",
+        "' was not present in the scored master and will be omitted",
         if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
         "."
       )
-      message(msg)
     }
   }
   
-  # --- keep only created columns that are not all NA ---
   present_nonempty <- character(0)
-  
-  if (length(present)) {
-    for (cc in present) {
-      z <- suppressWarnings(as.numeric(d_scored[[cc]]))
-      if (all(is.na(z))) {
-        row_meta <- expected[match(cc, expected$col), , drop = FALSE]
-        lbl <- if (row_meta$level == "scale") {
-          as.character(row_meta$scale)
-        } else {
-          paste0(row_meta$scale, " / ", row_meta$subscale)
-        }
-        msg <- paste0(
-          "Score export: ", row_meta$level, " '", lbl,
-          "' produced only NA values and will be omitted",
-          if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
-          "."
-        )
-        message(msg)
-      } else {
-        present_nonempty <- c(present_nonempty, cc)
-      }
-    }
+  for (cc in present) {
+    z <- suppressWarnings(as.numeric(d_scored[[cc]]))
+    if (!all(is.na(z))) present_nonempty <- c(present_nonempty, cc)
   }
   
   present_nonempty <- unique(present_nonempty)
   
   if (!length(present_nonempty)) {
-    msg <- paste0(
+    message(
       "Score export: no non-missing score columns remained",
       if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
       "."
     )
-    message(msg)
     return(
-      d %>%
+      d_scored %>%
         dplyr::transmute(!!id_col := as.character(.data[[id_col]]))
     )
   }
@@ -742,8 +629,8 @@ if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
   
   for (obj in masters) {
     tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_hitop)
-    tab_scores <- recompute_scores_tbl(
-      obj$d, obj$id_col, obj$keys, scales_hitop, scoring_df,
+    tab_scores <- export_existing_scores_tbl(
+      obj$d_scored_full, obj$id_col, obj$keys, scales_hitop,
       total_override = CFG$score_total_override,
       dataset_label = paste0(obj$sample, " HiTOP")
     )
@@ -758,15 +645,12 @@ if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
     }
   }
   
-  hitop_items_combined  <- dplyr::bind_rows(items_list)
-  hitop_scores_combined <- dplyr::bind_rows(scores_list)
-  
   out_items <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_items.xlsx"))
-  writexl::write_xlsx(list(hitop_items = hitop_items_combined), out_items)
+  writexl::write_xlsx(make_export_sheets(items_list), out_items)
   message("Wrote: ", out_items)
   
   out_scores <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales.xlsx"))
-  writexl::write_xlsx(list(hitop_subscales = hitop_scores_combined), out_scores)
+  writexl::write_xlsx(make_export_sheets(scores_list), out_scores)
   message("Wrote: ", out_scores)
 }
 
@@ -776,9 +660,12 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
   scales_all <- unique(ii_complete$scale)
   
   for (obj in masters) {
-    tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_complete)
-    tab_scores <- recompute_scores_tbl(
-      obj$d, obj$id_col, obj$keys, scales_all, scoring_df,
+    tab_items <- export_items_tbl(obj$d, obj$id_col, ii_complete)
+    tab_scores <- export_existing_scores_tbl(
+      obj$d_scored_full,
+      obj$id_col,
+      obj$keys,
+      scales_all,
       total_override = CFG$score_total_override,
       dataset_label = paste0(obj$sample, " COMPLETE")
     )
@@ -793,20 +680,19 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
     }
   }
   
-  complete_items_combined  <- dplyr::bind_rows(items_list)
-  complete_scores_combined <- dplyr::bind_rows(scores_list)
-  
   out_items_all <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_items.xlsx"))
-  writexl::write_xlsx(list(complete_items = complete_items_combined), out_items_all)
+  writexl::write_xlsx(make_export_sheets(items_list), out_items_all)
   message("Wrote: ", out_items_all)
   
   out_scores_all <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales.xlsx"))
-  writexl::write_xlsx(list(complete_subscales = complete_scores_combined), out_scores_all)
+  writexl::write_xlsx(make_export_sheets(scores_list), out_scores_all)
   message("Wrote: ", out_scores_all)
 }
 
 # -----------------------------
-# Filtered exports: remove flagged items first, then recompute scores
+# Filtered exports:
+# - sample sheets use sample-specific flags + sample-specific filtered scored masters
+# - combined sheet uses combined flags + combined-filtered scored masters
 # -----------------------------
 if (isTRUE(CFG$export_loading_filtered)) {
   flag_helper <- latest_flag_helper(ROOT, combined_label, threshold_tag)
@@ -816,13 +702,29 @@ if (isTRUE(CFG$export_loading_filtered)) {
   } else {
     message("Flag helper: ", flag_helper)
     
+    # -------------------------------------------------------------------------
+    # HiTOP filtered exports
+    # -------------------------------------------------------------------------
     if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
       items_list  <- list()
       scores_list <- list()
       scales_hitop <- unique(ii_hitop$scale)
       
+      # sample-specific sheets
       for (obj in masters) {
-        flagged_tbl <- read_flagged_items(flag_helper, dataset_label = obj$sample, threshold_value = CFG$loading_threshold)
+        if (is.null(obj$d_scored_filtered)) {
+          stop(
+            "Missing sample-specific filtered scored master for sample '",
+            obj$sample, "'. Run Step 3 with export_filtered_scores = TRUE.",
+            call. = FALSE
+          )
+        }
+        
+        flagged_tbl <- read_flagged_items(
+          flag_helper,
+          dataset_label = obj$sample,
+          threshold_value = CFG$loading_threshold
+        )
         
         keys_filt <- drop_flagged_items_from_keys(obj$keys, flagged_tbl)
         
@@ -833,42 +735,109 @@ if (isTRUE(CFG$export_loading_filtered)) {
           ii_hitop
         }
         
-        tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_hitop_filt)
-        tab_scores <- recompute_scores_tbl(
-          obj$d, obj$id_col, keys_filt, scales_hitop, scoring_df,
+        tab_items <- export_items_tbl(obj$d, obj$id_col, ii_hitop_filt)
+        tab_scores <- export_existing_scores_tbl(
+          obj$d_scored_filtered,
+          obj$id_col,
+          keys_filt,
+          scales_hitop,
           total_override = CFG$score_total_override,
           dataset_label = paste0(obj$sample, " HiTOP_", threshold_tag)
         )
         
         if (!is.null(tab_items)) {
-          tab_items <- tab_items %>% dplyr::mutate(sample = obj$sample, .before = 1)
-          items_list[[obj$sample]] <- tab_items
+          items_list[[obj$sample]] <- tab_items %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
         }
         if (!is.null(tab_scores)) {
-          tab_scores <- tab_scores %>% dplyr::mutate(sample = obj$sample, .before = 1)
-          scores_list[[obj$sample]] <- tab_scores
+          scores_list[[obj$sample]] <- tab_scores %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
         }
       }
       
-      hitop_items_combined_f  <- dplyr::bind_rows(items_list)
-      hitop_scores_combined_f <- dplyr::bind_rows(scores_list)
+      # combined sheet
+      combined_items_parts <- list()
+      combined_scores_parts <- list()
+      
+      for (obj in masters) {
+        if (is.null(obj$d_scored_combined)) {
+          stop(
+            "Missing combined-filtered scored master for sample '",
+            obj$sample, "'. Run Step 3 with export_combined_filtered_scores = TRUE.",
+            call. = FALSE
+          )
+        }
+        
+        flagged_tbl_combined <- read_flagged_items(
+          flag_helper,
+          dataset_label = combined_label,
+          threshold_value = CFG$loading_threshold
+        )
+        
+        keys_combined_filt <- drop_flagged_items_from_keys(obj$keys, flagged_tbl_combined)
+        
+        flagged_norm_combined <- unique(normalize_id(flagged_tbl_combined$item))
+        ii_hitop_combined_filt <- if (length(flagged_norm_combined)) {
+          ii_hitop %>% dplyr::filter(!(normalize_id(.data$item) %in% flagged_norm_combined))
+        } else {
+          ii_hitop
+        }
+        
+        tab_items_combined <- export_items_tbl(obj$d, obj$id_col, ii_hitop_combined_filt)
+        tab_scores_combined <- export_existing_scores_tbl(
+          obj$d_scored_combined,
+          obj$id_col,
+          keys_combined_filt,
+          scales_hitop,
+          total_override = CFG$score_total_override,
+          dataset_label = paste0(combined_label, " HiTOP_", threshold_tag)
+        )
+        
+        if (!is.null(tab_items_combined)) {
+          combined_items_parts[[obj$sample]] <- tab_items_combined %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
+        }
+        if (!is.null(tab_scores_combined)) {
+          combined_scores_parts[[obj$sample]] <- tab_scores_combined %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
+        }
+      }
+      
+      items_list[["combined"]]  <- dplyr::bind_rows(combined_items_parts)
+      scores_list[["combined"]] <- dplyr::bind_rows(combined_scores_parts)
       
       out_items_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_items_{threshold_tag}.xlsx"))
-      writexl::write_xlsx(list(hitop_items = hitop_items_combined_f), out_items_f)
+      writexl::write_xlsx(items_list, out_items_f)
       message("Wrote: ", out_items_f)
       
       out_scores_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales_{threshold_tag}.xlsx"))
-      writexl::write_xlsx(list(hitop_subscales = hitop_scores_combined_f), out_scores_f)
+      writexl::write_xlsx(scores_list, out_scores_f)
       message("Wrote: ", out_scores_f)
     }
     
+    # -------------------------------------------------------------------------
+    # COMPLETE filtered exports
+    # -------------------------------------------------------------------------
     if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
       items_list  <- list()
       scores_list <- list()
       scales_all <- unique(ii_complete$scale)
       
+      # sample-specific sheets
       for (obj in masters) {
-        flagged_tbl <- read_flagged_items(flag_helper, dataset_label = obj$sample, threshold_value = CFG$loading_threshold)
+        if (is.null(obj$d_scored_filtered)) {
+          stop(
+            "Missing sample-specific filtered scored master for sample '",
+            obj$sample, "'. Run Step 3 with export_filtered_scores = TRUE.",
+            call. = FALSE
+          )
+        }
+        
+        flagged_tbl <- read_flagged_items(
+          flag_helper,
+          dataset_label = obj$sample,
+          threshold_value = CFG$loading_threshold
+        )
         
         keys_filt <- drop_flagged_items_from_keys(obj$keys, flagged_tbl)
         
@@ -879,32 +848,83 @@ if (isTRUE(CFG$export_loading_filtered)) {
           ii_complete
         }
         
-        tab_items  <- export_items_tbl(obj$d, obj$id_col, ii_complete_filt)
-        tab_scores <- recompute_scores_tbl(
-          obj$d, obj$id_col, keys_filt, scales_all, scoring_df,
+        tab_items <- export_items_tbl(obj$d, obj$id_col, ii_complete_filt)
+        tab_scores <- export_existing_scores_tbl(
+          obj$d_scored_filtered,
+          obj$id_col,
+          keys_filt,
+          scales_all,
           total_override = CFG$score_total_override,
           dataset_label = paste0(obj$sample, " COMPLETE_", threshold_tag)
         )
         
         if (!is.null(tab_items)) {
-          tab_items <- tab_items %>% dplyr::mutate(sample = obj$sample, .before = 1)
-          items_list[[obj$sample]] <- tab_items
+          items_list[[obj$sample]] <- tab_items %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
         }
         if (!is.null(tab_scores)) {
-          tab_scores <- tab_scores %>% dplyr::mutate(sample = obj$sample, .before = 1)
-          scores_list[[obj$sample]] <- tab_scores
+          scores_list[[obj$sample]] <- tab_scores %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
         }
       }
       
-      complete_items_combined_f  <- dplyr::bind_rows(items_list)
-      complete_scores_combined_f <- dplyr::bind_rows(scores_list)
+      # combined sheet
+      combined_items_parts <- list()
+      combined_scores_parts <- list()
+      
+      for (obj in masters) {
+        if (is.null(obj$d_scored_combined)) {
+          stop(
+            "Missing combined-filtered scored master for sample '",
+            obj$sample, "'. Run Step 3 with export_combined_filtered_scores = TRUE.",
+            call. = FALSE
+          )
+        }
+        
+        flagged_tbl_combined <- read_flagged_items(
+          flag_helper,
+          dataset_label = combined_label,
+          threshold_value = CFG$loading_threshold
+        )
+        
+        keys_combined_filt <- drop_flagged_items_from_keys(obj$keys, flagged_tbl_combined)
+        
+        flagged_norm_combined <- unique(normalize_id(flagged_tbl_combined$item))
+        ii_complete_combined_filt <- if (length(flagged_norm_combined)) {
+          ii_complete %>% dplyr::filter(!(normalize_id(.data$item) %in% flagged_norm_combined))
+        } else {
+          ii_complete
+        }
+        
+        tab_items_combined <- export_items_tbl(obj$d, obj$id_col, ii_complete_combined_filt)
+        tab_scores_combined <- export_existing_scores_tbl(
+          obj$d_scored_combined,
+          obj$id_col,
+          keys_combined_filt,
+          scales_all,
+          total_override = CFG$score_total_override,
+          dataset_label = paste0(combined_label, " COMPLETE_", threshold_tag)
+        )
+        
+        if (!is.null(tab_items_combined)) {
+          combined_items_parts[[obj$sample]] <- tab_items_combined %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
+        }
+        if (!is.null(tab_scores_combined)) {
+          combined_scores_parts[[obj$sample]] <- tab_scores_combined %>%
+            dplyr::mutate(sample = obj$sample, .before = 1)
+        }
+      }
+      
+      items_list[["combined"]]  <- dplyr::bind_rows(combined_items_parts)
+      scores_list[["combined"]] <- dplyr::bind_rows(combined_scores_parts)
       
       out_items_all_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_items_{threshold_tag}.xlsx"))
-      writexl::write_xlsx(list(complete_items = complete_items_combined_f), out_items_all_f)
+      writexl::write_xlsx(items_list, out_items_all_f)
       message("Wrote: ", out_items_all_f)
       
       out_scores_all_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales_{threshold_tag}.xlsx"))
-      writexl::write_xlsx(list(complete_subscales = complete_scores_combined_f), out_scores_all_f)
+      writexl::write_xlsx(scores_list, out_scores_all_f)
       message("Wrote: ", out_scores_all_f)
     }
   }
