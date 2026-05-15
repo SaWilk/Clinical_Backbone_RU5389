@@ -124,7 +124,11 @@ read_master_csv_robust <- function(master_csv, default_delim = ";") {
       delim = delim,
       skip = skip_n,
       show_col_types = FALSE,
-      locale = readr::locale(encoding = "UTF-8")
+      locale = readr::locale(
+        encoding = "UTF-8",
+        decimal_mark = if (identical(delim, ";")) "," else ".",
+        grouping_mark = if (identical(delim, ";")) "." else ","
+      )
     )
   ) %>%
     janitor::clean_names()

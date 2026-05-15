@@ -1,4 +1,4 @@
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# --- prep03_BAckbone_Questionnaire_Data_Cleaning.R -----------------------------------------------
 # FOR: Separate Backbone Data by Project — ITEM-LEVEL Cleaning & Export Pipeline
 # Authors: Saskia Wilken
 # Split version: 2026-03-16
@@ -541,19 +541,28 @@ recode_cape_range_to_1_4 <- function(df, item_info, scoring_df) {
   
   if (!nrow(cmap)) return(df)
   
-  cape_scoring <- scoring_df %>%
-    dplyr::filter(normalize_scale_chr(.data$scale) == "CAPE") %>%
-    dplyr::slice(1)
+  cape_vals <- unlist(
+    lapply(cmap$orig, function(cc) suppressWarnings(as.numeric(df[[cc]]))),
+    use.names = FALSE
+  )
+  cape_vals <- cape_vals[is.finite(cape_vals)]
   
-  scoring_says_0_3 <- nrow(cape_scoring) &&
-    !is.na(cape_scoring$min) && !is.na(cape_scoring$max) &&
-    cape_scoring$min == 0 && cape_scoring$max == 3
+  if (!length(cape_vals)) {
+    log_msg("CAPE range recode: skipped because no finite CAPE values were found.")
+    return(df)
+  }
   
-  cape_vals <- unlist(lapply(cmap$orig, function(cc) suppressWarnings(as.numeric(df[[cc]]))), use.names = FALSE)
+  data_min <- min(cape_vals, na.rm = TRUE)
+  data_max <- max(cape_vals, na.rm = TRUE)
   data_has_zero <- any(cape_vals == 0, na.rm = TRUE)
+  data_looks_0_3 <- isTRUE(data_has_zero) && data_min >= 0 && data_max <= 3
   
-  if (!isTRUE(scoring_says_0_3) && !isTRUE(data_has_zero)) {
-    log_msg("CAPE range recode: skipped because CAPE does not look like 0–3.")
+  if (!data_looks_0_3) {
+    log_msg(
+      "CAPE range recode: skipped. Observed CAPE range is ",
+      data_min, "–", data_max,
+      "; data do not look like 0–3."
+    )
     return(df)
   }
   
@@ -564,7 +573,12 @@ recode_cape_range_to_1_4 <- function(df, item_info, scoring_df) {
     df[[cc]] <- x
   }
   
-  log_msg("CAPE range recode: shifted ", length(cmap$orig), " CAPE item columns from 0–3 to 1–4.")
+  log_msg(
+    "CAPE range recode: shifted ", length(cmap$orig),
+    " CAPE item columns from 0–3 to 1–4. Observed pre-shift range was ",
+    data_min, "–", data_max, "."
+  )
+  
   df
 }
 
@@ -596,8 +610,23 @@ impute_cape_distress_from_frequency <- function(df,
   
   if (!nrow(pairs)) return(df)
   
-  n_filled_missing <- 0L
-  n_left_missing <- 0L
+  cape_scoring <- scoring_df %>%
+    dplyr::filter(normalize_scale_chr(.data$scale) == "CAPE") %>%
+    dplyr::slice(1)
+  
+  cape_min <- if (
+    nrow(cape_scoring) &&
+    "min" %in% names(cape_scoring) &&
+    !is.na(cape_scoring$min[1])
+  ) {
+    as.numeric(cape_scoring$min[1])
+  } else {
+    1
+  }
+  
+  n_structural_filled <- 0L
+  n_left_for_median_imputation <- 0L
+  n_frequency_missing <- 0L
   
   for (i in seq_len(nrow(pairs))) {
     fcol <- pairs$freq_col[i]
@@ -606,29 +635,34 @@ impute_cape_distress_from_frequency <- function(df,
     df[[fcol]] <- suppressWarnings(as.numeric(df[[fcol]]))
     df[[dcol]] <- suppressWarnings(as.numeric(df[[dcol]]))
     
-    idx_freq_present_distress_missing <- !is.na(df[[fcol]]) & is.na(df[[dcol]])
+    idx_structural_missing <- !is.na(df[[fcol]]) &
+      df[[fcol]] == cape_min &
+      is.na(df[[dcol]])
     
-    if (any(idx_freq_present_distress_missing)) {
-      df[[dcol]][idx_freq_present_distress_missing] <- distress_missing_value
-      n_filled_missing <- n_filled_missing + sum(idx_freq_present_distress_missing)
-      log_msg(
-        "CAPE: filled ", sum(idx_freq_present_distress_missing),
-        " missing distress values in '", dcol,
-        "' with ", distress_missing_value,
-        " because matching frequency item '", fcol,
-        "' was present."
-      )
+    if (any(idx_structural_missing)) {
+      df[[dcol]][idx_structural_missing] <- distress_missing_value
+      n_structural_filled <- n_structural_filled + sum(idx_structural_missing)
     }
     
-    idx_freq_missing_distress_missing <- is.na(df[[fcol]]) & is.na(df[[dcol]])
-    n_left_missing <- n_left_missing + sum(idx_freq_missing_distress_missing)
+    idx_frequency_positive_distress_missing <- !is.na(df[[fcol]]) &
+      df[[fcol]] > cape_min &
+      is.na(df[[dcol]])
+    
+    n_left_for_median_imputation <- n_left_for_median_imputation +
+      sum(idx_frequency_positive_distress_missing)
+    
+    idx_frequency_missing_distress_missing <- is.na(df[[fcol]]) & is.na(df[[dcol]])
+    n_frequency_missing <- n_frequency_missing + sum(idx_frequency_missing_distress_missing)
   }
   
   log_msg(
-    "CAPE: filled ", n_filled_missing,
+    "CAPE structural distress cleanup: filled ", n_structural_filled,
     " missing distress values with ", distress_missing_value,
-    " where matching frequency was present; left ",
-    n_left_missing,
+    " where matching frequency was the lowest option (", cape_min, "); left ",
+    n_left_for_median_imputation,
+    " missing distress values for later median imputation because matching frequency was > ",
+    cape_min,
+    "; left ", n_frequency_missing,
     " distress values missing because matching frequency was also missing."
   )
   
@@ -744,7 +778,6 @@ filter_and_impute_global_scored_items <- function(df,
       .data$scale_norm %in% scoring_scales | .data$scale_norm == "SUQ",
       !(.data$scale_norm %in% exclude_scales_norm)
     ) %>%
-    dplyr::filter(!(.data$scale_norm == "CAPE" & tolower(as.character(.data$subscale)) == "distress")) %>%
     dplyr::distinct(.data$orig, .keep_all = TRUE)
   
   item_cols <- cmap$orig
@@ -1146,7 +1179,12 @@ process_sample <- function(sample,
   
   q_final <- reverse_code_wide(q_clean0, unique(col_map$orig), col_meta)
   q_final <- recode_cape_range_to_1_4(q_final, ii, scoring_df)
-  q_final <- impute_cape_distress_from_frequency(q_final, ii, scoring_df, distress_missing_value = 0)
+  q_final <- impute_cape_distress_from_frequency(
+    q_final,
+    ii,
+    scoring_df,
+    distress_missing_value = 0
+  )
   q_final <- preprocess_suq_wide(q_final, ii_all)
   global_miss <- filter_and_impute_global_scored_items(
     df = q_final,

@@ -1,4 +1,4 @@
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# --- prep05_Score_Scales.R -----------------------------------------------
 # FOR: Add questionnaire score columns to already cleaned Backbone masters
 # Authors: Saskia Wilken
 # New split step: 2026-03-16
@@ -95,9 +95,12 @@ latest_scoring <- function() {
 
 read_master_csv_robust <- function(master_csv, default_delim = ";") {
   first_line <- readr::read_lines(master_csv, n_max = 1)
+  
   delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
     sub("^sep=", "", first_line, ignore.case = TRUE)
-  } else default_delim
+  } else {
+    default_delim
+  }
   
   skip_n <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) 1L else 0L
   
@@ -107,9 +110,14 @@ read_master_csv_robust <- function(master_csv, default_delim = ";") {
       delim = delim,
       skip = skip_n,
       show_col_types = FALSE,
-      locale = readr::locale(encoding = "UTF-8")
+      locale = readr::locale(
+        encoding = "UTF-8",
+        decimal_mark = if (identical(delim, ";")) "," else ".",
+        grouping_mark = if (identical(delim, ";")) "." else ","
+      )
     )
-  ) %>% janitor::clean_names()
+  ) %>%
+    janitor::clean_names()
 }
 
 read_scoring <- function(filepath) {
@@ -316,6 +324,43 @@ score_items_wide <- function(d, items, col_map, agg = c("mean","sum")) {
   out
 }
 
+add_z_score_columns <- function(df,
+                                score_pattern = "^score_",
+                                z_prefix = "z_",
+                                dataset_label = NA_character_) {
+  score_cols <- grep(score_pattern, names(df), value = TRUE)
+  score_cols <- score_cols[!startsWith(score_cols, z_prefix)]
+  
+  if (!length(score_cols)) return(df)
+  
+  for (cc in score_cols) {
+    x <- suppressWarnings(as.numeric(df[[cc]]))
+    m <- mean(x, na.rm = TRUE)
+    s <- stats::sd(x, na.rm = TRUE)
+    
+    z_col <- paste0(z_prefix, cc)
+    
+    if (!is.finite(s) || s <= 0) {
+      df[[z_col]] <- NA_real_
+      log_msg(
+        "Z-scoring skipped for '", cc, "'",
+        if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
+        " because SD is zero or not finite."
+      )
+    } else {
+      df[[z_col]] <- (x - m) / s
+    }
+  }
+  
+  log_msg(
+    "Added ", length(score_cols), " z-scored score columns",
+    if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
+    "."
+  )
+  
+  df
+}
+
 get_suq_q2_q3_cols <- function(items, col_map) {
   items_chr <- as.character(items)
   
@@ -509,135 +554,6 @@ add_subscale_scores <- function(df, keys, scoring_df,
   df
 }
 
-get_id_output_df <- function(df) {
-  id_candidates <- c("vpid", "vp_id", "vp", "participantid", "participant_id", "id")
-  id_col <- intersect(id_candidates, names(df))[1]
-  if (is.na(id_col)) {
-    return(tibble::tibble(id = seq_len(nrow(df))))
-  }
-  tibble::tibble(id = df[[id_col]])
-}
-
-get_scale_items_from_keys <- function(keys, scale_name) {
-  scale_key <- toupper(trimws(scale_name))
-  
-  if (!is.null(keys$items_by_scale) && nrow(keys$items_by_scale)) {
-    hit <- keys$items_by_scale %>%
-      dplyr::filter(toupper(trimws(as.character(.data$scale))) == scale_key)
-    
-    if (nrow(hit) && length(hit$items[[1]])) {
-      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
-    }
-  }
-  
-  if (!is.null(keys$items_by_subscale) && nrow(keys$items_by_subscale)) {
-    hit <- keys$items_by_subscale %>%
-      dplyr::filter(toupper(trimws(as.character(.data$scale))) == scale_key)
-    
-    if (nrow(hit)) {
-      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
-    }
-  }
-  
-  character(0)
-}
-
-get_scale_subscale_items_from_keys <- function(keys, scale_name, subscale_name) {
-  scale_key <- toupper(trimws(scale_name))
-  sub_key   <- tolower(trimws(subscale_name))
-  
-  if (!is.null(keys$items_by_subscale) && nrow(keys$items_by_subscale)) {
-    hit <- keys$items_by_subscale %>%
-      dplyr::mutate(
-        scale_key_tmp = toupper(trimws(as.character(.data$scale))),
-        sub_key_tmp   = tolower(trimws(as.character(.data$subscale)))
-      ) %>%
-      dplyr::filter(
-        .data$scale_key_tmp == scale_key,
-        .data$sub_key_tmp == sub_key
-      )
-    
-    if (nrow(hit)) {
-      return(unique(as.character(unlist(hit$items, use.names = FALSE))))
-    }
-  }
-  
-  character(0)
-}
-
-sum_items_from_key_vector <- function(df, items, col_map = make_col_map(df)) {
-  if (!length(items)) return(rep(NA_real_, nrow(df)))
-  
-  items_norm <- normalize_id_local(items)
-  keep_norm  <- intersect(items_norm, col_map$item_norm)
-  if (!length(keep_norm)) return(rep(NA_real_, nrow(df)))
-  
-  orig_cols <- col_map$orig[match(keep_norm, col_map$item_norm)]
-  orig_cols <- orig_cols[!is.na(orig_cols)]
-  if (!length(orig_cols)) return(rep(NA_real_, nrow(df)))
-  
-  M <- df[, orig_cols, drop = FALSE]
-  M[] <- lapply(M, function(z) suppressWarnings(as.numeric(z)))
-  
-  n_nonmiss <- rowSums(!is.na(as.matrix(M)))
-  out <- rowSums(M, na.rm = TRUE)
-  out[n_nonmiss == 0] <- NA_real_
-  out
-}
-
-compute_cape_sum <- function(df, keys) {
-  col_map <- make_col_map(df)
-  cape_items <- get_scale_items_from_keys(keys, "CAPE")
-  sum_items_from_key_vector(df, cape_items, col_map = col_map)
-}
-
-compute_cape_sum_components <- function(df, keys) {
-  col_map <- make_col_map(df)
-  
-  cape_items <- get_scale_items_from_keys(keys, "CAPE")
-  cape_frequency_items <- get_scale_subscale_items_from_keys(keys, "CAPE", "frequency")
-  cape_distress_items  <- get_scale_subscale_items_from_keys(keys, "CAPE", "distress")
-  
-  tibble::tibble(
-    cape_sum = sum_items_from_key_vector(df, cape_items, col_map = col_map),
-    cape_sum_frequency = sum_items_from_key_vector(df, cape_frequency_items, col_map = col_map),
-    cape_sum_distress = sum_items_from_key_vector(df, cape_distress_items, col_map = col_map)
-  )
-}
-
-write_cape_sum_table <- function(df, keys, sample, suffix = NULL) {
-  out_dir <- fs::path(DIR_EXPORT, sample)
-  fs::dir_create(out_dir)
-  
-  cape_scores <- compute_cape_sum_components(df, keys)
-  
-  if (any(is.na(cape_scores$cape_sum))) {
-    stop("CAPE sum table for sample '", sample, "' contains missing total CAPE sum values.")
-  }
-  
-  if (any(is.na(cape_scores$cape_sum_frequency))) {
-    log_msg("WARNING: CAPE frequency sum table for sample '", sample, "' contains missing values.")
-  }
-  
-  if (any(is.na(cape_scores$cape_sum_distress))) {
-    log_msg("WARNING: CAPE distress sum table for sample '", sample, "' contains missing values.")
-  }
-  
-  out <- get_id_output_df(df) %>%
-    dplyr::bind_cols(cape_scores)
-  
-  fname <- if (is.null(suffix) || !nzchar(suffix)) {
-    glue::glue("{sample}_cape_sum_scores.csv")
-  } else {
-    glue::glue("{sample}_cape_sum_scores_{suffix}.csv")
-  }
-  
-  out_path <- fs::path(out_dir, fname)
-  write.csv2(out, out_path, row.names = FALSE)
-  log_msg("Wrote CAPE sum table: ", out_path)
-  out_path
-}
-
 
 assert_no_missing_scores <- function(df, sample, suffix = NULL) {
   score_cols <- grep("^score_", names(df), value = TRUE)
@@ -646,10 +562,7 @@ assert_no_missing_scores <- function(df, sample, suffix = NULL) {
     return(invisible(TRUE))
   }
   
-  allow_missing <- grepl("^score_cape__distress$", score_cols)
-  check_cols <- score_cols[!allow_missing]
-  
-  miss <- vapply(check_cols, function(cc) sum(is.na(df[[cc]])), integer(1))
+  miss <- vapply(score_cols, function(cc) sum(is.na(df[[cc]])), integer(1))
   miss <- miss[miss > 0]
   
   label <- if (is.null(suffix) || !nzchar(suffix)) "unfiltered" else suffix
@@ -662,13 +575,7 @@ assert_no_missing_scores <- function(df, sample, suffix = NULL) {
     )
   }
   
-  if (any(allow_missing)) {
-    log_msg("Missing-score check for sample '", sample, "' (", label,
-            "): passed; CAPE distress missing values were allowed as structural NA.")
-  } else {
-    log_msg("Missing-score check for sample '", sample, "' (", label, "): passed.")
-  }
-  
+  log_msg("Missing-score check for sample '", sample, "' (", label, "): passed.")
   invisible(TRUE)
 }
 
@@ -712,9 +619,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
     exclude_scales = NON_SCORABLE_SCALES
   )
   assert_no_missing_scores(df_scored, sample)
+  df_scored <- add_z_score_columns(
+    df_scored,
+    dataset_label = paste0(sample, " unfiltered")
+  )
   write_master_variant(df_scored, sample)
-  write_cape_sum_table(df_scored, keys, sample)
-  
+
   # round 2: filtered scores
   if (isTRUE(CFG$export_filtered_scores)) {
     if (!is.na(flag_helper_path) && fs::file_exists(flag_helper_path)) {
@@ -741,8 +651,11 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
       
       suffix_tag <- make_threshold_tag(CFG$loading_threshold)
       assert_no_missing_scores(df_scored_f, sample, suffix = suffix_tag)
+      df_scored_f <- add_z_score_columns(
+        df_scored_f,
+        dataset_label = paste0(sample, " ", suffix_tag)
+      )
       write_master_variant(df_scored_f, sample, suffix = suffix_tag)
-      write_cape_sum_table(df_scored_f, keys_filt, sample, suffix = suffix_tag)
     } else {
       log_msg("No flagged-item helper found. Skipping filtered scored master.")
     }
@@ -781,8 +694,11 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
       suffix_tag_combined <- paste0(make_threshold_tag(CFG$loading_threshold), "_combined")
       
       assert_no_missing_scores(df_scored_combined_f, sample, suffix = suffix_tag_combined)
+      df_scored_combined_f <- add_z_score_columns(
+        df_scored_combined_f,
+        dataset_label = paste0(sample, " ", suffix_tag_combined)
+      )
       write_master_variant(df_scored_combined_f, sample, suffix = suffix_tag_combined)
-      write_cape_sum_table(df_scored_combined_f, keys_combined_filt, sample, suffix = suffix_tag_combined)
     } else {
       log_msg("No flagged-item helper found. Skipping combined-filtered scored master.")
     }

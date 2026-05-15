@@ -1,4 +1,4 @@
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# --- prep06_export_analyze-ready_sheets.R -----------------------------------------------
 # FOR: Export HiTOP-mapped + COMPLETE questionnaire-only inputs for factor analysis
 # Date: 2026-03-16
 #
@@ -65,9 +65,44 @@ CFG <- list(
 )
 
 # ---- Helpers -----------------------------------------------------------------
-make_export_sheets <- function(x, combined_sheet = "combined") {
+add_z_score_columns <- function(df,
+                                score_pattern = "^score_",
+                                z_prefix = "z_") {
+  score_cols <- grep(score_pattern, names(df), value = TRUE)
+  score_cols <- score_cols[!startsWith(score_cols, z_prefix)]
+  
+  if (!length(score_cols)) return(df)
+  
+  for (cc in score_cols) {
+    x <- suppressWarnings(as.numeric(df[[cc]]))
+    m <- mean(x, na.rm = TRUE)
+    s <- stats::sd(x, na.rm = TRUE)
+    
+    z_col <- paste0(z_prefix, cc)
+    df[[z_col]] <- if (is.finite(s) && s > 0) {
+      (x - m) / s
+    } else {
+      NA_real_
+    }
+  }
+  
+  df
+}
+
+make_export_sheets <- function(x, combined_sheet = "combined", z_scores = FALSE) {
   x <- x[!vapply(x, is.null, logical(1))]
-  x[[combined_sheet]] <- dplyr::bind_rows(x)
+  
+  if (isTRUE(z_scores)) {
+    x <- purrr::map(x, add_z_score_columns)
+  }
+  
+  combined <- dplyr::bind_rows(x)
+  
+  if (isTRUE(z_scores)) {
+    combined <- add_z_score_columns(combined)
+  }
+  
+  x[[combined_sheet]] <- combined
   x
 }
 
@@ -205,6 +240,7 @@ sample_tag <- function(samples) {
 
 read_master_csv_robust <- function(master_csv, default_delim = ";") {
   first_line <- readr::read_lines(master_csv, n_max = 1)
+  
   delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
     sub("^sep=", "", first_line, ignore.case = TRUE)
   } else {
@@ -219,7 +255,11 @@ read_master_csv_robust <- function(master_csv, default_delim = ";") {
       delim = delim,
       skip = skip_n,
       show_col_types = FALSE,
-      locale = readr::locale(encoding = "UTF-8")
+      locale = readr::locale(
+        encoding = "UTF-8",
+        decimal_mark = if (identical(delim, ";")) "," else ".",
+        grouping_mark = if (identical(delim, ";")) "." else ","
+      )
     )
   ) %>%
     tibble::as_tibble()
@@ -650,7 +690,7 @@ if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
   message("Wrote: ", out_items)
   
   out_scores <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales.xlsx"))
-  writexl::write_xlsx(make_export_sheets(scores_list), out_scores)
+  writexl::write_xlsx(make_export_sheets(scores_list, z_scores = TRUE), out_scores)
   message("Wrote: ", out_scores)
 }
 
@@ -685,7 +725,7 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
   message("Wrote: ", out_items_all)
   
   out_scores_all <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales.xlsx"))
-  writexl::write_xlsx(make_export_sheets(scores_list), out_scores_all)
+  writexl::write_xlsx(make_export_sheets(scores_list, z_scores = TRUE), out_scores_all)
   message("Wrote: ", out_scores_all)
 }
 
@@ -811,6 +851,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
       message("Wrote: ", out_items_f)
       
       out_scores_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales_{threshold_tag}.xlsx"))
+      scores_list <- purrr::map(scores_list, add_z_score_columns)
       writexl::write_xlsx(scores_list, out_scores_f)
       message("Wrote: ", out_scores_f)
     }
@@ -924,6 +965,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
       message("Wrote: ", out_items_all_f)
       
       out_scores_all_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales_{threshold_tag}.xlsx"))
+      scores_list <- purrr::map(scores_list, add_z_score_columns)
       writexl::write_xlsx(scores_list, out_scores_all_f)
       message("Wrote: ", out_scores_all_f)
     }
