@@ -58,50 +58,49 @@ if (is.null(script_dir)) {
 in_path      <- file.path(script_dir, "raw_data")
 info_path    <- file.path(script_dir, "private_information")
 
-# === Shared logging (same as first script) ====================================
-# We append to logs/all_action_points.log (root). The first script later
-# removes *.log in project folders (NOT this file) and then splits this root log.
+# === Dedicated logging for this script ========================================
+# IMPORTANT:
+# This script must NOT write to logs/all_action_points.log.
+# That file belongs to the main cleaning/splitting pipeline.
+# translate_remids writes its own timestamped log instead.
+
 log_root_dir <- file.path(script_dir, "logs")
-if (!dir.exists(log_root_dir)) dir.create(log_root_dir, recursive = TRUE, showWarnings = FALSE)
-shared_log_path <- file.path(log_root_dir, "all_action_points.log")
+if (!dir.exists(log_root_dir)) {
+  dir.create(log_root_dir, recursive = TRUE, showWarnings = FALSE)
+}
 
-# Try to use the same logger implementation as the first script.
-# Fallback to simple line-append if the function file isn't available.
-functions_dir <- file.path(script_dir, "functions")
-logger <- NULL
-try({
-  if (file.exists(file.path(functions_dir, "setup_logging.R"))) {
-    source(file.path(functions_dir, "setup_logging.R"))
-    logger <- setup_logging(shared_log_path)
-  }
-}, silent = TRUE)
+translate_log_dir <- file.path(log_root_dir, "translate_remids")
+if (!dir.exists(translate_log_dir)) {
+  dir.create(translate_log_dir, recursive = TRUE, showWarnings = FALSE)
+}
 
-# Minimal fallback logger if setup_logging.R not available ---------------------
+translate_log_path <- file.path(
+  translate_log_dir,
+  paste0("translate_remids_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log")
+)
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
+
 .log_line <- function(text) {
   ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   line <- paste0("[", ts, "] ", text)
-  cat(line, "\n", file = shared_log_path, append = TRUE)
+  cat(line, "\n", file = translate_log_path, append = TRUE)
 }
 
 log_warn_unmapped <- function(project, sample, remid_raw, remid_canon, dataset_name, row_index, note = NULL) {
   msg <- sprintf(
     "UNMAPPED_REMID | project=%s | sample=%s | dataset=%s | row=%s | remid='%s' | canon='%s'%s",
-    as.character(project %||% ""), as.character(sample %||% ""), as.character(dataset_name %||% ""),
-    as.character(row_index %||% ""), as.character(remid_raw %||% ""), as.character(remid_canon %||% ""),
+    as.character(project %||% ""),
+    as.character(sample %||% ""),
+    as.character(dataset_name %||% ""),
+    as.character(row_index %||% ""),
+    as.character(remid_raw %||% ""),
+    as.character(remid_canon %||% ""),
     if (!is.null(note) && nzchar(note)) paste0(" | note=", note) else ""
   )
-  if (!is.null(logger) && is.list(logger) && !is.null(logger$log)) {
-    # Best-effort call into your logger. Signature may differ, so we keep the message consolidated.
-    # Many implementations accept: logger$log(level, project, sample, data_type, message)
-    try(logger$log(level = "WARN", project = as.character(project %||% ""),
-                   sample = as.character(sample %||% ""), data_type = "translate_remids", message = msg),
-        silent = TRUE)
-  } else {
-    .log_line(msg)
-  }
+  
+  .log_line(msg)
 }
-
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
 # ===== (kept) project8/9 special CSV log for "XXXXX" fallbacks ================
 # (This stays where it was; it’s an additional, more detailed CSV log.)
@@ -260,25 +259,27 @@ if (nrow(dups) > 0) {
        paste(dups$Remote_ID_canon, collapse = ", "))
 }
 
-# 2) Correct mis-typed remid (and remidcheck) in raw survey data (805199 → 80519)
+# 2) Correct known mistyped Remote_ID values in raw survey data before mapping
 fix_mistyped_both <- function(df) {
-    if (is.numeric(df$remid)) {
-      df$remid[df$remid == 805199] <- 80519
-    } else {
-      df$remid[df$remid == "805199"] <- "80519"
-    }
-
-    if (is.numeric(df$remidcheck)) {
-      df$remidcheck[df$remidcheck == 805199] <- 80519
-    } else {
-      df$remidcheck[df$remidcheck == "805199"] <- "80519"
-    }
   
-    if (is.numeric(df$remidcheck)) {
-      df$remidcheck[df$remidcheck == 90144] <- 90365
+  replace_remote_id <- function(x, from, to) {
+    if (is.numeric(x)) {
+      x[x == as.numeric(from)] <- as.numeric(to)
     } else {
-      df$remidcheck[df$remidcheck == "90144"] <- "90365"
+      x[trimws(as.character(x)) == as.character(from)] <- as.character(to)
     }
+    x
+  }
+  
+  # Known typo: 805199 should be 80519
+  df$remid      <- replace_remote_id(df$remid,      "805199", "80519")
+  df$remidcheck <- replace_remote_id(df$remidcheck, "805199", "80519")
+  
+  # Known typo: 90144 is not a real Remote_ID; it should be 90553
+  # Apply before identity checks, unmapped checks, and translation.
+  df$remid      <- replace_remote_id(df$remid,      "90144", "90553")
+  df$remidcheck <- replace_remote_id(df$remidcheck, "90144", "90553")
+  
   df
 }
 dat_children_parents <- fix_mistyped_both(dat_children_parents)
@@ -507,7 +508,6 @@ write.table(dat_adults_out,
             sep = ";", dec = ".", row.names = FALSE, qmethod = "double")
 
 # Close logger if available (harmless otherwise) -------------------------------
-try({ if (!is.null(logger) && !is.null(logger$close)) logger$close() }, silent = TRUE)
 
 if (interactive()) {
   cat("\n✅ Saved translated data to:\n",

@@ -814,9 +814,13 @@ dat_parents_p6 <- extract_pilot_by_vpid(
 vp_col = "vpid"
 project_col = "project"
 # Project 3
-del_id_ad <- c(59, 80) # Hendrik said they can be deleted as they are incomplete
+# Hendrik said they can be deleted as they are incomplete/faulty.
+# Additional Exp-1 questionnaire row:
+#   VP_id 30100; LimeSurvey id 579; row 90; 2025-09-24 10:41:00
+del_id_ad <- c(59, 80, 579)
+
 dat_adults <- dat_adults %>%
-  dplyr::filter(!id %in% del_id_ad)
+  dplyr::filter(!(project == 3 & id %in% del_id_ad))
 
 # Project 6
 keep_row_id <- dat_children_parents %>%
@@ -827,9 +831,9 @@ keep_row_id <- dat_children_parents %>%
   pull(.row)
 
 dat_children_parents <- dat_children_parents %>%
-  mutate(.row = row_number()) %>%
-  filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
-  select(-.row)
+  dplyr::mutate(.row = dplyr::row_number()) %>%
+  dplyr::filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
+  dplyr::select(-.row)
 
 # Project 7
 # participants filled out questionnaires twice
@@ -842,7 +846,7 @@ dat_children_parents <- dat_children_parents %>%
   group_by(vpid, form) %>%
   filter(!(vpid == 80505 & form == "P" & startdate_date == max(startdate_date, na.rm = TRUE))) %>%
   ungroup() %>%
-  select(-startdate_date)
+  dplyr::select(-startdate_date)
 
 # Project 8
 # Manual resolution of known duplicate form conflicts --------------------------
@@ -855,18 +859,18 @@ dat_children_parents <- dat_children_parents %>%
 # Manual resolution of known duplicate form conflicts --------------------------
 
 dat_children_parents <- dat_children_parents %>%
-  mutate(
-    .row = row_number(),
+  dplyr::mutate(
+    .row = dplyr::row_number(),
     .lastpage_num = suppressWarnings(as.numeric(as.character(lastpage)))
   ) %>%
-  group_by(vpid, form) %>%
-  filter(
-    !(vpid == 80521 & form %in% c("C", "P") & row_number() > 1),
-    !(vpid == 80529 & form == "C" & row_number() > 1),
-    !(vpid == 80523 & form == "C" & .row != .row[which.max(replace_na(.lastpage_num, -Inf))])
+  dplyr::group_by(vpid, form) %>%
+  dplyr::filter(
+    !(vpid == 80521 & form %in% c("C", "P") & dplyr::row_number() > 1),
+    !(vpid == 80529 & form == "C" & dplyr::row_number() > 1),
+    !(vpid == 80523 & form == "C" & .row != .row[which.max(tidyr::replace_na(.lastpage_num, -Inf))])
   ) %>%
-  ungroup() %>%
-  select(-.row, -.lastpage_num)
+  dplyr::ungroup() %>%
+  dplyr::select(-.row, -.lastpage_num)
 
 # Leo says they are not complete and cannot be salvaged:
 dat_adults <- dat_adults[!(dat_adults$vpid == 80018 & dat_adults$project == 8), ]
@@ -1253,11 +1257,20 @@ psytool_info_children <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 # Delete not needed, incomplete or faulty datasets -----------------------------
-# Project 3 — Hendrik said they can be deleted
+# Project 3 — additional Exp-1 cogtest rows Hendrik said can be deleted
+#   VP_id 30100; row 2;  2025-09-24 09:32:00
+#   VP_id 30102; row 60; 2025-10-13 07:21:00
+drop_p3_exp1_cog_start <- as.POSIXct(
+  c("2025-09-24 09:32:00", "2025-10-13 07:21:00"),
+  tz = "Europe/Berlin"
+)
+
 psytool_info_adults <- psytool_info_adults %>%
-  group_by(.data[[vp_col]]) %>%
-  filter(!(.data[[vp_col]] == 30009 & .data[[start_col]] != max(.data[[start_col]]))) %>%
-  ungroup()
+  dplyr::filter(!(
+    .data[[project_col]] == 3L &
+      .data[[vp_col]] %in% c(30100L, 30102L) &
+      .data[[start_col]] %in% drop_p3_exp1_cog_start
+  ))
 
 psytool_info_adults <- psytool_info_adults[!(psytool_info_adults$id == 80009 & psytool_info_adults$p == 8), ]
 
@@ -1547,7 +1560,7 @@ collect_ids_to_excel(
     rename_with(~ "min",   dplyr::matches("(?i)^min$")) %>%
     rename_with(~ "max",   dplyr::matches("(?i)^max$")) %>%
     mutate(scale = as.character(scale)) %>%
-    select(scale, min, max)
+    dplyr::select(scale, min, max)
 }
 
 # Link mapping items to actual data columns (handles brackets/dots via canonical keys)
@@ -1564,7 +1577,7 @@ collect_ids_to_excel(
   # join item_key (mapping) -> data_key (actual columns)
   link <- ii %>%
     left_join(dat_cols, by = c("item_key" = "data_key")) %>%
-    select(item, scale, item_key, data_col)
+    dplyr::select(item, scale, item_key, data_col)
   
   # for QC we only care about true scales, not admin fields
   present <- link %>% filter(!is.na(data_col), !is.na(scale))

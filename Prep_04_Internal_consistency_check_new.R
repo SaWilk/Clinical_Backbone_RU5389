@@ -1,4 +1,4 @@
-# --- analyze_backbone_scales.R -----------------------------------------------
+# --- prep04_internal_consistency_check.R -----------------------------------------------
 # INTERNAL CONSISTENCY + LOADINGS:
 # - Computes McDonald's omega (ωt) for all scales + subscales
 # - Runs for adults, adolescents, and optionally a combined dataset

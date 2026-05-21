@@ -287,6 +287,11 @@ separate_by_project <- function(
   is_empty_df <- function(x) is.null(x) || nrow(x) == 0 || all(vapply(x, function(col) all(is.na(col)), logical(1)))
   ensure_dir <- function(path) if (!dir.exists(path) && !dry_run) dir.create(path, recursive = TRUE, showWarnings = FALSE)
   
+  # Rushing/histogram logic is handled upstream by prepare_project_slices(),
+  # analyze_rushing(), and write_project_slices().
+  # Keep this disabled here so direct calls, e.g. pilot exports, do not fail.
+  can_flag <- FALSE
+  
   # ===== Stage A: split, collect (no writing yet) =================================
   parts <- split(df, df[[proj_col]], drop = TRUE)
   split_list <- list()
@@ -321,15 +326,7 @@ separate_by_project <- function(
   for (i in seq_along(split_list)) {
     info <- split_list[[i]]
     d <- info$df
-    
-    # add rushing flag if possible
-    if (isTRUE(can_flag) && all(c("vpid","interviewtime") %in% names(d))) {
-      d$interviewtime <- suppressWarnings(as.numeric(d$interviewtime))
-      d$rushing_2sd_log <- with(d, !is.na(interviewtime) & interviewtime > 0 & log(interviewtime) < (log_mean - 2 * log_sd))
-    } else {
-      if (verbose) message("Skipping rushing flag for ", info$varname, " (missing vpid/interviewtime or cutoff unavailable).")
-    }
-    
+
     # reassign augmented df into .GlobalEnv
     assign(info$varname, d, envir = .GlobalEnv)
     
@@ -366,46 +363,6 @@ separate_by_project <- function(
       writexl::write_xlsx(comp_df, file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
     }
     if (verbose) message("Saved composite sample dataset: ", file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
-  }
-  
-  # ===== Stage E: export histograms to 'out/' next to script ======================
-  # One on original seconds scale (with exp(mean_log) & exp(mean_log-2*SD));
-  # One on log scale (with mean_log & cutoff_log).
-  out_dir <- file.path(base_dir, "out")
-  ensure_dir(out_dir)
-  if (isTRUE(can_flag)) {
-    # gather valid seconds for plotting
-    plot_vec <- all_valid$interviewtime[idx]
-    
-    # seconds-scale histogram
-    png(file.path(out_dir, sprintf("%s_%s_hist_seconds.png", date_str, sample_name)), width = 1200, height = 800, res = 150)
-    hist(plot_vec, breaks = "FD",
-         main = sprintf("Interview Time (seconds) — %s", sample_name),
-         xlab = "Interview time (seconds)")
-    abline(v = exp(log_mean), lwd = 2)
-    abline(v = cutoff_seconds, lwd = 2, lty = 2)
-    legend("topright",
-           legend = c(sprintf("exp(mean_log) = %.2f s", exp(log_mean)),
-                      sprintf("Cutoff = %.2f s", cutoff_seconds)),
-           lwd = c(2,2), lty = c(1,2), bty = "n")
-    dev.off()
-    
-    # log-scale histogram
-    png(file.path(out_dir, sprintf("%s_%s_hist_log.png", date_str, sample_name)), width = 1200, height = 800, res = 150)
-    hist(log(plot_vec), breaks = "FD",
-         main = sprintf("log(Interview Time) — %s", sample_name),
-         xlab = "log(interview time)")
-    abline(v = log_mean, lwd = 2)
-    abline(v = (log_mean - 2 * log_sd), lwd = 2, lty = 2)
-    legend("topright",
-           legend = c(sprintf("Mean(log) = %.3f", log_mean),
-                      sprintf("Cutoff(log) = %.3f", log_mean - 2*log_sd)),
-           lwd = c(2,2), lty = c(1,2), bty = "n")
-    dev.off()
-    
-    if (verbose) message("Saved histograms to: ", out_dir)
-  } else if (verbose) {
-    message("Histograms not created (cutoff unavailable).")
   }
   
   # ===== finalize return value ====================================================
