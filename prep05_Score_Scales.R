@@ -29,7 +29,14 @@ CFG <- list(
   export_combined_filtered_scores = TRUE,
   loading_threshold = 0.30,
   combined_label = "adults_adolescents",
-  min_prop_items_default = 0.30
+  min_prop_items_default = 0.30,
+  add_z_scores_to_scored_masters = FALSE,
+  # For reduced/loading-filtered score variants, use means so scores remain
+  # interpretable when the number of retained items differs from the original scale.
+  force_filtered_scores_to_mean = TRUE,
+  # SUQ total is normally a sum of substance-specific Q2*Q3 scores.
+  # In filtered/reduced variants, use the mean of retained substance scores instead.
+  suq_filtered_total_agg = "mean"
 )
 NON_SCORABLE_SCALES <- c(
   "FHSfamilytree", "health", "demographics", "times",
@@ -273,7 +280,8 @@ drop_flagged_items_from_keys <- function(keys, flagged_tbl) {
   keys
 }
 
-get_scale_scoring_mode <- function(scoring_df, scale, default = "mean") {
+get_scale_scoring_mode <- function(scoring_df, scale, default = "mean", force_mean = FALSE) {
+  if (isTRUE(force_mean)) return("mean")
   if (toupper(trimws(scale)) == "SUQ") return("sum")
   if (is.null(scoring_df) || !"scale" %in% names(scoring_df)) return(default)
   
@@ -421,7 +429,8 @@ score_suq_subscale_wide <- function(d, items, col_map) {
   q2 * q3
 }
 
-score_suq_total_wide <- function(d, keys, col_map) {
+score_suq_total_wide <- function(d, keys, col_map, agg = c("sum", "mean")) {
+  agg <- match.arg(agg)
   if (is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) {
     return(rep(NA_real_, nrow(d)))
   }
@@ -452,7 +461,7 @@ score_suq_total_wide <- function(d, keys, col_map) {
   })
   
   n_nonmiss <- rowSums(!is.na(as.matrix(S)))
-  out <- rowSums(S, na.rm = TRUE)
+  out <- if (agg == "sum") rowSums(S, na.rm = TRUE) else rowMeans(S, na.rm = TRUE)
   out[n_nonmiss == 0] <- NA_real_
   out
 }
@@ -460,7 +469,9 @@ score_suq_total_wide <- function(d, keys, col_map) {
 add_scale_scores <- function(df, keys, scoring_df,
                              prefix = "score_",
                              default_min_prop = CFG$min_prop_items_default,
-                             exclude_scales = character(0)) {
+                             exclude_scales = character(0),
+                             force_mean_scores = FALSE,
+                             suq_total_agg = "sum") {
   if (is.null(keys) || is.null(keys$items_by_scale) || !nrow(keys$items_by_scale)) return(df)
   
   col_map <- make_col_map(df)
@@ -487,12 +498,12 @@ add_scale_scores <- function(df, keys, scoring_df,
         next
       }
       
-      df[[new_col]] <- score_suq_total_wide(df, keys, col_map)
-      log_msg("Scored scale '", sc, "' -> ", new_col, " (mode=sum of SUQ Q2*Q3 subscale scores)")
+      df[[new_col]] <- score_suq_total_wide(df, keys, col_map, agg = suq_total_agg)
+      log_msg("Scored scale '", sc, "' -> ", new_col, " (mode=", suq_total_agg, " of SUQ Q2*Q3 subscale scores)")
       next
     }
     
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
+    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean", force_mean = force_mean_scores)
     mp_i <- default_min_prop
 
     df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i)
@@ -506,7 +517,8 @@ add_scale_scores <- function(df, keys, scoring_df,
 add_subscale_scores <- function(df, keys, scoring_df,
                                 prefix = "score_",
                                 default_min_prop = CFG$min_prop_items_default,
-                                exclude_scales = character(0)) {
+                                exclude_scales = character(0),
+                                force_mean_scores = FALSE) {
   if (is.null(keys) || is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) return(df)
   
   col_map <- make_col_map(df)
@@ -542,7 +554,7 @@ add_subscale_scores <- function(df, keys, scoring_df,
       next
     }
     
-    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean")
+    mode_i <- get_scale_scoring_mode(scoring_df, sc, default = "mean", force_mean = force_mean_scores)
     mp_i <- default_min_prop
 
     df[[new_col]] <- score_items_wide(df, items, col_map, agg = mode_i)
@@ -619,10 +631,14 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
     exclude_scales = NON_SCORABLE_SCALES
   )
   assert_no_missing_scores(df_scored, sample)
-  df_scored <- add_z_score_columns(
-    df_scored,
-    dataset_label = paste0(sample, " unfiltered")
-  )
+  
+  if (isTRUE(CFG$add_z_scores_to_scored_masters)) {
+    df_scored <- add_z_score_columns(
+      df_scored,
+      dataset_label = paste0(sample, " unfiltered")
+    )
+  }
+  
   write_master_variant(df_scored, sample)
 
   # round 2: filtered scores
@@ -641,20 +657,27 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
       df_scored_f <- add_scale_scores(
         df_scored_f, keys_filt, scoring_df,
         prefix = "score_",
-        exclude_scales = NON_SCORABLE_SCALES
+        exclude_scales = NON_SCORABLE_SCALES,
+        force_mean_scores = CFG$force_filtered_scores_to_mean,
+        suq_total_agg = CFG$suq_filtered_total_agg
       )
       df_scored_f <- add_subscale_scores(
         df_scored_f, keys_filt, scoring_df,
         prefix = "score_",
-        exclude_scales = NON_SCORABLE_SCALES
+        exclude_scales = NON_SCORABLE_SCALES,
+        force_mean_scores = CFG$force_filtered_scores_to_mean
       )
       
       suffix_tag <- make_threshold_tag(CFG$loading_threshold)
       assert_no_missing_scores(df_scored_f, sample, suffix = suffix_tag)
-      df_scored_f <- add_z_score_columns(
-        df_scored_f,
-        dataset_label = paste0(sample, " ", suffix_tag)
-      )
+      
+      if (isTRUE(CFG$add_z_scores_to_scored_masters)) {
+        df_scored_f <- add_z_score_columns(
+          df_scored_f,
+          dataset_label = paste0(sample, " ", suffix_tag)
+        )
+      }
+      
       write_master_variant(df_scored_f, sample, suffix = suffix_tag)
     } else {
       log_msg("No flagged-item helper found. Skipping filtered scored master.")
@@ -683,21 +706,28 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
       df_scored_combined_f <- add_scale_scores(
         df_scored_combined_f, keys_combined_filt, scoring_df,
         prefix = "score_",
-        exclude_scales = NON_SCORABLE_SCALES
+        exclude_scales = NON_SCORABLE_SCALES,
+        force_mean_scores = CFG$force_filtered_scores_to_mean,
+        suq_total_agg = CFG$suq_filtered_total_agg
       )
       df_scored_combined_f <- add_subscale_scores(
         df_scored_combined_f, keys_combined_filt, scoring_df,
         prefix = "score_",
-        exclude_scales = NON_SCORABLE_SCALES
+        exclude_scales = NON_SCORABLE_SCALES,
+        force_mean_scores = CFG$force_filtered_scores_to_mean
       )
       
       suffix_tag_combined <- paste0(make_threshold_tag(CFG$loading_threshold), "_combined")
       
       assert_no_missing_scores(df_scored_combined_f, sample, suffix = suffix_tag_combined)
-      df_scored_combined_f <- add_z_score_columns(
-        df_scored_combined_f,
-        dataset_label = paste0(sample, " ", suffix_tag_combined)
-      )
+      
+      if (isTRUE(CFG$add_z_scores_to_scored_masters)) {
+        df_scored_combined_f <- add_z_score_columns(
+          df_scored_combined_f,
+          dataset_label = paste0(sample, " ", suffix_tag_combined)
+        )
+      }
+      
       write_master_variant(df_scored_combined_f, sample, suffix = suffix_tag_combined)
     } else {
       log_msg("No flagged-item helper found. Skipping combined-filtered scored master.")

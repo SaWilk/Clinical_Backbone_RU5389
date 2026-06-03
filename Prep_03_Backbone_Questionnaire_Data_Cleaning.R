@@ -1000,7 +1000,7 @@ label_demographics_health <- function(df) {
 log_sanity <- function(sample, df_rows, var, rule_desc) {
   if (nrow(df_rows) == 0) return(invisible(NULL))
   apply(df_rows, 1, function(r) {
-    msg <- glue::glue("🔺 vpid {r[['vpid']]} (p={r[['p']]}, sample={sample}) has {var}={r[['value']]} — {rule_desc}.")
+    msg <- glue::glue("🔺 vpid {r[['vp_id']]} (p={r[['p']]}, sample={sample}) has {var}={r[['value']]} — {rule_desc}.")
     log_msg(msg)
     cat(paste0(msg, "\n"), file = SANITY_LOG_FILE, append = TRUE)
   })
@@ -1039,7 +1039,7 @@ enrich_demographics_and_health_fields <- function(df, sample) {
     )
   
   get_id_vec <- function(z) {
-    if ("vpid" %in% names(z)) z$vpid
+    if ("vp_id" %in% names(z)) z$vp_id
     else if ("vp" %in% names(z)) z$vp
     else if ("participantid" %in% names(z)) z$participantid
     else rep(NA_character_, nrow(z))
@@ -1050,7 +1050,7 @@ enrich_demographics_and_health_fields <- function(df, sample) {
   rep_rows <- function(idx, var, values, rule) {
     if (any(idx, na.rm = TRUE)) {
       tibble::tibble(
-        vpid = id_vec[idx],
+        vp_id = id_vec[idx],
         p    = if (!is.null(proj_col)) d[[proj_col]][idx] else NA_character_,
         value = values[idx]
       ) %>% log_sanity(sample, ., var, rule)
@@ -1093,7 +1093,7 @@ enrich_demographics_and_health_fields <- function(df, sample) {
     idx_manual <- as.character(id_vec) %in% c("30102")
     if (any(idx_manual, na.rm = TRUE)) {
       tibble::tibble(
-        vpid = id_vec[idx_manual],
+        vp_id = id_vec[idx_manual],
         p    = if (!is.null(proj_col)) d[[proj_col]][idx_manual] else NA_character_,
         value = d$age_years[idx_manual]
       ) %>% log_sanity(sample, ., "age", "manually set to NA due to implausible DOB (would be ~5 years in adults)")

@@ -253,65 +253,67 @@ write_project3_exp_split_exports <- function(exp1_df,
 }
 # ---- FORCE STABLE MASTER SCHEMA ---------------------------------------------
 
-pick_best_id_col <- function(df) {
-  # prefer vp_id if present, else pick the one with most non-missing values
-  cands <- intersect(c("vp_id","vpid","vp","participant_id","participantid","id"), names(df))
-  if (!length(cands)) return(NA_character_)
-  nn <- vapply(cands, function(cc) sum(!is.na(df[[cc]]) & trimws(as.character(df[[cc]])) != ""), numeric(1))
-  cands[which.max(nn)]
+# ---- Deterministic ID schema helpers -----------------------------------------
+
+normalize_questionnaire_ids <- function(df, sample) {
+  sample <- match.arg(
+    sample,
+    c("adults", "adolescents", "children_parents", "children_p6", "parents_p6")
+  )
+  
+  # Participant ID column is fixed by data source.
+  participant_id_col <- switch(
+    sample,
+    adults           = "vpid",
+    adolescents      = "vpid",
+    children_parents = "vpid",
+    children_p6      = "VPCode",
+    parents_p6       = "VPCode"
+  )
+  
+  if (!participant_id_col %in% names(df)) {
+    stop(sprintf(
+      "normalize_questionnaire_ids(): sample '%s' is missing participant ID column '%s'.",
+      sample, participant_id_col
+    ))
+  }
+  
+  # LimeSurvey's internal response id is not the participant ID.
+  # Rename in place, preserving column order.
+  if ("id" %in% names(df) && !"limesurvey_id" %in% names(df)) {
+    names(df)[names(df) == "id"] <- "limesurvey_id"
+  }
+  
+  # Export convention: participant ID column is called vp_id.
+  # Rename the known participant ID column in place, preserving column order.
+  if (participant_id_col != "vp_id") {
+    names(df)[names(df) == participant_id_col] <- "vp_id"
+  }
+  
+  df$vp_id <- suppressWarnings(as.integer(as.character(df$vp_id)))
+  
+  # For P6 files only: if there is truly no project column, append project = 6.
+  # This is the only intentional new column.
+  if (!"project" %in% names(df)) {
+    if ("Projekt." %in% names(df)) {
+      names(df)[names(df) == "Projekt."] <- "project"
+    } else if (sample %in% c("children_p6", "parents_p6")) {
+      df$project <- 6L
+    }
+  }
+  
+  df
 }
 
-force_master_schema <- function(df) {
-  out <- df
-  
-  # --- ID: force to "vp_id" ---
-  id_col <- pick_best_id_col(out)
-  if (!is.na(id_col) && id_col != "vp_id") {
-    # if vp_id already exists too, coalesce into vp_id
-    if ("vp_id" %in% names(out)) {
-      out <- out %>%
-        dplyr::mutate(
-          vp_id = dplyr::coalesce(
-            as.character(.data$vp_id),
-            as.character(.data[[id_col]])
-          )
-        )
-    } else {
-      out <- out %>% dplyr::rename(vp_id = !!id_col)
-    }
-  } else if (is.na(id_col) && !"vp_id" %in% names(out)) {
-    # last-resort: create empty (keeps downstream scripts from breaking loudly later)
-    out$vp_id <- NA_character_
+normalize_cogtest_ids <- function(df) {
+  # PsyToolkit receives the participant ID from LimeSurvey in column 'id'.
+  # There is no separate internal LimeSurvey-like row id here.
+  if (!"id" %in% names(df)) {
+    stop("normalize_cogtest_ids(): missing participant ID column 'id'.")
   }
   
-  # --- Project: force to "project" ---
-  proj_col <- if ("project" %in% names(out)) "project" else if ("p" %in% names(out)) "p" else NULL
-  if (!is.null(proj_col) && proj_col != "project") {
-    if ("project" %in% names(out)) {
-      out <- out %>%
-        dplyr::mutate(project = dplyr::coalesce(as.character(.data$project), as.character(.data[[proj_col]])))
-    } else {
-      out <- out %>% dplyr::rename(project = !!proj_col)
-    }
-  }
-  
-  # --- Group: force to "group" (usually already) ---
-  if ("Group" %in% names(out) && !"group" %in% names(out)) {
-    out <- out %>% dplyr::rename(group = Group)
-  }
-  
-  # --- Optional: force age_years to exist (if only "age" exists) ---
-  # (you already compute age_years in enrich_demographics_and_health_fields())
-  # Here we just make sure the column name is consistent if someone renamed it.
-  if ("age_year" %in% names(out) && !"age_years" %in% names(out)) {
-    out <- out %>% dplyr::rename(age_years = age_year)
-  }
-  
-  # Put canonical columns first (nice + stable)
-  front <- intersect(c("vp_id","project","group","age_years","gender"), names(out))
-  out <- out %>% dplyr::select(dplyr::all_of(front), dplyr::everything())
-  
-  out
+  df$id <- suppressWarnings(as.integer(as.character(df$id)))
+  df
 }
 
 
@@ -357,6 +359,40 @@ dat_adolescents      <- safe_read_csv(file.path(name, in_path, file_adolescents)
 dat_children_parents <- safe_read_csv(file.path(name, in_path, file_children_parents))
 dat_parents_p6       <- safe_read_csv(file.path(name, in_path, file_parents_p6))
 dat_children_p6      <- safe_read_csv(file.path(name, in_path, file_children_p6))
+
+# --- Debug: track whether adolescent VPIDs get truncated -----------------------
+
+track_adolescent_vpids <- function(df, label) {
+  if (!"vpid" %in% names(df)) {
+    message(label, ": no vpid column")
+    return(invisible(df))
+  }
+  
+  x_chr <- trimws(as.character(df$vpid))
+  x_num <- suppressWarnings(as.integer(x_chr))
+  
+  bad_short <- !is.na(x_num) & x_num > 0L & x_num < 1000L
+  
+  message(
+    label,
+    " | n=", nrow(df),
+    " | min=", suppressWarnings(min(x_num, na.rm = TRUE)),
+    " | max=", suppressWarnings(max(x_num, na.rm = TRUE)),
+    " | short_ids=", sum(bad_short, na.rm = TRUE)
+  )
+  
+  if (any(bad_short, na.rm = TRUE)) {
+    print(
+      df[bad_short, intersect(c("vpid", "project", "submitdate", "startdate", "id"), names(df)), drop = FALSE] %>%
+        utils::head(20)
+    )
+    stop("Adolescent vpid got shortened before/at: ", label)
+  }
+  
+  invisible(df)
+}
+
+dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after import")
 
 # Get metadata
 quest_info <- file.info(file.path(name, in_path, file_adults))
@@ -418,6 +454,9 @@ psytool_info_adults      <- remove_test_rows(psytool_info_adults,      "Adults",
 psytool_info_adolescents <- remove_test_rows(psytool_info_adolescents, "Adolescents", dat_general)
 psytool_info_children    <- remove_test_rows(psytool_info_children,    "Children",    dat_general)
 
+
+dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after remove_test_rows")
+
 ################################################################################
 ## Data Cleaning for Questionnaire Data ----------------------------------------
 ################################################################################
@@ -450,6 +489,245 @@ coerce_by_schema <- function(df, schema) {
     )
   }
   df
+}
+
+# =============================================================================
+# ID change audit helpers
+# =============================================================================
+
+id_change_audit <- list()
+
+.audit_col <- function(df, idx, candidates) {
+  hit <- intersect(candidates, names(df))
+  if (!length(hit)) return(rep(NA_character_, length(idx)))
+  as.character(df[[hit[1]]][idx])
+}
+
+.audit_project <- function(df, idx, project_col = NULL) {
+  if (!is.null(project_col) && project_col %in% names(df)) {
+    return(as.character(df[[project_col]][idx]))
+  }
+  if ("project" %in% names(df)) return(as.character(df$project[idx]))
+  if ("p" %in% names(df)) return(as.character(df$p[idx]))
+  rep(NA_character_, length(idx))
+}
+
+.audit_add <- function(rows) {
+  if (!is.null(rows) && nrow(rows) > 0) {
+    id_change_audit[[length(id_change_audit) + 1L]] <<- rows
+  }
+}
+
+audit_id_change <- function(df,
+                            idx,
+                            id_col,
+                            new_id,
+                            project_col = NULL,
+                            sample,
+                            data_type,
+                            criterion,
+                            action = "id_changed") {
+  idx <- which(idx)
+  if (!length(idx)) return(df)
+  
+  if (!id_col %in% names(df)) {
+    stop("audit_id_change(): missing id_col: ", id_col)
+  }
+  
+  old_id <- suppressWarnings(as.integer(as.character(df[[id_col]][idx])))
+  
+  if (length(new_id) == 1L) {
+    new_id_vec <- rep(new_id, length(idx))
+  } else {
+    new_id_vec <- new_id
+  }
+  
+  new_id_vec <- suppressWarnings(as.integer(as.character(new_id_vec)))
+  
+  changed <- !(is.na(old_id) & is.na(new_id_vec)) & old_id != new_id_vec
+  if (!any(changed)) return(df)
+  
+  idx_changed <- idx[changed]
+  
+  rows <- data.frame(
+    action        = action,
+    project       = .audit_project(df, idx_changed, project_col),
+    sample        = sample,
+    data_type     = data_type,
+    id_col        = id_col,
+    old_id        = old_id[changed],
+    new_id        = new_id_vec[changed],
+    criterion     = criterion,
+    limesurvey_id = .audit_col(df, idx_changed, c("limesurvey_id", "id")),
+    startdate     = .audit_col(df, idx_changed, c("startdate")),
+    submitdate    = .audit_col(df, idx_changed, c("submitdate")),
+    datestamp     = .audit_col(df, idx_changed, c("datestamp")),
+    TIME_start    = .audit_col(df, idx_changed, c("TIME_start")),
+    TIME_end      = .audit_col(df, idx_changed, c("TIME_end")),
+    gender        = .audit_col(df, idx_changed, c("gender", "sex", "Geschlecht")),
+    age_years     = .audit_col(df, idx_changed, c("age_years", "age", "Alter")),
+    stringsAsFactors = FALSE
+  )
+  
+  .audit_add(rows)
+  df[[id_col]][idx_changed] <- new_id_vec[changed]
+  df
+}
+
+audit_row_action <- function(df,
+                             idx,
+                             id_col,
+                             project_col = NULL,
+                             sample,
+                             data_type,
+                             criterion,
+                             action = "deleted",
+                             new_id = NA_integer_) {
+  idx <- which(idx)
+  if (!length(idx)) return(df)
+  
+  rows <- data.frame(
+    action        = action,
+    project       = .audit_project(df, idx, project_col),
+    sample        = sample,
+    data_type     = data_type,
+    id_col        = id_col,
+    old_id        = suppressWarnings(as.integer(as.character(df[[id_col]][idx]))),
+    new_id        = suppressWarnings(as.integer(new_id)),
+    criterion     = criterion,
+    limesurvey_id = .audit_col(df, idx, c("limesurvey_id", "id")),
+    startdate     = .audit_col(df, idx, c("startdate")),
+    submitdate    = .audit_col(df, idx, c("submitdate")),
+    datestamp     = .audit_col(df, idx, c("datestamp")),
+    TIME_start    = .audit_col(df, idx, c("TIME_start")),
+    TIME_end      = .audit_col(df, idx, c("TIME_end")),
+    gender        = .audit_col(df, idx, c("gender", "sex", "Geschlecht")),
+    age_years     = .audit_col(df, idx, c("age_years", "age", "Alter")),
+    stringsAsFactors = FALSE
+  )
+  
+  .audit_add(rows)
+  
+  if (identical(action, "deleted")) {
+    return(df[-idx, , drop = FALSE])
+  }
+  
+  df
+}
+
+audit_snapshot <- function(df) {
+  if (!".__audit_row_id" %in% names(df)) {
+    df$.__audit_row_id <- seq_len(nrow(df))
+  }
+  df
+}
+
+audit_id_diff_by_row <- function(before,
+                                 after,
+                                 id_col,
+                                 project_col = NULL,
+                                 sample,
+                                 data_type,
+                                 criterion,
+                                 action = "id_changed") {
+  if (!".__audit_row_id" %in% names(before) || !".__audit_row_id" %in% names(after)) {
+    stop("audit_id_diff_by_row(): missing .__audit_row_id. Use audit_snapshot() before the change.")
+  }
+  
+  if (!id_col %in% names(before) || !id_col %in% names(after)) {
+    stop("audit_id_diff_by_row(): missing id_col: ", id_col)
+  }
+  
+  pos_before <- match(after$.__audit_row_id, before$.__audit_row_id)
+  valid <- !is.na(pos_before)
+  if (!any(valid)) return(after)
+  
+  after_idx <- which(valid)
+  before_idx <- pos_before[valid]
+  
+  old_id <- suppressWarnings(as.integer(as.character(before[[id_col]][before_idx])))
+  new_id <- suppressWarnings(as.integer(as.character(after[[id_col]][after_idx])))
+  
+  changed <- !(is.na(old_id) & is.na(new_id)) & old_id != new_id
+  if (!any(changed)) return(after)
+  
+  after_changed_idx <- after_idx[changed]
+  before_changed_idx <- before_idx[changed]
+  
+  rows <- data.frame(
+    action        = action,
+    project       = .audit_project(after, after_changed_idx, project_col),
+    sample        = sample,
+    data_type     = data_type,
+    id_col        = id_col,
+    old_id        = old_id[changed],
+    new_id        = new_id[changed],
+    criterion     = criterion,
+    limesurvey_id = .audit_col(before, before_changed_idx, c("limesurvey_id", "id")),
+    startdate     = .audit_col(before, before_changed_idx, c("startdate")),
+    submitdate    = .audit_col(before, before_changed_idx, c("submitdate")),
+    datestamp     = .audit_col(before, before_changed_idx, c("datestamp")),
+    TIME_start    = .audit_col(before, before_changed_idx, c("TIME_start")),
+    TIME_end      = .audit_col(before, before_changed_idx, c("TIME_end")),
+    gender        = .audit_col(before, before_changed_idx, c("gender", "sex", "Geschlecht")),
+    age_years     = .audit_col(before, before_changed_idx, c("age_years", "age", "Alter")),
+    stringsAsFactors = FALSE
+  )
+  
+  .audit_add(rows)
+  after
+}
+
+drop_audit_row_id <- function(df) {
+  if (".__audit_row_id" %in% names(df)) {
+    df$.__audit_row_id <- NULL
+  }
+  df
+}
+
+write_id_change_audit <- function(private_info_path, today) {
+  audit_dir <- file.path(private_info_path, "id_change_audit")
+  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  audit_file <- file.path(
+    audit_dir,
+    sprintf("%s_id_change_audit.xlsx", today)
+  )
+  
+  if (!length(id_change_audit)) {
+    empty <- data.frame(
+      action = character(),
+      project = character(),
+      sample = character(),
+      data_type = character(),
+      id_col = character(),
+      old_id = integer(),
+      new_id = integer(),
+      criterion = character(),
+      limesurvey_id = character(),
+      startdate = character(),
+      submitdate = character(),
+      datestamp = character(),
+      TIME_start = character(),
+      TIME_end = character(),
+      gender = character(),
+      age_years = character()
+    )
+    writexl::write_xlsx(list(id_changes = empty), audit_file)
+    message("No ID changes logged. Wrote empty audit file: ", audit_file)
+    return(invisible(empty))
+  }
+  
+  audit <- dplyr::bind_rows(id_change_audit) %>%
+    dplyr::mutate(
+      project_num = suppressWarnings(as.integer(project))
+    ) %>%
+    dplyr::arrange(project_num, data_type, sample, old_id, new_id, action) %>%
+    dplyr::select(-project_num)
+  
+  writexl::write_xlsx(list(id_changes = audit), audit_file)
+  message("Wrote ID change audit: ", audit_file)
+  invisible(audit)
 }
 
 
@@ -542,6 +820,8 @@ dat_children_parents <- coerce_by_schema(dat_children_parents, schema)
 dat_parents_p6       <- coerce_by_schema(dat_parents_p6,       schema)
 dat_children_p6      <- coerce_by_schema(dat_children_p6,      schema)
 dat_general          <- coerce_by_schema(dat_general,          schema)
+
+dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after coerce_by_schema")
 
 # --- ALSO coerce PsyToolkit tables to the same schema --- #
 psytool_info_adults      <- coerce_by_schema(psytool_info_adults,      schema)
@@ -685,48 +965,63 @@ all_empty_ch$.__reason__.   <- "empty"
 empty_adlsc_7$.__reason__.  <- "empty"
 
 # Fix ID naming issues ---------------------------------------------------------
-# Project 2
+# All manual ID changes in this block are audited in id_change_audit.
+
+# Project 2 --------------------------------------------------------------------
 PROJECT <- 2
-# wrong entry
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 20035)] <- 20036
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4    & dat_adults[[project_col]] == PROJECT)] <- 20004
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 6    & dat_adults[[project_col]] == PROJECT)] <- 20006
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 15   & dat_adults[[project_col]] == PROJECT)] <- 20015
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2023 & dat_adults[[project_col]] == PROJECT)] <- 20023
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 26   & dat_adults[[project_col]] == PROJECT)] <- 20026
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 35   & dat_adults[[project_col]] == PROJECT)] <- 20035
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2041 & dat_adults[[project_col]] == PROJECT)] <- 20041
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2044 & dat_adults[[project_col]] == PROJECT)] <- 20044
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2046 & dat_adults[[project_col]] == PROJECT)] <- 20046
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2048 & dat_adults[[project_col]] == PROJECT)] <- 20048
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2051 & dat_adults[[project_col]] == PROJECT)] <- 20051
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 2052 & dat_adults[[project_col]] == PROJECT)] <- 20052
 
-# Project 3
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 20035,
+  id_col = vp_col,
+  new_id = 20036,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 2 questionnaire: known wrong VPID entry 20035 corrected to 20036."
+)
+
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4    & dat_adults[[project_col]] == PROJECT, vp_col, 20004, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing project prefix; VPID 4 corrected to 20004.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 6    & dat_adults[[project_col]] == PROJECT, vp_col, 20006, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing project prefix; VPID 6 corrected to 20006.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 15   & dat_adults[[project_col]] == PROJECT, vp_col, 20015, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing project prefix; VPID 15 corrected to 20015.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2023 & dat_adults[[project_col]] == PROJECT, vp_col, 20023, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2023 corrected to 20023.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 26   & dat_adults[[project_col]] == PROJECT, vp_col, 20026, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing project prefix; VPID 26 corrected to 20026.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 35   & dat_adults[[project_col]] == PROJECT, vp_col, 20035, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing project prefix; VPID 35 corrected to 20035.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2041 & dat_adults[[project_col]] == PROJECT, vp_col, 20041, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2041 corrected to 20041.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2044 & dat_adults[[project_col]] == PROJECT, vp_col, 20044, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2044 corrected to 20044.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2046 & dat_adults[[project_col]] == PROJECT, vp_col, 20046, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2046 corrected to 20046.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2048 & dat_adults[[project_col]] == PROJECT, vp_col, 20048, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2048 corrected to 20048.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2051 & dat_adults[[project_col]] == PROJECT, vp_col, 20051, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2051 corrected to 20051.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2052 & dat_adults[[project_col]] == PROJECT, vp_col, 20052, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2052 corrected to 20052.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2083 & dat_adults[[project_col]] == PROJECT, vp_col, 20083, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2083 corrected to 20083.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2084 & dat_adults[[project_col]] == PROJECT, vp_col, 20084, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2084 corrected to 20084.")
+
+
+# Project 3 --------------------------------------------------------------------
 PROJECT <- 3
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 1 & dat_adults[[project_col]] == PROJECT)] <- 30001
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 3 & dat_adults[[project_col]] == PROJECT)] <- 30003
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 8 & dat_adults[[project_col]] == PROJECT)] <- 30008
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9 & dat_adults[[project_col]] == PROJECT)] <- 30009
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 104 & dat_adults[[project_col]] == PROJECT)] <- 30104
 
-# assuming the wrong initial number was given...
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10002 & dat_adults[[project_col]] == PROJECT)] <- 30002
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10005 & dat_adults[[project_col]] == PROJECT)] <- 30005
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10006 & dat_adults[[project_col]] == PROJECT)] <- 30006
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 10007 & dat_adults[[project_col]] == PROJECT)] <- 30007
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 40019 & dat_adults[[project_col]] == PROJECT)] <- 30019
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 1   & dat_adults[[project_col]] == PROJECT, vp_col, 30001, project_col, "adults", "questionnaire", "Project 3 questionnaire: missing project prefix; VPID 1 corrected to 30001.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 3   & dat_adults[[project_col]] == PROJECT, vp_col, 30003, project_col, "adults", "questionnaire", "Project 3 questionnaire: missing project prefix; VPID 3 corrected to 30003.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 8   & dat_adults[[project_col]] == PROJECT, vp_col, 30008, project_col, "adults", "questionnaire", "Project 3 questionnaire: missing project prefix; VPID 8 corrected to 30008.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 9   & dat_adults[[project_col]] == PROJECT, vp_col, 30009, project_col, "adults", "questionnaire", "Project 3 questionnaire: missing project prefix; VPID 9 corrected to 30009.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 104 & dat_adults[[project_col]] == PROJECT, vp_col, 30104, project_col, "adults", "questionnaire", "Project 3 questionnaire: missing project prefix; VPID 104 corrected to 30104.")
 
-# falsely named datasets
-dat_adults[[vp_col]][which(dat_adults[[id_col]] == 227 & dat_adults[[project_col]] == PROJECT)] <- 30047
-dat_adults[[vp_col]][which(dat_adults[[id_col]] == 316 & dat_adults[[project_col]] == PROJECT)] <- 30057
-dat_adults[[vp_col]][which(dat_adults[[id_col]] == 579 & dat_adults[[project_col]] == PROJECT)] <- 30100
-dat_adults[[vp_col]][which(dat_adults[[id_col]] == 606 & dat_adults[[project_col]] == PROJECT)] <- 30101
-dat_adults[[vp_col]][which(dat_adults[[id_col]] == 708 & dat_adults[[project_col]] == PROJECT)] <- 30112
-# info on who to rename to what comes from Hendrik
-# relabel experiment-2 questionnaire IDs from 30xxx -> 32xxx ------
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10002 & dat_adults[[project_col]] == PROJECT, vp_col, 30002, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10002 corrected to 30002.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10005 & dat_adults[[project_col]] == PROJECT, vp_col, 30005, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10005 corrected to 30005.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10006 & dat_adults[[project_col]] == PROJECT, vp_col, 30006, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10006 corrected to 30006.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10007 & dat_adults[[project_col]] == PROJECT, vp_col, 30007, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10007 corrected to 30007.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 40019 & dat_adults[[project_col]] == PROJECT, vp_col, 30019, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 40019 corrected to 30019.")
+
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 227 & dat_adults[[project_col]] == PROJECT, vp_col, 30047, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 227 known to belong to VPID 30047.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 316 & dat_adults[[project_col]] == PROJECT, vp_col, 30057, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 316 known to belong to VPID 30057.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 579 & dat_adults[[project_col]] == PROJECT, vp_col, 30100, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 579 known to belong to VPID 30100.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 606 & dat_adults[[project_col]] == PROJECT, vp_col, 30101, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 606 known to belong to VPID 30101.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 708 & dat_adults[[project_col]] == PROJECT, vp_col, 30112, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 708 known to belong to VPID 30112.")
+
+# Project 3 exp-2 relabeling: 30xxx -> 32xxx after boundary participant 30128.
+dat_adults <- audit_snapshot(dat_adults)
+before_p3_questionnaire_split <- dat_adults
+
 p3_questionnaire_split <- p3_split_after_30128(
   df = dat_adults,
   id_col = "vpid",
@@ -734,38 +1029,117 @@ p3_questionnaire_split <- p3_split_after_30128(
   start_col = "startdate",
   boundary_id = 30128L
 )
-dat_adults <- p3_questionnaire_split$data
 
-# keep vp_id in sync if present already
+dat_adults <- audit_id_diff_by_row(
+  before = before_p3_questionnaire_split,
+  after = p3_questionnaire_split$data,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 3 questionnaire exp-2 split: rows with startdate later than boundary participant 30128 relabeled from 30xxx to 32xxx using 32000 + old_id %% 1000."
+)
+
+dat_adults <- drop_audit_row_id(dat_adults)
+
 if ("vp_id" %in% names(dat_adults)) {
   dat_adults$vp_id <- dat_adults$vpid
 }
 
-# Project 4
+
+# Project 4 --------------------------------------------------------------------
 PROJECT <- 4
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4001 & dat_adults[[project_col]] == PROJECT)] <- 40001
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4002 & dat_adults[[project_col]] == PROJECT)] <- 40002
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT)] <- 40003
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 4033 & dat_adults[[project_col]] == PROJECT)] <- 40033
 
-# falesly named datasets
-dat_adults[[vp_col]][which(dat_adults$id == 630 & dat_adults[[project_col]] == PROJECT)] <- 40016
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4001 & dat_adults[[project_col]] == PROJECT, vp_col, 40001, project_col, "adults", "questionnaire", "Project 4 questionnaire: missing zero/project-prefix format; VPID 4001 corrected to 40001.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4002 & dat_adults[[project_col]] == PROJECT, vp_col, 40002, project_col, "adults", "questionnaire", "Project 4 questionnaire: missing zero/project-prefix format; VPID 4002 corrected to 40002.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4003 & dat_adults[[project_col]] == PROJECT, vp_col, 40003, project_col, "adults", "questionnaire", "Project 4 questionnaire: missing zero/project-prefix format; VPID 4003 corrected to 40003.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4033 & dat_adults[[project_col]] == PROJECT, vp_col, 40033, project_col, "adults", "questionnaire", "Project 4 questionnaire: missing zero/project-prefix format; VPID 4033 corrected to 40033.")
+dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 630 & dat_adults[[project_col]] == PROJECT, vp_col, 40016, project_col, "adults", "questionnaire", "Project 4 questionnaire: LimeSurvey response id 630 known to belong to VPID 40016.")
 
-# Project 8
+
+# Project 8 --------------------------------------------------------------------
 PROJECT <- 8
-# assuming a 0 (or many) 0s are missing
-dat_children_parents[[vp_col]][which(dat_children_parents[[vp_col]] == 80418)] <- 80518
 
-# Project 9
-PROJECT <- 9
-# assuming a 0 (or many) 0s are missing
-dat_adults[[vp_col]][which(dat_adults[[vp_col]] == 9901)] <- 99001
+# Wrongly entered Project 8 VPID:
+# participant was entered as 50056, but should be 80056.
+# Match by vpid only.
+if (project_col %in% names(dat_adults)) {
+  dat_adults[[project_col]][dat_adults[[vp_col]] == 50056L] <- PROJECT
+}
 
-# Special Case Project 8: Remap VPIDs so children and adults have unique IDs --
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 50056L,
+  id_col = vp_col,
+  new_id = 80056L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire: wrong VPID 50056 corrected to 80056; matched by vpid."
+)
+
+dat_children_parents <- audit_id_change(
+  dat_children_parents,
+  idx = dat_children_parents[[vp_col]] == 80418,
+  id_col = vp_col,
+  new_id = 80518,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: known wrong VPID 80418 corrected to 80518."
+)
+
+dat_children_parents <- audit_snapshot(dat_children_parents)
+before_p8_child_questionnaire_mapping <- dat_children_parents
+
 dat_children_parents <- correct_child_vpids(
-  dat_children_parents, vpid_col = "vpid", project_col = "project", startdate_col = "startdate",
+  dat_children_parents,
+  vpid_col = "vpid",
+  project_col = "project",
+  startdate_col = "startdate",
   mapping_file = file.path("information", "2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx")
+)
+
+dat_children_parents <- audit_id_diff_by_row(
+  before = before_p8_child_questionnaire_mapping,
+  after = dat_children_parents,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: VPID remapped using 2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx."
+)
+
+dat_children_parents <- drop_audit_row_id(dat_children_parents)
+
+
+# Project 9 --------------------------------------------------------------------
+PROJECT <- 9
+
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 9901,
+  id_col = vp_col,
+  new_id = 99001,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 9 questionnaire: missing zero/project-prefix format; VPID 9901 corrected to 99001."
+)
+
+# Exclude participant without data-use permission ------------------------------
+# Participant 20080 did not allow use of their data.
+# Therefore, neither questionnaire nor cogtest data may be used/exported.
+
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults$vpid == 20080L,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Participant 20080 did not allow use of their data; questionnaire data deleted before pilot extraction/export.",
+  action = "deleted"
 )
 
 # Gather Pilot Participant IDs -------------------------------------------------
@@ -811,52 +1185,121 @@ dat_parents_p6 <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 # Delete not needed, incomplete or faulty datasets
-vp_col = "vpid"
-project_col = "project"
-# Project 3
-# Hendrik said they can be deleted as they are incomplete/faulty.
+
+vp_col      <- "vpid"
+project_col <- "project"
+id_col      <- "id"
+
+# Project 3 --------------------------------------------------------------------
+# Hendrik said these can be deleted as incomplete/faulty.
 # Additional Exp-1 questionnaire row:
 #   VP_id 30100; LimeSurvey id 579; row 90; 2025-09-24 10:41:00
-del_id_ad <- c(59, 80, 579)
+del_id_ad <- c(59L, 80L, 579L)
 
-dat_adults <- dat_adults %>%
-  dplyr::filter(!(project == 3 & id %in% del_id_ad))
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults[[project_col]] == 3L & dat_adults[[id_col]] %in% del_id_ad,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 3 questionnaire: LimeSurvey response id in c(59, 80, 579) was specified as incomplete/faulty and deleted.",
+  action = "deleted"
+)
 
-# Project 6
+
+# Project 6 --------------------------------------------------------------------
 keep_row_id <- dat_children_parents %>%
-  mutate(start_dt = as.POSIXct(startdate), .row = row_number()) %>%
-  filter(vpid == 62128, form == "C") %>%
-  arrange(start_dt, .row) %>%
-  slice_head(n = 1) %>%
-  pull(.row)
+  dplyr::mutate(start_dt = as.POSIXct(startdate), .row = dplyr::row_number()) %>%
+  dplyr::filter(vpid == 62128, form == "C") %>%
+  dplyr::arrange(start_dt, .row) %>%
+  dplyr::slice_head(n = 1) %>%
+  dplyr::pull(.row)
 
 dat_children_parents <- dat_children_parents %>%
-  dplyr::mutate(.row = dplyr::row_number()) %>%
-  dplyr::filter(.row == keep_row_id | !(vpid == 62128 & form == "C")) %>%
+  dplyr::mutate(.row = dplyr::row_number())
+
+dat_children_parents <- audit_row_action(
+  dat_children_parents,
+  idx = dat_children_parents$vpid == 62128 & dat_children_parents$form == "C" & dat_children_parents$.row != keep_row_id,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 6 questionnaire children/parents: duplicate C-form for VPID 62128; kept earliest row by startdate and row order, deleted the other row(s).",
+  action = "deleted"
+)
+
+dat_children_parents <- dat_children_parents %>%
   dplyr::select(-.row)
 
-# Project 7
-# participants filled out questionnaires twice
-drop_ids_p7 <- c(70076L,70072L,70062L)
-dat_adolescents <- dat_adolescents %>% group_by(vpid, project) %>% arrange(submitdate, .by_group=TRUE) %>% filter(!(project==7 & vpid %in% drop_ids_p7 & n()>1 & row_number()==n())) %>% ungroup()
 
-# Project 8
+# Project 7 --------------------------------------------------------------------
+# Participants filled out questionnaires twice.
+drop_ids_p7 <- c(70076L, 70072L, 70062L)
+
+dat_adolescents <- dat_adolescents %>%
+  dplyr::group_by(vpid, project) %>%
+  dplyr::arrange(submitdate, .by_group = TRUE) %>%
+  dplyr::mutate(.row_in_group = dplyr::row_number(), .n_in_group = dplyr::n()) %>%
+  dplyr::ungroup()
+
+dat_adolescents <- audit_row_action(
+  dat_adolescents,
+  idx = dat_adolescents$project == 7L &
+    dat_adolescents$vpid %in% drop_ids_p7 &
+    dat_adolescents$.n_in_group > 1L &
+    dat_adolescents$.row_in_group == dat_adolescents$.n_in_group,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adolescents",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adolescents: duplicate questionnaire entries for VPIDs 70076, 70072, 70062; deleted the later entry by submitdate within vpid/project.",
+  action = "deleted"
+)
+
+dat_adolescents <- dat_adolescents %>%
+  dplyr::select(-.row_in_group, -.n_in_group)
+
+dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after project 7 duplicate filter")
+
+# Project 7 adults: LimeSurvey response id 965 is the wrong duplicate entry.
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults[[project_col]] == 7L & dat_adults[[id_col]] == 965L,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adults: LimeSurvey response id 965 is the wrong duplicate entry and was deleted.",
+  action = "deleted"
+)
+
+
+# Project 8 --------------------------------------------------------------------
 dat_children_parents <- dat_children_parents %>%
-  mutate(startdate_date = as.Date(startdate)) %>%
-  group_by(vpid, form) %>%
-  filter(!(vpid == 80505 & form == "P" & startdate_date == max(startdate_date, na.rm = TRUE))) %>%
-  ungroup() %>%
+  dplyr::mutate(startdate_date = as.Date(startdate))
+
+dat_children_parents <- audit_row_action(
+  dat_children_parents,
+  idx = dat_children_parents$vpid == 80505 &
+    dat_children_parents$form == "P" &
+    dat_children_parents$startdate_date == max(dat_children_parents$startdate_date[dat_children_parents$vpid == 80505 & dat_children_parents$form == "P"], na.rm = TRUE),
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: duplicate P-form for VPID 80505; deleted the row with the latest startdate.",
+  action = "deleted"
+)
+
+dat_children_parents <- dat_children_parents %>%
   dplyr::select(-startdate_date)
 
-# Project 8
-# Manual resolution of known duplicate form conflicts --------------------------
-
+# Manual resolution of known duplicate form conflicts:
 # 80521: keep first complete duplicate for form C and P
 # 80529: keep first complete duplicate for form C
 # 80523: for incomplete duplicate C-forms, keep the one with highest lastpage
-
-
-# Manual resolution of known duplicate form conflicts --------------------------
 
 dat_children_parents <- dat_children_parents %>%
   dplyr::mutate(
@@ -864,39 +1307,112 @@ dat_children_parents <- dat_children_parents %>%
     .lastpage_num = suppressWarnings(as.numeric(as.character(lastpage)))
   ) %>%
   dplyr::group_by(vpid, form) %>%
-  dplyr::filter(
-    !(vpid == 80521 & form %in% c("C", "P") & dplyr::row_number() > 1),
-    !(vpid == 80529 & form == "C" & dplyr::row_number() > 1),
-    !(vpid == 80523 & form == "C" & .row != .row[which.max(tidyr::replace_na(.lastpage_num, -Inf))])
-  ) %>%
-  dplyr::ungroup() %>%
-  dplyr::select(-.row, -.lastpage_num)
+  dplyr::mutate(.row_in_group = dplyr::row_number()) %>%
+  dplyr::ungroup()
+
+dat_children_parents <- audit_row_action(
+  dat_children_parents,
+  idx = dat_children_parents$vpid == 80521 &
+    dat_children_parents$form %in% c("C", "P") &
+    dat_children_parents$.row_in_group > 1L,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: VPID 80521 duplicate C/P forms; kept first complete duplicate, deleted later duplicate(s).",
+  action = "deleted"
+)
+
+dat_children_parents <- dat_children_parents %>%
+  dplyr::group_by(vpid, form) %>%
+  dplyr::mutate(.row_in_group = dplyr::row_number()) %>%
+  dplyr::ungroup()
+
+dat_children_parents <- audit_row_action(
+  dat_children_parents,
+  idx = dat_children_parents$vpid == 80529 &
+    dat_children_parents$form == "C" &
+    dat_children_parents$.row_in_group > 1L,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: VPID 80529 duplicate C-form; kept first complete duplicate, deleted later duplicate(s).",
+  action = "deleted"
+)
+
+keep_80523_c_row <- dat_children_parents %>%
+  dplyr::filter(vpid == 80523, form == "C") %>%
+  dplyr::arrange(dplyr::desc(tidyr::replace_na(.lastpage_num, -Inf)), .row) %>%
+  dplyr::slice_head(n = 1) %>%
+  dplyr::pull(.row)
+
+dat_children_parents <- audit_row_action(
+  dat_children_parents,
+  idx = dat_children_parents$vpid == 80523 &
+    dat_children_parents$form == "C" &
+    dat_children_parents$.row != keep_80523_c_row,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: VPID 80523 duplicate incomplete C-forms; kept row with highest lastpage, deleted other row(s).",
+  action = "deleted"
+)
+
+dat_children_parents <- dat_children_parents %>%
+  dplyr::select(-.row, -.lastpage_num, -.row_in_group)
 
 # Leo says they are not complete and cannot be salvaged:
-dat_adults <- dat_adults[!(dat_adults$vpid == 80018 & dat_adults$project == 8), ]
-dat_adults <- dat_adults[!(dat_adults$vpid == 80009 & dat_adults$project == 8), ]
-dat_adults <- dat_adults[!(dat_adults$vpid == 80011 & dat_adults$project == 8), ]
+dat_adults <- audit_row_action(dat_adults, dat_adults$vpid == 80018 & dat_adults$project == 8L, "vpid", "project", "adults", "questionnaire", "Project 8 questionnaire adults: VPID 80018 not complete and cannot be salvaged; deleted.", "deleted")
+dat_adults <- audit_row_action(dat_adults, dat_adults$vpid == 80009 & dat_adults$project == 8L, "vpid", "project", "adults", "questionnaire", "Project 8 questionnaire adults: VPID 80009 not complete and cannot be salvaged; deleted.", "deleted")
+dat_adults <- audit_row_action(dat_adults, dat_adults$vpid == 80011 & dat_adults$project == 8L, "vpid", "project", "adults", "questionnaire", "Project 8 questionnaire adults: VPID 80011 not complete and cannot be salvaged; deleted.", "deleted")
 
 
-# Project 9
-PROJECT = 9
-dat_adults = dat_adults %>%
-  filter(!(vpid == 90002 & lastpage == 11))
+# Project 9 --------------------------------------------------------------------
+PROJECT <- 9
 
-dat_adults <- dat_adults %>% 
-  group_by(vpid, project) %>% 
-  arrange(dplyr::coalesce(submitdate, as.POSIXct("1900-01-01", tz="Europe/Berlin")), .by_group=TRUE) %>% 
-  filter(!(project==9 & vpid==90004L & n()>1 & row_number()==n())) %>% 
-  ungroup()
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults$vpid == 90002 & dat_adults$lastpage == 11,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 9 questionnaire adults: VPID 90002 row with lastpage == 11 deleted.",
+  action = "deleted"
+)
+
+dat_adults <- dat_adults %>%
+  dplyr::group_by(vpid, project) %>%
+  dplyr::arrange(dplyr::coalesce(submitdate, as.POSIXct("1900-01-01", tz = "Europe/Berlin")), .by_group = TRUE) %>%
+  dplyr::mutate(.row_in_group = dplyr::row_number(), .n_in_group = dplyr::n()) %>%
+  dplyr::ungroup()
+
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults$project == 9L &
+    dat_adults$vpid == 90004L &
+    dat_adults$.n_in_group > 1L &
+    dat_adults$.row_in_group == dat_adults$.n_in_group,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 9 questionnaire adults: duplicate VPID 90004; deleted the later row by submitdate.",
+  action = "deleted"
+)
+
+dat_adults <- dat_adults %>%
+  dplyr::select(-.row_in_group, -.n_in_group)
 
 
-# Remove all rows with zero non-admin answers
+# Remove all rows with zero non-admin answers ----------------------------------
 drop_answer_empty <- function(df, admin_like = c(
-  "vpid","vp_id","id","project","p","proj","comp","submitdate","startdate",
-  "datestamp","remid","remidcheck","warning","consent","end","seed","startlanguage"
+  "vpid", "vp_id", "id", "project", "p", "proj", "comp", "submitdate", "startdate",
+  "datestamp", "remid", "remidcheck", "warning", "consent", "end", "seed", "startlanguage"
 )) {
   is_admin <- tolower(names(df)) %in% tolower(admin_like)
-  # consider non-admin, numeric/character with actual values
   sub <- df[, !is_admin, drop = FALSE]
   if (!ncol(sub)) return(df)
   non_empty <- rowSums(!vapply(sub, function(x) {
@@ -912,10 +1428,35 @@ dat_children_p6       <- drop_answer_empty(dat_children_p6)
 dat_parents_p6        <- drop_answer_empty(dat_parents_p6)
 
 
-# move to other sample
+# Move to other sample ---------------------------------------------------------
+# Adults -> Adolescents (Questionnaires + Cogtests)
+move_ids_adults_to_adolescents <- c(70090L, 70153L)
 
-# --- Move from Adults -> Adolescents (Questionnaires + Cogtests) ---
-ids <- 70090L
+audit_row_action(
+  dat_adults,
+  idx = dat_adults$vpid %in% move_ids_adults_to_adolescents,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults_to_adolescents",
+  data_type = "questionnaire",
+  criterion = "Questionnaire sample correction: participant belongs to adolescents sample, not adults sample.",
+  action = "sample_moved",
+  new_id = NA_integer_
+)
+
+audit_row_action(
+  psytool_info_adults,
+  idx = psytool_info_adults$id %in% move_ids_adults_to_adolescents,
+  id_col = "id",
+  project_col = "p",
+  sample = "adults_to_adolescents",
+  data_type = "experiment_data",
+  criterion = "Cogtest sample correction: participant belongs to adolescents sample, not adults sample.",
+  action = "sample_moved",
+  new_id = NA_integer_
+)
+
+ids <- move_ids_adults_to_adolescents
 
 # Questionnaires (key: vpid)
 dat_adolescents <- dplyr::bind_rows(dat_adolescents, dplyr::filter(dat_adults, vpid %in% ids))
@@ -924,9 +1465,6 @@ dat_adults      <- dplyr::filter(dat_adults, !vpid %in% ids)
 # Cogtests / PsyToolkit (key: id)
 psytool_info_adolescents <- dplyr::bind_rows(psytool_info_adolescents, dplyr::filter(psytool_info_adults, id %in% ids))
 psytool_info_adults      <- dplyr::filter(psytool_info_adults, !id %in% ids)
-
-
-
 
 # Auto-remove and check for remaining duplicates
 # Adults
@@ -981,6 +1519,7 @@ res_adolescents <- resolve_duplicates(dat_adolescents, vp_col, submit_col,
 dat_adolescents   <- res_adolescents$cleaned
 trash_adolescents <- res_adolescents$trash_bin
 
+dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after resolve_duplicates adolescents")
 
 # Children/Parents
 res_children_parents <- resolve_duplicates(
@@ -1032,20 +1571,12 @@ samples <- list(
   parents_p6       = dat_parents_p6
 )
 
-# ---- FORCE stable schema for all questionnaire samples BEFORE slicing ----
-# (This guarantees vp_id + project exist with the same names everywhere.)
+# ---- Deterministic questionnaire ID schema before slicing/export --------------
+
 samples <- lapply(names(samples), function(s) {
-  df <- samples[[s]]
-  # only do it for questionnaire-like tables (has vpid/vp/etc). Safe to run anyway.
-  df2 <- force_master_schema(df)
-  
-  # IMPORTANT: keep the original vpid too if you still rely on it elsewhere
-  # (optional but recommended during transition)
-  if (!"vpid" %in% names(df2) && "vp_id" %in% names(df2)) df2$vpid <- suppressWarnings(as.integer(df2$vp_id))
-  
-  df2
+  normalize_questionnaire_ids(samples[[s]], sample = s)
 })
-names(samples) <- c("adults","adolescents","children_parents","children_p6","parents_p6")
+names(samples) <- c("adults", "adolescents", "children_parents", "children_p6", "parents_p6")
 
 # 1) prepare all preps first
 preps <- lapply(names(samples), function(s) {
@@ -1076,16 +1607,19 @@ lapply(names(preps), function(s) write_project_slices(preps[[s]]))
 p3_questionnaire_export <- if (exists("data_adults_p_3_questionnaire", envir = .GlobalEnv)) {
   get("data_adults_p_3_questionnaire", envir = .GlobalEnv)
 } else {
-  dplyr::filter(dat_adults, project == 3)
+  normalize_questionnaire_ids(
+    dplyr::filter(dat_adults, project == 3),
+    sample = "adults"
+  )
 }
 
-p3_questionnaire_export$vpid <- suppressWarnings(as.integer(as.character(p3_questionnaire_export$vpid)))
+p3_questionnaire_export$vp_id <- suppressWarnings(as.integer(as.character(p3_questionnaire_export$vp_id)))
 
 data_adults_exp_1_p_3_questionnaire <- p3_questionnaire_export %>%
-  dplyr::filter(vpid >= 30000L, vpid <= 30128L)
+  dplyr::filter(vp_id >= 30000L, vp_id <= 30128L)
 
 data_adults_exp_2_p_3_questionnaire <- p3_questionnaire_export %>%
-  dplyr::filter(vpid >= 32000L, vpid < 33000L)
+  dplyr::filter(vp_id >= 32000L, vp_id < 33000L)
 
 write_project3_exp_split_exports(
   exp1_df = data_adults_exp_1_p_3_questionnaire,
@@ -1131,67 +1665,84 @@ no_id_ch               <- list_output$no_id
 empty_rows_ch          <- list_output$empty
 
 # Fix ID naming issues ---------------------------------------------------------
-# Project 2
+# All manual ID changes in this block are audited in id_change_audit.
+
+# Project 2 --------------------------------------------------------------------
 PROJECT <- 2
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 20035)] <- 20036
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4    & psytool_info_adults[[project_col]] == PROJECT)] <- 20004
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 6    & psytool_info_adults[[project_col]] == PROJECT)] <- 20006
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 15   & psytool_info_adults[[project_col]] == PROJECT)] <- 20015
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2023 & psytool_info_adults[[project_col]] == PROJECT)] <- 20023
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 26   & psytool_info_adults[[project_col]] == PROJECT)] <- 20026
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 35   & psytool_info_adults[[project_col]] == PROJECT)] <- 20035
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2041 & psytool_info_adults[[project_col]] == PROJECT)] <- 20041
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2044 & psytool_info_adults[[project_col]] == PROJECT)] <- 20044
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2046 & psytool_info_adults[[project_col]] == PROJECT)] <- 20046
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2048 & psytool_info_adults[[project_col]] == PROJECT)] <- 20048
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2051 & psytool_info_adults[[project_col]] == PROJECT)] <- 20051
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 2052 & psytool_info_adults[[project_col]] == PROJECT)] <- 20052
+
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 20035, vp_col, 20036, project_col, "adults", "experiment_data", "Project 2 cogtests: known wrong VPID entry 20035 corrected to 20036.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 4    & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20004, project_col, "adults", "experiment_data", "Project 2 cogtests: missing project prefix; ID 4 corrected to 20004.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 6    & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20006, project_col, "adults", "experiment_data", "Project 2 cogtests: missing project prefix; ID 6 corrected to 20006.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 15   & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20015, project_col, "adults", "experiment_data", "Project 2 cogtests: missing project prefix; ID 15 corrected to 20015.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2023 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20023, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2023 corrected to 20023.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 26   & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20026, project_col, "adults", "experiment_data", "Project 2 cogtests: missing project prefix; ID 26 corrected to 20026.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 35   & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20035, project_col, "adults", "experiment_data", "Project 2 cogtests: missing project prefix; ID 35 corrected to 20035.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2041 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20041, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2041 corrected to 20041.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2044 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20044, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2044 corrected to 20044.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2046 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20046, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2046 corrected to 20046.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2048 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20048, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2048 corrected to 20048.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2051 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20051, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2051 corrected to 20051.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2052 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20052, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2052 corrected to 20052.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2083 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20083, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2083 corrected to 20083.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2084 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20084, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2084 corrected to 20084.")
+
 psytool_info_adults <- psytool_info_adults %>%
-  group_by(.data[[vp_col]]) %>%
-  mutate(
-    "{vp_col}" := if_else(
-      .data[[vp_col]] == 20069 & .data[[start_col]] == max(.data[[start_col]]),
-      20066,
-      .data[[vp_col]]
-    )
-  ) %>%
-  ungroup()
+  dplyr::group_by(.data[[vp_col]]) %>%
+  dplyr::mutate(.change_20069_to_20066 = .data[[vp_col]] == 20069 & .data[[start_col]] == max(.data[[start_col]])) %>%
+  dplyr::ungroup()
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults$.change_20069_to_20066,
+  id_col = vp_col,
+  new_id = 20066,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 2 cogtests: for duplicate/misassigned ID 20069, row with latest TIME_start corrected to 20066."
+)
+
+psytool_info_adults$.change_20069_to_20066 <- NULL
 
 
-# Project 3
+# Project 3 --------------------------------------------------------------------
 PROJECT <- 3
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 1 & psytool_info_adults[[project_col]] == PROJECT)] <- 30001
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 3 & psytool_info_adults[[project_col]] == PROJECT)] <- 30003
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 8 & psytool_info_adults[[project_col]] == PROJECT)] <- 30008
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9 & psytool_info_adults[[project_col]] == PROJECT)] <- 30009
 
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10002 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10005 & psytool_info_adults[[project_col]] == PROJECT)] <- 30005
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10006 & psytool_info_adults[[project_col]] == PROJECT)] <- 30006
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 10007 & psytool_info_adults[[project_col]] == PROJECT)] <- 30007
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT)] <- 30019
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT)] <- 30104
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 1 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30001, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 1 corrected to 30001.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 3 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30003, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 3 corrected to 30003.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 8 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30008, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 8 corrected to 30008.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 9 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30009, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 9 corrected to 30009.")
 
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 10002 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30002, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 10002 corrected to 30002.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 10005 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30005, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 10005 corrected to 30005.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 10006 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30006, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 10006 corrected to 30006.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 10007 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30007, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 10007 corrected to 30007.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30019, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 40019 corrected to 30019.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30104, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 104 corrected to 30104.")
 
-# Falsely named datasets -----------------------------
 psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
-psytool_info_adults <- psytool_info_adults %>%
-  group_by(id) %>%
-  mutate(
-    id = dplyr::case_when(
-      id == 30048L & p == 3 & TIME_start == max(TIME_start) ~ 30047L,
-      id == 30058L & p == 3 & TIME_start == max(TIME_start) ~ 30057L,
-      id == 30099L & p == 3 & TIME_start == min(TIME_start) ~ 30100L,
-      id == 30101L & p == 3 & TIME_start == max(TIME_start) ~ 30102L,
-      id == 30111L & p == 3 & TIME_start == min(TIME_start) ~ 30112L,
-      TRUE ~ id
-    )
-  ) %>%
-  ungroup()
-# info on who to rename to what comes from Hendrik
 
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT)] <- 30002
-# relabel experiment-2 cogtest IDs from 30xxx -> 32xxx -------------
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30047, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30048 row with latest TIME_start corrected to 30047.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30058L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30058L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30057, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30058 row with latest TIME_start corrected to 30057.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30099L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == min(psytool_info_adults$TIME_start[psytool_info_adults$id == 30099L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30100, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30099 row with earliest TIME_start corrected to 30100.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30101L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30101L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30102, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30101 row with latest TIME_start corrected to 30102.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30111L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == min(psytool_info_adults$TIME_start[psytool_info_adults$id == 30111L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30112, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30111 row with earliest TIME_start corrected to 30112.")
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 219 & psytool_info_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 30002,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests: ID 219 in project 3 corrected to 30002."
+)
+
+# Project 3 exp-2 relabeling: 30xxx -> 32xxx after boundary participant 30128.
+psytool_info_adults <- audit_snapshot(psytool_info_adults)
+before_p3_cogtest_split <- psytool_info_adults
+
 p3_cogtest_split <- p3_split_after_30128(
   df = psytool_info_adults,
   id_col = "id",
@@ -1199,27 +1750,109 @@ p3_cogtest_split <- p3_split_after_30128(
   start_col = "TIME_start",
   boundary_id = 30128L
 )
-psytool_info_adults <- p3_cogtest_split$data
 
-# Project 4
+psytool_info_adults <- audit_id_diff_by_row(
+  before = before_p3_cogtest_split,
+  after = p3_cogtest_split$data,
+  id_col = "id",
+  project_col = "p",
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests exp-2 split: rows with TIME_start later than boundary participant 30128 relabeled from 30xxx to 32xxx using 32000 + old_id %% 1000."
+)
+
+psytool_info_adults <- drop_audit_row_id(psytool_info_adults)
+
+
+# Project 4 --------------------------------------------------------------------
 PROJECT <- 4
-# assuming a 0 (or many) 0s are missing
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4001 & psytool_info_adults[[project_col]] == PROJECT)] <- 40001
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4002 & psytool_info_adults[[project_col]] == PROJECT)] <- 40002
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 4003 & psytool_info_adults[[project_col]] == PROJECT)] <- 40003
 
-# Project 8
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 4001 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 40001, project_col, "adults", "experiment_data", "Project 4 cogtests: missing zero/project-prefix format; ID 4001 corrected to 40001.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 4002 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 40002, project_col, "adults", "experiment_data", "Project 4 cogtests: missing zero/project-prefix format; ID 4002 corrected to 40002.")
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 4003 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 40003, project_col, "adults", "experiment_data", "Project 4 cogtests: missing zero/project-prefix format; ID 4003 corrected to 40003.")
+
+
+# Project 8 --------------------------------------------------------------------
 PROJECT <- 8
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 800028 & psytool_info_adults[[project_col]] == PROJECT)] <- 80028
 
-# Project 9
-PROJECT <- 9
-psytool_info_adults[[vp_col]][which(psytool_info_adults[[vp_col]] == 9901)] <- 99001
+# Wrongly entered Project 8 adult ID:
+# participant was entered as 50056, but should be 80056.
+# Match by id only, because in PsyToolkit 'id' is the participant VPID.
+psytool_info_adults[[project_col]][psytool_info_adults[[vp_col]] == 50056L] <- PROJECT
 
-# Special Case Project 8: Remap VPIDs so children and adults have unique IDs --
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 50056L,
+  id_col = vp_col,
+  new_id = 80056L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests adults: wrong ID 50056 corrected to 80056; matched by id."
+)
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 800028 & psytool_info_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 80028,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests: typo/extra zero; ID 800028 corrected to 80028."
+)
+
+psytool_info_children <- audit_snapshot(psytool_info_children)
+before_p8_child_cogtest_mapping <- psytool_info_children
+
 psytool_info_children <- correct_child_vpids(
-  psytool_info_children, vpid_col = "id", project_col = "p",  startdate_col = "TIME_start",
+  psytool_info_children,
+  vpid_col = "id",
+  project_col = "p",
+  startdate_col = "TIME_start",
   mapping_file = file.path("information", "2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx")
+)
+
+psytool_info_children <- audit_id_diff_by_row(
+  before = before_p8_child_cogtest_mapping,
+  after = psytool_info_children,
+  id_col = "id",
+  project_col = "p",
+  sample = "children_parents",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests children/parents: VPID remapped using 2025-08-19_Neuzuordnung_VP-IDs_Kinder-Sample_Projekt_8.xlsx."
+)
+
+psytool_info_children <- drop_audit_row_id(psytool_info_children)
+
+
+# Project 9 --------------------------------------------------------------------
+PROJECT <- 9
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 9901,
+  id_col = vp_col,
+  new_id = 99001,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 9 cogtests: missing zero/project-prefix format; ID 9901 corrected to 99001."
+)
+
+# Exclude participant without data-use permission ------------------------------
+# Participant 20080 did not allow use of their data.
+# Therefore, neither questionnaire nor cogtest data may be used/exported.
+
+psytool_info_adults <- audit_row_action(
+  psytool_info_adults,
+  idx = psytool_info_adults$id == 20080L,
+  id_col = "id",
+  project_col = "p",
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Participant 20080 did not allow use of their data; cogtest data deleted before pilot extraction/export.",
+  action = "deleted"
 )
 
 
@@ -1257,23 +1890,61 @@ psytool_info_children <- extract_pilot_by_vpid(
 
 # Handle duplicate IDs ---------------------------------------------------------
 # Delete not needed, incomplete or faulty datasets -----------------------------
-# Project 3 — additional Exp-1 cogtest rows Hendrik said can be deleted
-#   VP_id 30100; row 2;  2025-09-24 09:32:00
-#   VP_id 30102; row 60; 2025-10-13 07:21:00
-drop_p3_exp1_cog_start <- as.POSIXct(
-  c("2025-09-24 09:32:00", "2025-10-13 07:21:00"),
-  tz = "Europe/Berlin"
+
+# Project 3 — delete exact faulty cogtest rows -------------------------------
+# Exact file timestamps:
+#   ID 30100; 24.09.2025 07:34:00
+#   ID 30102; 13.10.2025 07:21:00
+
+drop_p3_cog_mask <- (
+  psytool_info_adults$id == 30100L &
+    format(as_time_safely(psytool_info_adults$TIME_start), "%d.%m.%Y %H:%M:%S") == "24.09.2025 07:34:00"
+) | (
+  psytool_info_adults$id == 30102L &
+    format(as_time_safely(psytool_info_adults$TIME_start), "%d.%m.%Y %H:%M:%S") == "13.10.2025 07:21:00"
 )
 
-psytool_info_adults <- psytool_info_adults %>%
-  dplyr::filter(!(
-    .data[[project_col]] == 3L &
-      .data[[vp_col]] %in% c(30100L, 30102L) &
-      .data[[start_col]] %in% drop_p3_exp1_cog_start
-  ))
+message("Project 3 faulty cogtest rows matched for deletion: ", sum(drop_p3_cog_mask, na.rm = TRUE))
 
-psytool_info_adults <- psytool_info_adults[!(psytool_info_adults$id == 80009 & psytool_info_adults$p == 8), ]
+psytool_info_adults <- audit_row_action(
+  psytool_info_adults,
+  idx = drop_p3_cog_mask,
+  id_col = "id",
+  project_col = "p",
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests: faulty rows deleted by exact ID and TIME_start: 30100 at 24.09.2025 07:34:00; 30102 at 13.10.2025 07:21:00.",
+  action = "deleted"
+)
 
+rm(drop_p3_cog_mask)
+
+# Project 7
+# Keep the correct entry from 2025-04-11; delete the wrong duplicate from 2025-04-27.
+psytool_info_adolescents <- audit_row_action(
+  psytool_info_adolescents,
+  idx = psytool_info_adolescents[[project_col]] == 7L &
+    psytool_info_adolescents[[vp_col]] == 70176L &
+    as.Date(psytool_info_adolescents[[start_col]]) == as.Date("2025-04-27"),
+  id_col = "id",
+  project_col = "p",
+  sample = "adolescents",
+  data_type = "experiment_data",
+  criterion = "Project 7 adolescent cogtests: duplicate for 70176; wrong entry from 2025-04-27 deleted, correct entry from 2025-04-11 retained.",
+  action = "deleted"
+)
+
+# Project 8
+psytool_info_adults <- audit_row_action(
+  psytool_info_adults,
+  idx = psytool_info_adults$id == 80009L & psytool_info_adults$p == 8L,
+  id_col = "id",
+  project_col = "p",
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests adults: ID 80009 deleted as manually specified.",
+  action = "deleted"
+)
 
 # Adults
 res_adults <- resolve_duplicates(psytool_info_adults, vp_col, submit_col,
@@ -1300,9 +1971,9 @@ trash_children        <- res_children$trash_bin
 # Cognitive Tests
 
 samples <- list(
-  adults          = psytool_info_adults,
-  adolescents     = psytool_info_adolescents,
-  children_parents= psytool_info_children
+  adults           = normalize_cogtest_ids(psytool_info_adults),
+  adolescents      = normalize_cogtest_ids(psytool_info_adolescents),
+  children_parents = normalize_cogtest_ids(psytool_info_children)
 )
 
 # Cogtests
@@ -1481,6 +2152,9 @@ copy_psytool_files(
   middle_subdir    = "pilot_data"   # <<< puts results under pilot_data/experiment_data
 )
 
+## Export ID change/deletion/sample-move audit ---------------------------------
+
+write_id_change_audit(private_info_path, today)
 
 ## Print the final list of IDs to Disk -----------------------------------------
 
