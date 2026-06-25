@@ -855,10 +855,27 @@ is_item_like_col <- function(nm) {
   grepl("\\[\\d+\\]$", nm)
 }
 
-rename_master_item_columns_inplace <- function(df) {
+rename_master_item_columns_inplace <- function(df, item_info = NULL, preserve_scales = NON_SCORABLE_SCALES) {
   old <- names(df)
   new <- old
-  idx <- vapply(old, is_item_like_col, logical(1))
+  
+  preserve_item_norm <- character(0)
+  if (!is.null(item_info) && all(c("item", "scale") %in% names(item_info))) {
+    ii_preserve <- item_info
+    if (!"item_norm" %in% names(ii_preserve)) {
+      ii_preserve <- ii_preserve %>% dplyr::mutate(item_norm = normalize_id(.data$item))
+    }
+    preserve_item_norm <- ii_preserve %>%
+      dplyr::mutate(scale_norm = normalize_scale_chr(.data$scale)) %>%
+      dplyr::filter(.data$scale_norm %in% normalize_scale_chr(preserve_scales)) %>%
+      dplyr::pull("item_norm") %>%
+      unique()
+  }
+  
+  old_norm <- normalize_id(old)
+  idx <- vapply(old, is_item_like_col, logical(1)) &
+    !(old_norm %in% preserve_item_norm)
+  
   new[idx] <- vapply(old[idx], normalize_master_item_id, character(1))
   new <- make.unique(new, sep = "_dup")
   map_tbl <- tibble::tibble(old = old, new = new, renamed = old != new)
@@ -866,11 +883,11 @@ rename_master_item_columns_inplace <- function(df) {
   list(df = df, map = map_tbl)
 }
 
-export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
+export_per_project <- function(df_clean, df_discard, sample, delim = ";", item_info = NULL) {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
-  ren <- rename_master_item_columns_inplace(df_clean)
+  ren <- rename_master_item_columns_inplace(df_clean, item_info = item_info)
   df_clean <- ren$df
   map_tbl  <- ren$map
   
@@ -882,8 +899,8 @@ export_per_project <- function(df_clean, df_discard, sample, delim = ";") {
   master_path <- fs::path(out_dir, glue::glue("{sample}_clean_master.csv"))
   disc_path   <- fs::path(out_dir, glue::glue("{sample}_discarded.csv"))
   
-  write.csv2(df_clean, master_path, row.names = FALSE)
-  write.csv2(df_discard, disc_path, row.names = FALSE)
+  readr::write_excel_csv2(df_clean, master_path, na = "")
+  readr::write_excel_csv2(df_discard, disc_path, na = "")
   
   log_msg("Wrote master (items only, no score columns): ", master_path)
   log_msg("Wrote discarded: ", disc_path)
@@ -916,12 +933,9 @@ save_keys <- function(keys, sample) {
 label_demographics_health <- function(df) {
   out <- df
   
-  gender_cols <- intersect(
-    c("gender",
-      grep("^parentsgender|^siblingsgender|^cildrengender|^childrengender|^children(gender)?",
-           names(out), value = TRUE, ignore.case = TRUE)),
-    names(out)
-  )
+  # Only recode the actual participant-level gender column here.
+  # Family-tree columns such as parentsgender[001] must remain raw FHS data.
+  gender_cols <- intersect("gender", names(out))
   if (length(gender_cols)) {
     out <- out %>%
       dplyr::mutate(
@@ -984,7 +998,12 @@ label_demographics_health <- function(df) {
   }
   
   bin_candidates <- c("psychomedication","othermedication","ownpsychdisorder")
-  bin_candidates <- union(bin_candidates, grep("contact", names(out), value = TRUE))
+  contact_cols <- grep("contact", names(out), value = TRUE, ignore.case = TRUE)
+  contact_cols <- contact_cols[
+    !grepl("^(parents|siblings|children|childrengender|cildrengender)",
+           contact_cols, ignore.case = TRUE)
+  ]
+  bin_candidates <- union(bin_candidates, contact_cols)
   bin_cols <- intersect(bin_candidates, names(out))
   if (length(bin_cols)) {
     out <- out %>%
@@ -1165,11 +1184,22 @@ process_sample <- function(sample,
   
   check_header_match(q_clean0, ii)
   
+  # Only columns that are truly scorable may be coerced to numeric/reverse-coded.
+  # FHSfamilytree and other pass-through scales can contain text (names, Y/N, etc.)
+  # and must therefore be kept out of reverse_code_wide().
+  scoring_scales_norm <- unique(normalize_scale_chr(scoring_df$scale))
+  exclude_scales_norm <- normalize_scale_chr(NON_SCORABLE_SCALES)
+  
   col_map <- tibble::tibble(
     orig      = names(q_clean0),
     item_norm = normalize_id(names(q_clean0))
   ) %>%
     dplyr::inner_join(ii %>% dplyr::select(item_norm, scale, reverse_coded), by = "item_norm") %>%
+    dplyr::mutate(scale_norm = normalize_scale_chr(.data$scale)) %>%
+    dplyr::filter(
+      (.data$scale_norm %in% scoring_scales_norm | .data$scale_norm == "SUQ"),
+      !(.data$scale_norm %in% exclude_scales_norm)
+    ) %>%
     dplyr::distinct(orig, .keep_all = TRUE)
   
   minmax <- scoring_df %>% dplyr::select(scale, min, max)
@@ -1213,7 +1243,7 @@ process_sample <- function(sample,
   keys <- build_keys(ii)
   save_keys(keys, sample)
   
-  export_per_project(q_ready, q_discard, sample)
+  export_per_project(q_ready, q_discard, sample, item_info = ii_all)
   
   log_msg("--- Done sample: ", sample, " ---\n")
   invisible(list(

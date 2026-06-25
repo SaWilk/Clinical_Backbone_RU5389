@@ -86,7 +86,14 @@ safe_read_csv <- function(path, tz = "Europe/Berlin") {
   )
   # strip BOM + normalize names
   nm <- names(df); nm[1] <- sub("^\ufeff", "", nm[1]); nm <- gsub("\\s+", "_", trimws(nm)); names(df) <- nm
-  # parse TIME_* if present with the exact pattern we saw: %Y-%m-%d-%H-%M
+  # IMPORTANT: PsyToolkit TIME_start/TIME_end are intentionally parsed here.
+  # Raw PsyToolkit values are usually strings like "2025-09-24-09-34".
+  # We interpret them as Europe/Berlin time (Hamburg project time) and store them
+  # as POSIXct. When R later prints or exports the same POSIXct value in UTC, it
+  # can look shifted by the Berlin UTC offset (usually -2 h during summer time),
+  # e.g. "2025-09-24-09-34" -> "2025-09-24 07:34:00 UTC". That is expected.
+  # All manual exact-time checks below should therefore compare Berlin time
+  # explicitly, using .fmt_time_berlin() or .date_berlin().
   parse_hyphen_dt <- function(x) {
     y <- trimws(as.character(x)); y[y %in% c("", "NA","NaN","null")] <- NA
     suppressWarnings(as.POSIXct(y, format = "%Y-%m-%d-%H-%M", tz = tz))
@@ -153,6 +160,14 @@ as_time_safely <- function(x, tz = "Europe/Berlin") {
     out[miss] <- parsed
   }
   out
+}
+
+.fmt_time_berlin <- function(x, fmt = "%Y-%m-%d %H:%M:%S") {
+  format(as_time_safely(x, tz = "Europe/Berlin"), fmt, tz = "Europe/Berlin")
+}
+
+.date_berlin <- function(x) {
+  as.Date(as_time_safely(x, tz = "Europe/Berlin"), tz = "Europe/Berlin")
 }
 
 # --- ID remap: 30xxx -> 32xxx (keep last 3 digits); keep existing 32xxx untouched ---
@@ -996,6 +1011,36 @@ dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2052 & dat_adu
 dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2083 & dat_adults[[project_col]] == PROJECT, vp_col, 20083, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2083 corrected to 20083.")
 dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2084 & dat_adults[[project_col]] == PROJECT, vp_col, 20084, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2084 corrected to 20084.")
 
+# Project 2 questionnaire: 2092 appears twice.
+# Earlier 2092 -> 20092; later 2092 -> 20093.
+idx_2092_q <- which(dat_adults[[vp_col]] == 2092L & dat_adults[[project_col]] == PROJECT)
+if (length(idx_2092_q) == 1L) {
+  mask_2092_q <- rep(FALSE, nrow(dat_adults))
+  mask_2092_q[idx_2092_q] <- TRUE
+  dat_adults <- audit_id_change(dat_adults, mask_2092_q, vp_col, 20092, project_col, "adults", "questionnaire", "Project 2 questionnaire: VPID 2092 corrected to 20092.")
+  rm(mask_2092_q)
+} else if (length(idx_2092_q) > 1L) {
+  time_2092_q <- as_time_safely(dat_adults$startdate[idx_2092_q])
+  later_2092_q <- idx_2092_q[which.max(time_2092_q)]
+  earlier_2092_q <- setdiff(idx_2092_q, later_2092_q)
+  
+  mask_2092_earlier_q <- rep(FALSE, nrow(dat_adults))
+  mask_2092_earlier_q[earlier_2092_q] <- TRUE
+  dat_adults <- audit_id_change(dat_adults, mask_2092_earlier_q, vp_col, 20092, project_col, "adults", "questionnaire", "Project 2 questionnaire: earlier VPID 2092 corrected to 20092.")
+  rm(mask_2092_earlier_q)
+  
+  mask_2092_later_q <- rep(FALSE, nrow(dat_adults))
+  mask_2092_later_q[later_2092_q] <- TRUE
+  dat_adults <- audit_id_change(dat_adults, mask_2092_later_q, vp_col, 20093, project_col, "adults", "questionnaire", "Project 2 questionnaire: later VPID 2092 corrected to 20093.")
+  rm(mask_2092_later_q)
+}
+rm(idx_2092_q)
+if (exists("time_2092_q")) rm(time_2092_q)
+if (exists("later_2092_q")) rm(later_2092_q)
+if (exists("earlier_2092_q")) rm(earlier_2092_q)
+
+dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 2097 & dat_adults[[project_col]] == PROJECT, vp_col, 20097, project_col, "adults", "questionnaire", "Project 2 questionnaire: missing zero/project-prefix format; VPID 2097 corrected to 20097.")
+
 
 # Project 3 --------------------------------------------------------------------
 PROJECT <- 3
@@ -1057,26 +1102,32 @@ dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 4033 & dat_adu
 dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 630 & dat_adults[[project_col]] == PROJECT, vp_col, 40016, project_col, "adults", "questionnaire", "Project 4 questionnaire: LimeSurvey response id 630 known to belong to VPID 40016.")
 
 
-# Project 8 --------------------------------------------------------------------
-PROJECT <- 8
+# Project 5 assignment correction -----------------------------------------------
+# VPID 50056 is valid. Only the project assignment was wrong:
+# project 8 -> project 5. The VPID stays 50056.
+PROJECT <- 5
 
-# Wrongly entered Project 8 VPID:
-# participant was entered as 50056, but should be 80056.
-# Match by vpid only.
-if (project_col %in% names(dat_adults)) {
-  dat_adults[[project_col]][dat_adults[[vp_col]] == 50056L] <- PROJECT
-}
+idx_50056_p5_questionnaire <- dat_adults[[vp_col]] == 50056L &
+  dat_adults[[project_col]] == 8L
 
-dat_adults <- audit_id_change(
+dat_adults <- audit_row_action(
   dat_adults,
-  idx = dat_adults[[vp_col]] == 50056L,
+  idx = idx_50056_p5_questionnaire,
   id_col = vp_col,
-  new_id = 80056L,
   project_col = project_col,
   sample = "adults",
   data_type = "questionnaire",
-  criterion = "Project 8 questionnaire: wrong VPID 50056 corrected to 80056; matched by vpid."
+  criterion = "Project assignment correction: VPID 50056 is valid and belongs to Project 5, not Project 8; VPID kept unchanged.",
+  action = "project_changed"
 )
+
+if (any(idx_50056_p5_questionnaire, na.rm = TRUE)) {
+  dat_adults[[project_col]][idx_50056_p5_questionnaire] <- PROJECT
+}
+rm(idx_50056_p5_questionnaire)
+
+# Project 8 --------------------------------------------------------------------
+PROJECT <- 8
 
 dat_children_parents <- audit_id_change(
   dat_children_parents,
@@ -1262,6 +1313,18 @@ dat_adolescents <- dat_adolescents %>%
   dplyr::select(-.row_in_group, -.n_in_group)
 
 dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after project 7 duplicate filter")
+
+# Project 7 adolescents: LimeSurvey response id 301 is a wrong duplicate/faulty entry.
+dat_adolescents <- audit_row_action(
+  dat_adolescents,
+  idx = dat_adolescents[[project_col]] == 7L & dat_adolescents[[id_col]] == 301L,
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adolescents",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adolescents: LimeSurvey response id 301 deleted.",
+  action = "deleted"
+)
 
 # Project 7 adults: LimeSurvey response id 965 is the wrong duplicate entry.
 dat_adults <- audit_row_action(
@@ -1686,6 +1749,36 @@ psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2083 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20083, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2083 corrected to 20083.")
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2084 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20084, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2084 corrected to 20084.")
 
+# Project 2 cogtests: 2092 appears twice.
+# Earlier 2092 -> 20092; later 2092 -> 20093.
+idx_2092_cog <- which(psytool_info_adults[[vp_col]] == 2092L & psytool_info_adults[[project_col]] == PROJECT)
+if (length(idx_2092_cog) == 1L) {
+  mask_2092_cog <- rep(FALSE, nrow(psytool_info_adults))
+  mask_2092_cog[idx_2092_cog] <- TRUE
+  psytool_info_adults <- audit_id_change(psytool_info_adults, mask_2092_cog, vp_col, 20092, project_col, "adults", "experiment_data", "Project 2 cogtests: ID 2092 corrected to 20092.")
+  rm(mask_2092_cog)
+} else if (length(idx_2092_cog) > 1L) {
+  time_2092_cog <- as_time_safely(psytool_info_adults[[start_col]][idx_2092_cog])
+  later_2092_cog <- idx_2092_cog[which.max(time_2092_cog)]
+  earlier_2092_cog <- setdiff(idx_2092_cog, later_2092_cog)
+  
+  mask_2092_earlier_cog <- rep(FALSE, nrow(psytool_info_adults))
+  mask_2092_earlier_cog[earlier_2092_cog] <- TRUE
+  psytool_info_adults <- audit_id_change(psytool_info_adults, mask_2092_earlier_cog, vp_col, 20092, project_col, "adults", "experiment_data", "Project 2 cogtests: earlier ID 2092 corrected to 20092.")
+  rm(mask_2092_earlier_cog)
+  
+  mask_2092_later_cog <- rep(FALSE, nrow(psytool_info_adults))
+  mask_2092_later_cog[later_2092_cog] <- TRUE
+  psytool_info_adults <- audit_id_change(psytool_info_adults, mask_2092_later_cog, vp_col, 20093, project_col, "adults", "experiment_data", "Project 2 cogtests: later ID 2092 corrected to 20093.")
+  rm(mask_2092_later_cog)
+}
+rm(idx_2092_cog)
+if (exists("time_2092_cog")) rm(time_2092_cog)
+if (exists("later_2092_cog")) rm(later_2092_cog)
+if (exists("earlier_2092_cog")) rm(earlier_2092_cog)
+
+psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 2097 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 20097, project_col, "adults", "experiment_data", "Project 2 cogtests: missing zero/project-prefix format; ID 2097 corrected to 20097.")
+
 psytool_info_adults <- psytool_info_adults %>%
   dplyr::group_by(.data[[vp_col]]) %>%
   dplyr::mutate(.change_20069_to_20066 = .data[[vp_col]] == 20069 & .data[[start_col]] == max(.data[[start_col]])) %>%
@@ -1772,24 +1865,32 @@ psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 4003 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 40003, project_col, "adults", "experiment_data", "Project 4 cogtests: missing zero/project-prefix format; ID 4003 corrected to 40003.")
 
 
-# Project 8 --------------------------------------------------------------------
-PROJECT <- 8
+# Project 5 assignment correction -----------------------------------------------
+# ID 50056 is valid. Only the project assignment was wrong:
+# p 8 -> p 5. The ID stays 50056.
+PROJECT <- 5
 
-# Wrongly entered Project 8 adult ID:
-# participant was entered as 50056, but should be 80056.
-# Match by id only, because in PsyToolkit 'id' is the participant VPID.
-psytool_info_adults[[project_col]][psytool_info_adults[[vp_col]] == 50056L] <- PROJECT
+idx_50056_p5_cog <- psytool_info_adults[[vp_col]] == 50056L &
+  psytool_info_adults[[project_col]] == 8L
 
-psytool_info_adults <- audit_id_change(
+psytool_info_adults <- audit_row_action(
   psytool_info_adults,
-  idx = psytool_info_adults[[vp_col]] == 50056L,
+  idx = idx_50056_p5_cog,
   id_col = vp_col,
-  new_id = 80056L,
   project_col = project_col,
   sample = "adults",
   data_type = "experiment_data",
-  criterion = "Project 8 cogtests adults: wrong ID 50056 corrected to 80056; matched by id."
+  criterion = "Project assignment correction: ID 50056 is valid and belongs to Project 5, not Project 8; ID kept unchanged.",
+  action = "project_changed"
 )
+
+if (any(idx_50056_p5_cog, na.rm = TRUE)) {
+  psytool_info_adults[[project_col]][idx_50056_p5_cog] <- PROJECT
+}
+rm(idx_50056_p5_cog)
+
+# Project 8 --------------------------------------------------------------------
+PROJECT <- 8
 
 psytool_info_adults <- audit_id_change(
   psytool_info_adults,
@@ -1892,19 +1993,18 @@ psytool_info_children <- extract_pilot_by_vpid(
 # Delete not needed, incomplete or faulty datasets -----------------------------
 
 # Project 3 — delete exact faulty cogtest rows -------------------------------
-# Exact file timestamps:
-#   ID 30100; 24.09.2025 07:34:00
-#   ID 30102; 13.10.2025 07:21:00
+# These checks use interpreted Hamburg/Berlin time, not UTC display time.
+time_start_berlin_p3 <- .fmt_time_berlin(psytool_info_adults[[start_col]])
 
-drop_p3_cog_mask <- (
-  psytool_info_adults$id == 30100L &
-    format(as_time_safely(psytool_info_adults$TIME_start), "%d.%m.%Y %H:%M:%S") == "24.09.2025 07:34:00"
-) | (
-  psytool_info_adults$id == 30102L &
-    format(as_time_safely(psytool_info_adults$TIME_start), "%d.%m.%Y %H:%M:%S") == "13.10.2025 07:21:00"
+drop_p3_cog_mask <- psytool_info_adults[[project_col]] == 3L & (
+  (
+    psytool_info_adults[[vp_col]] == 30100L &
+      time_start_berlin_p3 == "2025-09-24 09:34:00"
+  ) | (
+    psytool_info_adults[[vp_col]] == 30102L &
+      time_start_berlin_p3 == "2025-10-13 09:21:00"
+  )
 )
-
-message("Project 3 faulty cogtest rows matched for deletion: ", sum(drop_p3_cog_mask, na.rm = TRUE))
 
 psytool_info_adults <- audit_row_action(
   psytool_info_adults,
@@ -1913,24 +2013,23 @@ psytool_info_adults <- audit_row_action(
   project_col = "p",
   sample = "adults",
   data_type = "experiment_data",
-  criterion = "Project 3 cogtests: faulty rows deleted by exact ID and TIME_start: 30100 at 24.09.2025 07:34:00; 30102 at 13.10.2025 07:21:00.",
+  criterion = "Project 3 cogtests: duplicate IDs 30100 and 30102 deleted by exact Berlin TIME_start.",
   action = "deleted"
 )
 
-rm(drop_p3_cog_mask)
+rm(drop_p3_cog_mask, time_start_berlin_p3)
 
 # Project 7
-# Keep the correct entry from 2025-04-11; delete the wrong duplicate from 2025-04-27.
 psytool_info_adolescents <- audit_row_action(
   psytool_info_adolescents,
   idx = psytool_info_adolescents[[project_col]] == 7L &
     psytool_info_adolescents[[vp_col]] == 70176L &
-    as.Date(psytool_info_adolescents[[start_col]]) == as.Date("2025-04-27"),
+    .date_berlin(psytool_info_adolescents[[start_col]]) == as.Date("2026-04-27"),
   id_col = "id",
   project_col = "p",
   sample = "adolescents",
   data_type = "experiment_data",
-  criterion = "Project 7 adolescent cogtests: duplicate for 70176; wrong entry from 2025-04-27 deleted, correct entry from 2025-04-11 retained.",
+  criterion = "Project 7 adolescent cogtests: duplicate ID 70176 deleted.",
   action = "deleted"
 )
 

@@ -562,13 +562,11 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
   
   # Aesthetics
   # Approximately one third thinner than before (old: 1.1 / 0.9 / 0.3)
-  line_size           <- 0.73
-  pred_size           <- 0.60
-  ref_line_size       <- 0.20
-  ball_size           <- 2.8
-  rib_alpha           <- 0.18
-  middle_subtitle_size <- 8
-  middle_subtitle_wrap <- 105
+  line_size     <- 0.73
+  pred_size     <- 0.60
+  ref_line_size <- 0.20
+  ball_size     <- 2.8
+  rib_alpha     <- 0.18
   
   # Titles / captions
   main_title <- "Sample size over time via complete backbone datasets"
@@ -580,7 +578,7 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
   perc_sub_ideal <- paste0(
     perc_sub_emp,
     " \u2022 Ideal visualization: from last observed point to reach target by ",
-    format(ideal_goal, "%d.%m.%Y"), "."
+    format(ideal_goal, "%d.%m.%Y"), " (late series only)"
   )
   
   # Reference lines
@@ -652,24 +650,10 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
     ggplot2::scale_x_date(breaks = breaks, labels = scales::label_date(format = "%d.%m.%Y"),
                           expand = ggplot2::expansion(mult = c(0, 0.01))) +
     ggplot2::scale_y_continuous(limits = c(0, 100), breaks = c(0,25,50,75,100)) +
-    ggplot2::labs(
-      x = NULL,
-      y = "Percent of integration target sample size",
-      subtitle = stringr::str_wrap(
-        if (has_pred) perc_sub_pred else if (has_ideal) perc_sub_ideal else perc_sub_emp,
-        width = middle_subtitle_wrap
-      )
-    ) +
+    ggplot2::labs(x = NULL, y = "Percent of integration target sample size",
+                  subtitle = if (has_pred) perc_sub_pred else if (has_ideal) perc_sub_ideal else perc_sub_emp) +
     ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.box = "vertical",
-      plot.subtitle = ggplot2::element_text(
-        size = middle_subtitle_size,
-        lineheight = 0.95,
-        margin = ggplot2::margin(b = 4)
-      )
-    ) +
+    ggplot2::theme(legend.position = "right", legend.box = "vertical") +
     ggplot2::scale_color_manual(values = col_map, name = NULL,
                                 limits = legend_order, breaks = legend_order, drop = FALSE,
                                 guide = ggplot2::guide_legend(ncol = 1))

@@ -59,7 +59,7 @@ config <- list(
     path_rel = file.path("03_analysis_input", "analysis_ready", "stratification_info.xlsx"),
     merge_method = "auto",  # c("auto", "by_key", "by_row_order")
     key = NULL,
-    strata_var = c("group", "project")
+    strata_var = c("group", "age", "gender")
   ),
 
   # Training/test split.
@@ -134,7 +134,7 @@ config <- list(
     method = "scree_cng",       # c("scree_cng", "parallel")
     prompt_for_k = FALSE,
     k_fixed = NULL,
-    k_values = c(3),
+    k_values = c(4),
     parallel = list(
       n_iter = 50,
       fa = "fa"

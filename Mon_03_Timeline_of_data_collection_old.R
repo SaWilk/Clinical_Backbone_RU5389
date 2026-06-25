@@ -261,17 +261,12 @@ vanilla_cum <- timeline_raw %>%
   dplyr::mutate(label = paste0("p", project))
 
 split_cum <- timeline_raw %>%
-  dplyr::mutate(
-    sample = stringr::str_squish(tolower(sample)),
-    sample = dplyr::case_when(
-      project == 8 & stringr::str_detect(sample, "adult") ~ "adults",
-      project == 8 & stringr::str_detect(sample, "child") ~ "children",
-      project == 6 & stringr::str_detect(sample, "child") ~ "children",
-      project == 6                                        ~ NA_character_,
-      TRUE                                                ~ "ALL"
-    )
-  ) %>%
-  dplyr::filter(!is.na(sample)) %>%
+  dplyr::mutate(sample = dplyr::case_when(
+    project == 8 & stringr::str_detect(sample, "adult") ~ "adults",
+    project == 8 & stringr::str_detect(sample, "child") ~ "children",
+    project == 6                                       ~ "children",
+    TRUE                                               ~ "ALL"
+  )) %>%
   cum_by_date(group_vars = c("project", "sample")) %>%
   add_percent_split() %>%
   dplyr::mutate(label = dplyr::case_when(
@@ -561,14 +556,10 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
   }
   
   # Aesthetics
-  # Approximately one third thinner than before (old: 1.1 / 0.9 / 0.3)
-  line_size           <- 0.73
-  pred_size           <- 0.60
-  ref_line_size       <- 0.20
-  ball_size           <- 2.8
-  rib_alpha           <- 0.18
-  middle_subtitle_size <- 8
-  middle_subtitle_wrap <- 105
+  line_size <- 1.1
+  pred_size <- 0.9
+  ball_size <- 2.8
+  rib_alpha <- 0.18
   
   # Titles / captions
   main_title <- "Sample size over time via complete backbone datasets"
@@ -580,27 +571,27 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
   perc_sub_ideal <- paste0(
     perc_sub_emp,
     " \u2022 Ideal visualization: from last observed point to reach target by ",
-    format(ideal_goal, "%d.%m.%Y"), "."
+    format(ideal_goal, "%d.%m.%Y"), " (late series only)"
   )
   
   # Reference lines
   vline_ref_abs  <- if (has_pred || has_ideal)
     ggplot2::geom_vline(xintercept = as.numeric(ref_date_2027),
-                        linetype = "dotted", linewidth = ref_line_size, color = "grey40") else NULL
+                        linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
   vline_ref_pct  <- if (has_pred || has_ideal)
     ggplot2::geom_vline(xintercept = as.numeric(ref_date_2027),
-                        linetype = "dotted", linewidth = ref_line_size, color = "grey40") else NULL
+                        linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
   
   vline_goal_abs <- if (has_ideal)
     ggplot2::geom_vline(xintercept = as.numeric(ideal_goal),
-                        linetype = "dotted", linewidth = ref_line_size, color = "grey40") else NULL
+                        linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
   vline_goal_pct <- if (has_ideal)
     ggplot2::geom_vline(xintercept = as.numeric(ideal_goal),
-                        linetype = "dotted", linewidth = ref_line_size, color = "grey40") else NULL
+                        linetype = "dotted", linewidth = 0.3, color = "grey40") else NULL
   
   vline_cut <- if (has_ideal)
     ggplot2::geom_vline(xintercept = as.numeric(ideal_cut),
-                        linetype = "dashed", linewidth = ref_line_size, color = "grey40") else NULL
+                        linetype = "dashed", linewidth = 0.3, color = "grey40") else NULL
   
   # Absolute panel
   y_top <- y_abs_limit
@@ -652,24 +643,10 @@ plot_timeline <- function(df, layout = c("vanilla","split"),
     ggplot2::scale_x_date(breaks = breaks, labels = scales::label_date(format = "%d.%m.%Y"),
                           expand = ggplot2::expansion(mult = c(0, 0.01))) +
     ggplot2::scale_y_continuous(limits = c(0, 100), breaks = c(0,25,50,75,100)) +
-    ggplot2::labs(
-      x = NULL,
-      y = "Percent of integration target sample size",
-      subtitle = stringr::str_wrap(
-        if (has_pred) perc_sub_pred else if (has_ideal) perc_sub_ideal else perc_sub_emp,
-        width = middle_subtitle_wrap
-      )
-    ) +
+    ggplot2::labs(x = NULL, y = "Percent of integration target sample size",
+                  subtitle = if (has_pred) perc_sub_pred else if (has_ideal) perc_sub_ideal else perc_sub_emp) +
     ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.box = "vertical",
-      plot.subtitle = ggplot2::element_text(
-        size = middle_subtitle_size,
-        lineheight = 0.95,
-        margin = ggplot2::margin(b = 4)
-      )
-    ) +
+    ggplot2::theme(legend.position = "right", legend.box = "vertical") +
     ggplot2::scale_color_manual(values = col_map, name = NULL,
                                 limits = legend_order, breaks = legend_order, drop = FALSE,
                                 guide = ggplot2::guide_legend(ncol = 1))
