@@ -245,35 +245,67 @@ read_flagged_items <- function(path, dataset_label, threshold_value) {
 drop_flagged_items_from_keys <- function(keys, flagged_tbl) {
   if (is.null(flagged_tbl) || !nrow(flagged_tbl)) return(keys)
   
-  flagged_norm <- normalize_id_local(flagged_tbl$item)
+  flags <- flagged_tbl %>%
+    dplyr::mutate(
+      level_norm = tolower(trimws(as.character(.data$level))),
+      scale_norm = toupper(trimws(as.character(.data$scale))),
+      subscale_norm = tolower(trimws(as.character(.data$subscale))),
+      item_norm = normalize_id_local(.data$item)
+    )
+  
+  remove_flagged <- function(items, level, scale, subscale = NA_character_) {
+    items <- as.character(items)
+    
+    relevant_flags <- flags %>%
+      dplyr::filter(
+        .data$level_norm == tolower(level),
+        .data$scale_norm == toupper(trimws(as.character(scale)))
+      )
+    
+    if (identical(level, "subscale")) {
+      sub_norm <- tolower(trimws(as.character(subscale)))
+      
+      relevant_flags <- relevant_flags %>%
+        dplyr::filter(
+          !is.na(.data$subscale_norm),
+          .data$subscale_norm == sub_norm
+        )
+    }
+    
+    drop_norm <- unique(relevant_flags$item_norm)
+    
+    items[!(normalize_id_local(items) %in% drop_norm)]
+  }
   
   if (!is.null(keys$items_by_scale) && nrow(keys$items_by_scale)) {
     keys$items_by_scale <- keys$items_by_scale %>%
       dplyr::mutate(
-        items = purrr::map(.data$items, ~ {
-          x <- as.character(.x)
-          x[!(normalize_id_local(x) %in% flagged_norm)]
-        })
+        items = purrr::map2(
+          .data$items,
+          .data$scale,
+          ~ remove_flagged(
+            items = .x,
+            level = "scale",
+            scale = .y
+          )
+        )
       )
   }
   
   if (!is.null(keys$items_by_subscale) && nrow(keys$items_by_subscale)) {
     keys$items_by_subscale <- keys$items_by_subscale %>%
       dplyr::mutate(
-        items = purrr::map(.data$items, ~ {
-          x <- as.character(.x)
-          x[!(normalize_id_local(x) %in% flagged_norm)]
-        })
-      )
-  }
-  
-  if (!is.null(keys$items_by_higher_order) && nrow(keys$items_by_higher_order)) {
-    keys$items_by_higher_order <- keys$items_by_higher_order %>%
-      dplyr::mutate(
-        items = purrr::map(.data$items, ~ {
-          x <- as.character(.x)
-          x[!(normalize_id_local(x) %in% flagged_norm)]
-        })
+        items = purrr::pmap(
+          list(.data$items, .data$scale, .data$subscale),
+          function(items, scale, subscale) {
+            remove_flagged(
+              items = items,
+              level = "subscale",
+              scale = scale,
+              subscale = subscale
+            )
+          }
+        )
       )
   }
   
@@ -535,8 +567,13 @@ add_subscale_scores <- function(df, keys, scoring_df,
     sc    <- as.character(subs_tbl$scale[i])
     sub   <- as.character(subs_tbl$subscale[i])
     items <- subs_tbl$items[[i]]
-    if (length(items) < 1L) next
-    
+    if (length(items) < 1L) {
+      log_msg(
+        "Skipped subscale '", sc, " / ", sub,
+        "' because no items remained after level-specific filtering."
+      )
+      next
+    }    
     new_col <- paste0(prefix, safe_score_name(sc), "__", safe_score_name(sub))
     
     if (toupper(trimws(sc)) == "SUQ") {
