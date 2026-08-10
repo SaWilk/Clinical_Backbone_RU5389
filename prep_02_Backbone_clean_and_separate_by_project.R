@@ -426,17 +426,17 @@ file_psytool_info <- "data.csv"
 
 psytool_dir_adults <- pick_newest_matching_dir(
   file.path(name, psytool_path),
-  "^PsyToolkitData_RU5389_BB_adults_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+  "adults_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
 )
 
 psytool_dir_adolescents <- pick_newest_matching_dir(
   file.path(name, psytool_path),
-  "^PsyToolkitData_RU5389_BB_adolescents_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+  "adolescents_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
 )
 
 psytool_dir_children <- pick_newest_matching_dir(
   file.path(name, psytool_path),
-  "^PsyToolkitData_RU5389_BB_children_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
+  "children_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$"
 )
 
 cog_paths <- c(
@@ -1612,13 +1612,70 @@ res_parents_p6 <- resolve_duplicates(dat_parents_p6, vp_col, submit_col,
 dat_parents_p6 <- res_parents_p6$cleaned
 trash_parents_p6 <- res_parents_p6$trash_bin
 
+# Flag invariant responding across all raw IDAS items ---------------------------
+# Do NOT remove these otherwise valid questionnaire rows here. The flag is
+# exported with the questionnaire data and is acted upon in prep03.
+add_invariant_idas_flag <- function(df, sample, item_info = item_info_adults) {
+  # IDAS item names in the questionnaire data are identical to the names in the
+  # Item column of Item Information Adults, e.g. IDAS[001], IDAS[002], ...
+  idas_items <- item_info$Item[
+    grepl("^IDAS\\[[0-9]+\\]$", trimws(as.character(item_info$Item)))
+  ]
+  idas_items <- unique(trimws(as.character(idas_items)))
+  
+  if (!length(idas_items)) {
+    stop("No IDAS item names found in item_info_adults$Item.")
+  }
+  
+  # Exact matching only: no renaming or normalization.
+  idas_cols <- idas_items[idas_items %in% names(df)]
+  missing_idas_cols <- setdiff(idas_items, names(df))
+  
+  if (!length(idas_cols)) {
+    stop(
+      "None of the IDAS items listed in item_info_adults$Item were found in sample '",
+      sample, "'."
+    )
+  }
+  
+  if (length(missing_idas_cols)) {
+    stop(
+      "Some IDAS items listed in item_info_adults$Item are missing from sample '",
+      sample, "': ", paste(missing_idas_cols, collapse = ", ")
+    )
+  }
+  
+  idas_values <- as.data.frame(
+    lapply(df[, idas_cols, drop = FALSE], as.character),
+    stringsAsFactors = FALSE
+  )
+  
+  invariant <- apply(idas_values, 1, function(x) {
+    length(unique(x)) == 1L
+  })
+  
+  df$idas_invariant_response_flag <- as.logical(invariant)
+  
+  message(
+    "IDAS invariant-response flag for ", sample, ": checked ",
+    length(idas_cols), " raw IDAS items; flagged ",
+    sum(df$idas_invariant_response_flag), " of ", nrow(df),
+    " row(s). No rows removed in this script."
+  )
+  
+  df
+}
+
+dat_adults <- add_invariant_idas_flag(dat_adults, "adults")
+dat_adolescents <- add_invariant_idas_flag(dat_adolescents, "adolescents")
+
 # Special Case Project 8: Check C, P and A entries -----------------------------
 check_vpid_forms(dat_children_parents, logger = logger)
 
 # Save the Trash just to be safe -----------------------------------------------
-all_trash_adults      <- dplyr::bind_rows(all_empty_ad,      trash_adults)
-all_trash_children    <- dplyr::bind_rows(all_empty_ch,      trash_children_parents)
-all_trash_adolescents <- dplyr::bind_rows(empty_adlsc_7,     trash_adolescents)
+all_trash_adults      <- dplyr::bind_rows(all_empty_ad,  trash_adults)
+all_trash_children    <- dplyr::bind_rows(all_empty_ch,  trash_children_parents)
+all_trash_adolescents <- dplyr::bind_rows(empty_adlsc_7, trash_adolescents)
 
 write_xlsx(all_trash_adults,      file.path(out_path, "discarded", sprintf("deleted-rows_%s_adults.xlsx", today)))
 write_xlsx(all_trash_children,    file.path(out_path, "discarded", sprintf("deleted-rows_%s_children.xlsx", today)))
@@ -1903,6 +1960,9 @@ psytool_info_adults <- audit_id_change(
   criterion = "Project 8 cogtests: typo/extra zero; ID 800028 corrected to 80028."
 )
 
+# Project 8: wrong cogtest ID
+psytool_info_adults$id[psytool_info_adults$id == 80144L] <- 80090L
+
 psytool_info_children <- audit_snapshot(psytool_info_children)
 before_p8_child_cogtest_mapping <- psytool_info_children
 
@@ -1967,10 +2027,11 @@ pilot_ad_9  <- c()
 pilot_ad_8  <- c(80350)
 pilot_asc_7 <- c()
 pilot_ch_6  <- c(62973, 62980, 62998, 62992, 62987, 62989, 62994, 62970)
+pilot_ch_8  <- c(80350)
 
 pilot_ad_all  <- c(pilot_ad_2, pilot_ad_9, pilot_ad_8, pilots_ad_auto)
 pilot_asc_all <- c(pilots_asc_auto)
-pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6)
+pilots_ch_all <- c(pilots_ch_auto, pilot_ch_6, pilot_ch_8)
 
 # --- save P9 (and all) pilot rows before extracting them out ------------------
 pilot_psytool_adults <- dplyr::filter(psytool_info_adults, .data[[vp_col]] %in% pilot_ad_all)
@@ -2034,14 +2095,18 @@ psytool_info_adolescents <- audit_row_action(
 )
 
 # Project 8
+# The corresponding questionnaire records are unusable and are already removed
+# above. Remove their cognitive-test records as well so the modalities remain
+# consistent.
 psytool_info_adults <- audit_row_action(
   psytool_info_adults,
-  idx = psytool_info_adults$id == 80009L & psytool_info_adults$p == 8L,
+  idx = psytool_info_adults$id %in% c(80009L, 80011L) &
+    psytool_info_adults$p == 8L,
   id_col = "id",
   project_col = "p",
   sample = "adults",
   data_type = "experiment_data",
-  criterion = "Project 8 cogtests adults: ID 80009 deleted as manually specified.",
+  criterion = "Project 8 cogtests adults: IDs 80009 and 80011 deleted because their corresponding questionnaire records are incomplete and cannot be salvaged.",
   action = "deleted"
 )
 

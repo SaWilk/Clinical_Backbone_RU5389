@@ -64,7 +64,15 @@ CFG <- list(
   enrichment_group_candidates = c("group", "paper_group", "clinical_group", "participant_group", "case_control", "patient_hc"),
   clean_master = NULL,
   item_info = NULL,
-  score_total_override = c()
+  score_total_override = c(),
+  # Derived score columns that do not correspond one-to-one to an Item
+  # Information subscale and therefore cannot be inferred from the keys.
+  derived_score_specs = data.frame(
+    scale = "SUQ",
+    subscale = "illegal-drugs",
+    col = "score_suq__illegal_drugs",
+    stringsAsFactors = FALSE
+  )
 )
 
 # ---- Helpers -----------------------------------------------------------------
@@ -562,7 +570,11 @@ export_items_tbl <- function(d, id_col, ii_rows) {
     )
 }
 
-expected_score_cols_from_keys <- function(keys_obj, scales, total_override = c()) {
+expected_score_cols_from_keys <- function(
+    keys_obj,
+    scales,
+    total_override = c(),
+    derived_score_specs = CFG$derived_score_specs) {
   scales <- unique(as.character(scales))
   scales <- scales[is_nonempty(scales)]
   
@@ -599,7 +611,20 @@ expected_score_cols_from_keys <- function(keys_obj, scales, total_override = c()
       dplyr::distinct()
   }
   
-  dplyr::bind_rows(expected_total, expected_sub) %>%
+  expected_derived <- tibble::tibble()
+  if (!is.null(derived_score_specs) && nrow(derived_score_specs)) {
+    expected_derived <- tibble::as_tibble(derived_score_specs) %>%
+      dplyr::filter(.data$scale %in% scales) %>%
+      dplyr::filter(
+        is_nonempty(.data$scale),
+        is_nonempty(.data$subscale),
+        is_nonempty(.data$col)
+      ) %>%
+      dplyr::mutate(level = "derived_subscale") %>%
+      dplyr::select(.data$level, .data$scale, .data$subscale, .data$col)
+  }
+
+  dplyr::bind_rows(expected_total, expected_sub, expected_derived) %>%
     dplyr::distinct()
 }
 

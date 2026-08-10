@@ -329,7 +329,6 @@ check_header_match <- function(q_df, item_info) {
   not_in_ii <- setdiff(q_norm, ii_norm)
   
   exempt <- c("p", "project", "rushingflag", "rushing_flag", "rushingmethod",
-              "idasinvariantresponseflag", "idas_invariant_response_flag",
               "participant", "participantid", "vp", "vpid", "id", "submitdate",
               "startdate", "datestamp", "end", "consent", "startlanguage",
               "seed", "refurl", "lastpage")
@@ -404,56 +403,20 @@ build_keys <- function(item_info) {
 
 # ---- Row filtering -----------------------------------------------------------
 remove_flagged_rows <- function(q_df, sample) {
-  as_flag_logical <- function(x) {
-    if (is.logical(x)) return(dplyr::coalesce(x, FALSE))
-    if (is.numeric(x)) return(!is.na(x) & x != 0)
-    tolower(trimws(as.character(x))) %in% c("true", "t", "1", "yes", "y")
+  flag_col <- intersect(names(q_df), c("rushing_flag", "rushingflag")) |> purrr::pluck(1, .default = NA_character_)
+  if (is.na(flag_col)) {
+    log_msg("No rushing flag column found; 0 rows removed.")
+    return(list(clean = q_df, discarded = tibble::tibble()))
   }
-
-  rushing_col <- intersect(
-    names(q_df),
-    c("rushing_flag", "rushingflag")
-  ) |> purrr::pluck(1, .default = NA_character_)
-
-  idas_col <- intersect(
-    names(q_df),
-    c("idas_invariant_response_flag", "idasinvariantresponseflag")
-  ) |> purrr::pluck(1, .default = NA_character_)
-
-  rushing_flag <- if (is.na(rushing_col)) {
-    rep(FALSE, nrow(q_df))
-  } else {
-    as_flag_logical(q_df[[rushing_col]])
-  }
-
-  idas_flag <- if (is.na(idas_col)) {
-    rep(FALSE, nrow(q_df))
-  } else {
-    as_flag_logical(q_df[[idas_col]])
-  }
-
-  remove_row <- rushing_flag | idas_flag
-
-  discarded <- q_df[remove_row, , drop = FALSE]
-  if (nrow(discarded)) {
-    discarded$.__reason__ <- dplyr::case_when(
-      rushing_flag[remove_row] & idas_flag[remove_row] ~
-        "rushing_flag_and_same_response_on_all_raw_IDAS_items",
-      rushing_flag[remove_row] ~ "rushing_flag",
-      idas_flag[remove_row] ~ "same_response_on_all_raw_IDAS_items",
-      TRUE ~ "flagged_for_exclusion"
-    )
-  }
-
-  clean <- q_df[!remove_row, , drop = FALSE]
-
-  log_msg(glue::glue(
-    "Sample '{sample}': removed {sum(remove_row)} flagged row(s) in prep03 "
-  ),
-  "(rushing: ", sum(rushing_flag),
-  "; invariant IDAS responding: ", sum(idas_flag),
-  "; both: ", sum(rushing_flag & idas_flag), ").")
-
+  flag_val <- q_df[[flag_col]]
+  flag_log <- dplyr::case_when(
+    is.logical(flag_val) ~ flag_val,
+    is.numeric(flag_val) ~ flag_val != 0,
+    TRUE ~ tolower(as.character(flag_val)) %in% c("true","t","1","yes","y")
+  )
+  discarded <- q_df %>% dplyr::filter(flag_log %in% TRUE)
+  clean     <- q_df %>% dplyr::filter(!(flag_log %in% TRUE))
+  log_msg(glue::glue("Sample '{sample}': removed {nrow(discarded)} rows due to rushing flag."))
   list(clean = clean, discarded = discarded)
 }
 

@@ -26,14 +26,15 @@ copy_psytool_files <- function(
   valid_samples <- c("adults", "adolescents", "children", "children_parents", "adults_remote")
   sample_root <- function(sample) {
     root <- file.path(base_dir, "raw_data", "psytoolkit")
-    # prefer timestamped folders like PsyToolkitData_RU5389_BB_adults_YYYY_MM_DD_HH_MM
-    pat  <- paste0("^PsyToolkitData_.*_", sample, "_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
-    hits <- list.dirs(root, full.names = FALSE, recursive = FALSE)
-    hits <- hits[grepl(pat, hits, ignore.case = TRUE)]
+    # The prefix is optional/arbitrary; only sample + timestamp at the end matter.
+    pat  <- paste0(sample, "_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}$")
+    hits <- list.dirs(root, full.names = TRUE, recursive = FALSE)
+    hits <- hits[grepl(pat, basename(hits), ignore.case = TRUE)]
     if (length(hits)) {
-      # pick the lexicographically last (newest) folder
-      best <- hits[order(hits, decreasing = TRUE)][1]
-      return(file.path(root, best, "experiment_data"))
+      # Use the most recently modified matching export folder.
+      info <- file.info(hits)
+      best <- hits[which.max(info$mtime)]
+      return(file.path(best, "experiment_data"))
     }
     # fallback to old static layout if the timestamped one doesn’t exist
     file.path(root, sample, "experiment_data")

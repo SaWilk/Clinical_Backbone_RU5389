@@ -36,7 +36,13 @@ CFG <- list(
   force_filtered_scores_to_mean = TRUE,
   # SUQ total is normally a sum of substance-specific Q2*Q3 scores.
   # In filtered/reduced variants, use the mean of retained substance scores instead.
-  suq_filtered_total_agg = "mean"
+  suq_filtered_total_agg = "mean",
+  # Additional derived SUQ subscale:
+  # combines every SUQ substance except Alcohol, Tobacco, Cannabis and Medication.
+  # With the current Item Information this includes Stimulants, Opioids,
+  # Hallucinogens, Inhalants and Other.
+  suq_illegal_drugs_label = "illegal-drugs",
+  suq_illegal_drugs_exclude = c("Alcohol", "Tobacco", "Cannabis", "Medication")
 )
 NON_SCORABLE_SCALES <- c(
   "FHSfamilytree", "health", "demographics", "times",
@@ -498,6 +504,97 @@ score_suq_total_wide <- function(d, keys, col_map, agg = c("sum", "mean")) {
   out
 }
 
+score_suq_composite_wide <- function(d, keys, col_map,
+                                     exclude_subscales = character(0),
+                                     agg = c("sum", "mean")) {
+  agg <- match.arg(agg)
+
+  if (is.null(keys$items_by_subscale) || !nrow(keys$items_by_subscale)) {
+    return(NULL)
+  }
+
+  exclude_norm <- tolower(trimws(as.character(exclude_subscales)))
+
+  suq_subs <- keys$items_by_subscale %>%
+    dplyr::filter(toupper(trimws(as.character(.data$scale))) == "SUQ") %>%
+    dplyr::filter(!is.na(.data$subscale), .data$subscale != "") %>%
+    dplyr::mutate(.subscale_norm = tolower(trimws(as.character(.data$subscale)))) %>%
+    dplyr::filter(!(.data$.subscale_norm %in% exclude_norm))
+
+  if (!nrow(suq_subs)) return(NULL)
+
+  can_score <- vapply(
+    seq_len(nrow(suq_subs)),
+    function(i) can_score_suq_subscale_wide(suq_subs$items[[i]], col_map),
+    logical(1)
+  )
+
+  suq_subs <- suq_subs[can_score, , drop = FALSE]
+  if (!nrow(suq_subs)) return(NULL)
+
+  S <- purrr::map_dfc(seq_len(nrow(suq_subs)), function(i) {
+    nm <- safe_score_name(suq_subs$subscale[i])
+    tibble::tibble(
+      !!nm := score_suq_subscale_wide(d, suq_subs$items[[i]], col_map)
+    )
+  })
+
+  n_nonmiss <- rowSums(!is.na(as.matrix(S)))
+  out <- if (agg == "sum") rowSums(S, na.rm = TRUE) else rowMeans(S, na.rm = TRUE)
+  out[n_nonmiss == 0] <- NA_real_
+
+  list(
+    score = out,
+    included_subscales = as.character(suq_subs$subscale)
+  )
+}
+
+add_suq_illegal_drugs_score <- function(
+    df,
+    keys,
+    prefix = "score_",
+    label = CFG$suq_illegal_drugs_label,
+    exclude_subscales = CFG$suq_illegal_drugs_exclude,
+    agg = c("sum", "mean")) {
+
+  agg <- match.arg(agg)
+  col_map <- make_col_map(df)
+
+  composite <- score_suq_composite_wide(
+    d = df,
+    keys = keys,
+    col_map = col_map,
+    exclude_subscales = exclude_subscales,
+    agg = agg
+  )
+
+  new_col <- paste0(
+    prefix,
+    safe_score_name("SUQ"),
+    "__",
+    safe_score_name(label)
+  )
+
+  if (is.null(composite)) {
+    log_msg(
+      "Skipped derived SUQ subscale '", label, "' -> ", new_col,
+      " because no complete eligible SUQ Q2/Q3 pairs remained."
+    )
+    return(df)
+  }
+
+  df[[new_col]] <- composite$score
+
+  log_msg(
+    "Scored derived SUQ subscale '", label, "' -> ", new_col,
+    " (mode=", agg, " of: ",
+    paste(composite$included_subscales, collapse = ", "),
+    ")."
+  )
+
+  df
+}
+
 add_scale_scores <- function(df, keys, scoring_df,
                              prefix = "score_",
                              default_min_prop = CFG$min_prop_items_default,
@@ -667,6 +764,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
     prefix = "score_",
     exclude_scales = NON_SCORABLE_SCALES
   )
+  df_scored <- add_suq_illegal_drugs_score(
+    df_scored,
+    keys,
+    prefix = "score_",
+    agg = "sum"
+  )
   assert_no_missing_scores(df_scored, sample)
   
   if (isTRUE(CFG$add_z_scores_to_scored_masters)) {
@@ -703,6 +806,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         prefix = "score_",
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean
+      )
+      df_scored_f <- add_suq_illegal_drugs_score(
+        df_scored_f,
+        keys_filt,
+        prefix = "score_",
+        agg = CFG$suq_filtered_total_agg
       )
       
       suffix_tag <- make_threshold_tag(CFG$loading_threshold)
@@ -752,6 +861,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         prefix = "score_",
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean
+      )
+      df_scored_combined_f <- add_suq_illegal_drugs_score(
+        df_scored_combined_f,
+        keys_combined_filt,
+        prefix = "score_",
+        agg = CFG$suq_filtered_total_agg
       )
       
       suffix_tag_combined <- paste0(make_threshold_tag(CFG$loading_threshold), "_combined")
