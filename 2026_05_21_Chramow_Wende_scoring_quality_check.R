@@ -1,3 +1,16 @@
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# FOR: Demographic plots from CLEANED backbone exports only
+# Authors: Artem Chramow (saskia.wilken@uni-hamburg.de, saskia.a.wilken@gmail.com) &
+#          Michel Wende (antonia.bott@uni-hamburg.de)
+#          Saskia Wilken (saskia.wilken@uni-hamburg.de)
+# First edited: 2025-08-08 (SW)
+# Description:
+# Reads the cleaned master CSV(s) created by the cleaning pipeline and produces
+#  demographic plots (age density, education density, % women,
+# % single, height density, weight density).
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 ### config-Liste ###############################################################
 # FHS
 confidence_cutoff = 1
