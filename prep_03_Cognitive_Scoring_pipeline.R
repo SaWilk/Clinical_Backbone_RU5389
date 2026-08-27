@@ -2,14 +2,14 @@
 # FOR: Backbone cognitive-test scoring (BACS, WCST, LNS)
 # Adapted for the RU5389 Backbone pipeline
 #
-# Input:
-#   <script_dir>/01_project_data/raw_data/**/experiment_data/
-# Legacy fallback:
-#   <script_dir>/01_project_data/**/experiment_data/
+# Input (per project):
+#   <script_dir>/01_project_data/<project>_backbone/raw_data/experiment_data/
+# Legacy fallback (per project):
+#   <script_dir>/01_project_data/<project>_backbone/experiment_data/
 #
-# Output:
-#   <script_dir>/01_project_data/derivatives/
-# The relative raw-data folder structure and every input date stamp are retained.
+# Output (per project):
+#   <script_dir>/01_project_data/<project>_backbone/derivatives/experiment_data/
+# The project folder, internal structure, and every input date stamp are retained.
 #
 # Methodological note:
 # The FHS questionnaire block from the internship script is intentionally not
@@ -63,30 +63,16 @@ script_directory <- function() {
 
 script_dir <- script_directory()
 project_data_dir <- file.path(script_dir, "01_project_data")
-raw_root_preferred <- file.path(project_data_dir, "raw_data")
-derivatives_root <- file.path(project_data_dir, "derivatives")
 
-has_experiment_data <- function(root) {
-  if (!dir.exists(root)) return(FALSE)
-  any(basename(list.dirs(root, recursive = TRUE, full.names = TRUE)) == "experiment_data")
-}
-
-input_root <- if (has_experiment_data(raw_root_preferred)) {
-  raw_root_preferred
-} else if (has_experiment_data(project_data_dir)) {
-  warning(
-    "Using the legacy input layout directly below 01_project_data. ",
-    "Run the updated preprocessing script to migrate future exports to raw_data."
-  )
-  project_data_dir
-} else {
+if (!dir.exists(project_data_dir) || !any(
+  basename(list.dirs(project_data_dir, recursive = TRUE, full.names = TRUE)) == "experiment_data"
+)) {
   stop(
-    "No experiment_data folder found below: ",
+    "No project-level experiment_data folder found below: ",
     normalizePath(project_data_dir, winslash = "/", mustWork = FALSE)
   )
 }
-
-dir.create(derivatives_root, recursive = TRUE, showWarnings = FALSE)
+input_root <- project_data_dir
 
 # Generic helpers --------------------------------------------------------------
 empty_string <- function(x) {
@@ -120,10 +106,20 @@ normalize_path <- function(path) {
 }
 
 relative_path <- function(path, root) {
-  path <- normalize_path(path)
   root <- sub("/+$", "", normalize_path(root))
   prefix <- paste0(root, "/")
-  if (startsWith(path, prefix)) substring(path, nchar(prefix) + 1L) else basename(path)
+  vapply(
+    normalize_path(path),
+    function(one_path) {
+      if (startsWith(one_path, prefix)) {
+        substring(one_path, nchar(prefix) + 1L)
+      } else {
+        basename(one_path)
+      }
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
 }
 
 first_existing_column <- function(df, candidates, required = FALSE, label = NULL) {
@@ -222,7 +218,19 @@ discover_master_files <- function(root) {
     full.names = TRUE,
     ignore.case = TRUE
   )
-  candidates <- candidates[!grepl("(^|/)(old_data|discarded)(/|$)", normalize_path(candidates), ignore.case = TRUE)]
+  normalized <- normalize_path(candidates)
+  candidates <- candidates[!grepl(
+    "(^|/)(old_data|discarded|derivatives)(/|$)",
+    normalized,
+    ignore.case = TRUE
+  )]
+  # Refuse the incorrect transient layout 01_project_data/raw_data/... . Only
+  # project-level raw_data directories are valid inputs.
+  candidates <- candidates[!grepl(
+    "^raw_data/",
+    relative_path(candidates, project_data_dir),
+    ignore.case = TRUE
+  )]
   candidates <- candidates[!startsWith(basename(candidates), "~$")]
   parsed <- lapply(candidates, parse_master_name)
   parsed <- parsed[!vapply(parsed, is.null, logical(1))]
@@ -234,7 +242,10 @@ discover_master_files <- function(root) {
 
 candidate_data_directories <- function(master, root) {
   master_dir <- dirname(master$path)
-  fallback <- file.path(root, "all_projects_backbone", "experiment_data")
+  fallback <- c(
+    file.path(root, "all_projects_backbone", "raw_data", "experiment_data"),
+    file.path(root, "all_projects_backbone", "experiment_data")
+  )
   search_roots <- unique(c(master_dir, fallback[file.exists(fallback)]))
   directories <- unique(unlist(lapply(search_roots, function(x) {
     list.dirs(x, recursive = TRUE, full.names = TRUE)
@@ -674,9 +685,31 @@ status_summary <- function(scores) {
 }
 
 output_path_for_master <- function(master) {
-  relative_master <- relative_path(master$path, input_root)
-  output_name <- sub("_cogtests", "_cognitive_scores", basename(relative_master), fixed = TRUE)
-  output_dir <- file.path(derivatives_root, dirname(relative_master))
+  relative_master <- relative_path(master$path, project_data_dir)
+  parts <- strsplit(relative_master, "/", fixed = TRUE)[[1]]
+  project_index <- which(grepl(
+    "^([2-9]|all_projects)_backbone$",
+    parts,
+    ignore.case = TRUE
+  ))[1]
+  if (is.na(project_index)) {
+    stop("Input master is not inside a project backbone folder: ", master$path)
+  }
+  inside_project <- parts[(project_index + 1L):length(parts)]
+  if (length(inside_project) && tolower(inside_project[1]) == "raw_data") {
+    inside_project <- inside_project[-1]
+  }
+  if (!length(inside_project)) {
+    stop("Cannot derive an output path from input master: ", master$path)
+  }
+  output_name <- sub("_cogtests", "_cognitive_scores", basename(master$path), fixed = TRUE)
+  output_subdir <- dirname(paste(inside_project, collapse = "/"))
+  output_dir <- file.path(
+    project_data_dir,
+    parts[project_index],
+    "derivatives",
+    output_subdir
+  )
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   file.path(output_dir, output_name)
 }

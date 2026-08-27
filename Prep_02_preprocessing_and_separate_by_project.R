@@ -58,11 +58,18 @@ name <- switch(
 
 setwd(name)
 
-in_path          <- file.path("raw_data")
-out_path         <- file.path("01_project_data")
-function_path    <- file.path("functions")
-psytool_path     <- file.path("raw_data", "psytoolkit")
+in_path           <- file.path("raw_data")
+project_data_path <- file.path("01_project_data")
+out_path          <- project_data_path
+function_path     <- file.path("functions")
+psytool_path      <- file.path("raw_data", "psytoolkit")
 private_info_path <- file.path("private_information")
+
+# IMPORTANT: raw_data and derivatives belong INSIDE every project folder, e.g.
+# 01_project_data/3_backbone/raw_data and
+# 01_project_data/3_backbone/derivatives.
+# Nothing is moved into 01_project_data/raw_data or 01_project_data/derivatives.
+dir.create(out_path, recursive = TRUE, showWarnings = FALSE)
 
 # Specify the folder path
 discarded_path <- file.path(out_path, "discarded")
@@ -358,7 +365,8 @@ source(file.path(function_path, "analyze_rushing.R"))
 move_old_backbones(out_path, dry_run = FALSE)
 
 ## Setup Logging ---------------------------------------------------------------
-logger <- setup_logging("logs/all_action_points.log")
+dir.create(file.path(out_path, "logs"), recursive = TRUE, showWarnings = FALSE)
+logger <- setup_logging(file.path(out_path, "logs", "all_action_points.log"))
 
 ## Backbone surveys ------------------------------------------------------------
 file_adults            <- "results-survey564757_remids_translated.csv"
@@ -854,7 +862,16 @@ if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as
 
 # --- Project 4 Special-case Probanden-Fix: TIME_end (UTC) -> id = 40016 ----------------
 
-psytool_info_adults$id[psytool_info_adults$TIME_end == as.POSIXct("2025-10-23 06:39:00", tz = "UTC")] <- 40016L
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults$TIME_end == as.POSIXct("2025-10-23 06:39:00", tz = "UTC"),
+  id_col = "id",
+  new_id = 40016L,
+  project_col = "p",
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 4 cogtests: row identified by exact TIME_end 2025-10-23 06:39:00 UTC corrected to ID 40016."
+)
 
 # ---------- Remove empty Rows ----------
 LAST_P_EMPTY <- 7
@@ -1138,6 +1155,18 @@ dat_children_parents <- audit_id_change(
   sample = "children_parents",
   data_type = "questionnaire",
   criterion = "Project 8 questionnaire children/parents: known wrong VPID 80418 corrected to 80518."
+)
+
+dat_children_parents <- audit_id_change(
+  dat_children_parents,
+  idx = dat_children_parents[[vp_col]] == 80553 &
+    dat_children_parents[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 80533L,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: known wrong VPID 80553 corrected to 80533."
 )
 
 dat_children_parents <- audit_snapshot(dat_children_parents)
@@ -1960,8 +1989,42 @@ psytool_info_adults <- audit_id_change(
   criterion = "Project 8 cogtests: typo/extra zero; ID 800028 corrected to 80028."
 )
 
-# Project 8: wrong cogtest ID
-psytool_info_adults$id[psytool_info_adults$id == 80144L] <- 80090L
+# Project 8: wrong cogtest IDs
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 80144L &
+    psytool_info_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 80090L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests adults: known wrong ID 80144 corrected to 80090."
+)
+
+psytool_info_children <- audit_id_change(
+  psytool_info_children,
+  idx = psytool_info_children[[vp_col]] == 80418L &
+    psytool_info_children[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 8518L,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests children/parents: known wrong ID 80418 corrected to 8518."
+)
+
+psytool_info_children <- audit_id_change(
+  psytool_info_children,
+  idx = psytool_info_children[[vp_col]] == 80553L &
+    psytool_info_children[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 80533L,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests children/parents: known wrong ID 80553 corrected to 80533."
+)
 
 psytool_info_children <- audit_snapshot(psytool_info_children)
 before_p8_child_cogtest_mapping <- psytool_info_children
@@ -2470,3 +2533,82 @@ qc_results <- imap(datasets, function(dat, nm) {
   invisible(res)
 })
 
+
+# Final project-folder layout --------------------------------------------------
+# The existing writer functions produce files directly inside each
+# <project>_backbone folder. Only after every writer/QC step has finished, move
+# those raw/preprocessed outputs into that project's raw_data folder and create
+# the sibling derivatives folder. The move plan is conflict-checked in full
+# before any file is touched, and attempted moves are rolled back on failure.
+organize_project_backbone_outputs <- function(project_data_path) {
+  project_roots <- list.dirs(project_data_path, recursive = FALSE, full.names = TRUE)
+  project_roots <- project_roots[
+    grepl("^([2-9]|all_projects)_backbone$", basename(project_roots), ignore.case = TRUE)
+  ]
+  if (!length(project_roots)) {
+    warning("No project backbone folders found below: ", project_data_path)
+    return(invisible(NULL))
+  }
+
+  plan <- list()
+  k <- 0L
+  for (project_root in project_roots) {
+    raw_dir <- file.path(project_root, "raw_data")
+    derivatives_dir <- file.path(project_root, "derivatives")
+    dir.create(raw_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(derivatives_dir, recursive = TRUE, showWarnings = FALSE)
+
+    entries <- list.files(
+      project_root,
+      full.names = TRUE,
+      all.files = FALSE,
+      no.. = TRUE
+    )
+    entries <- entries[!basename(entries) %in% c("raw_data", "derivatives")]
+    for (source in entries) {
+      destination <- file.path(raw_dir, basename(source))
+      k <- k + 1L
+      plan[[k]] <- list(source = source, destination = destination)
+    }
+  }
+
+  conflicts <- vapply(
+    plan,
+    function(x) file.exists(x$destination) || dir.exists(x$destination),
+    logical(1)
+  )
+  if (any(conflicts)) {
+    details <- vapply(
+      plan[conflicts],
+      function(x) paste0(x$source, " -> ", x$destination),
+      character(1)
+    )
+    stop(
+      "Project-folder organization stopped before moving anything because ",
+      "destination paths already exist:\n", paste(details, collapse = "\n")
+    )
+  }
+
+  moved <- list()
+  for (i in seq_along(plan)) {
+    step <- plan[[i]]
+    if (!file.rename(step$source, step$destination)) {
+      if (length(moved)) {
+        for (done in rev(moved)) file.rename(done$destination, done$source)
+      }
+      stop(
+        "Could not move project output; completed moves were rolled back: ",
+        step$source, " -> ", step$destination
+      )
+    }
+    moved[[length(moved) + 1L]] <- step
+  }
+
+  message(
+    "Organized ", length(project_roots),
+    " project folder(s): raw outputs are in raw_data; derivatives folders exist."
+  )
+  invisible(plan)
+}
+
+organize_project_backbone_outputs(out_path)
