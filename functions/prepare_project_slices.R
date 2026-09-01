@@ -102,7 +102,11 @@ prepare_project_slices <- function(
   file_suffix    <- if (data_type == "experiment_data") "cogtests"        else "questionnaire"
   env_suffix     <- if (data_type == "experiment_data") "cogtest"         else "questionnaire"
   subfolder_main <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
-  subpath_parts  <- if (pilot_mode) c("pilot_data", subfolder_main) else c(subfolder_main)
+  subpath_parts  <- if (pilot_mode) {
+    c("raw_data", "pilot_data", subfolder_main)
+  } else {
+    c("raw_data", subfolder_main)
+  }
   
   # ----- split df, build split_list & assign to .GlobalEnv -----
   parse_pid <- function(lbl) { s <- trimws(as.character(lbl)); d <- gsub("\\D+", "", s); if (nzchar(d)) d else "unknown" }
@@ -111,10 +115,16 @@ prepare_project_slices <- function(
   for (lbl in names(parts)) {
     d <- parts[[lbl]]
     pid <- parse_pid(lbl)
-    varname <- sprintf("data_%s_p_%s_%s", sample_name, pid, env_suffix)
+    varname <- sprintf(
+      "data_%s_p_%s_%s%s",
+      sample_name,
+      pid,
+      env_suffix,
+      if (pilot_mode) "_pilot" else ""
+    )
     assign(varname, d, envir = .GlobalEnv)
     
-    # paths under <root>/01_project_data/<PID>_backbone/<subfolder>
+    # paths under <root>/01_project_data/<PID>_backbone/raw_data/<subfolder>
     project_dir <- file.path(base_dir, sprintf("%s_backbone", pid))
     pid_dir <- do.call(file.path, as.list(c(project_dir, subpath_parts)))
     
@@ -127,7 +137,12 @@ prepare_project_slices <- function(
   
   # composite in memory (+ assign)
   comp_df <- do.call(rbind, lapply(split_list, function(x){ d <- x$df; if (!is.null(d)) { d$.pid <- x$pid; d } }))
-  comp_var <- sprintf("data_%s_ALL_%s", sample_name, env_suffix)
+  comp_var <- sprintf(
+    "data_%s_ALL_%s%s",
+    sample_name,
+    env_suffix,
+    if (pilot_mode) "_pilot" else ""
+  )
   assign(comp_var, comp_df, envir = .GlobalEnv)
   
   structure(list(

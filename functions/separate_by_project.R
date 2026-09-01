@@ -9,7 +9,7 @@
 #' @details
 #' **Purpose**
 #' - Create per-project deliverables (`.xlsx` and optionally `.csv`) under
-#'   `"<base>/<PID>_backbone/<subfolder>"`.
+#'   `"<base>/<PID>_backbone/raw_data/<subfolder>"`.
 #'
 #' **Behavior**
 #' - **Base directory resolution**
@@ -54,9 +54,11 @@
 #'   * For each split, compute `pid` as the digits from the label; if no digits,
 #'     use `"unknown"`.
 #'   * Assign the split into `.GlobalEnv` as
-#'     `data_<sample>_p_<pid>_<env_suffix>`.
+#'     `data_<sample>_p_<pid>_<env_suffix>`. In `pilot_mode`, append
+#'     `_pilot` so a pilot slice can never overwrite the corresponding main
+#'     project slice.
 #'   * Skip `pid %in% c("0","99","unknown")` and empty/all-NA splits.
-#'   * Destination directory: `file.path(base_dir, sprintf("%s_backbone", pid), subfolder)`.
+#'   * Destination directory: `file.path(base_dir, sprintf("%s_backbone", pid), "raw_data", subfolder)`.
 #'   * File base name: `"<pid>_<date>_<sample>_<suffix>"`.
 #'   * If `dry_run = FALSE`, write an `.xlsx` (via **writexl**) and, if
 #'     `export_csv = TRUE`, also a `.csv`.
@@ -91,7 +93,7 @@
 #' @returns
 #' A **named character vector** of unique output directories that were targeted.
 #' Names are `"<pid>_backbone"`, values are full paths like
-#' `"<base>/<pid>_backbone/<subfolder>"`.
+#' `"<base>/<pid>_backbone/raw_data/<subfolder>"`.
 #'
 #' @section Side effects:
 #' - Creates directories on disk (unless `dry_run = TRUE`).
@@ -276,7 +278,11 @@ separate_by_project <- function(
   subfolder_main <- if (data_type == "experiment_data") "experiment_data" else "questionnaires"
   
   # final subpath under <pid>_backbone/...
-  subpath_parts <- if (pilot_mode) c("pilot_data", subfolder_main) else c(subfolder_main)
+  subpath_parts <- if (pilot_mode) {
+    c("raw_data", "pilot_data", subfolder_main)
+  } else {
+    c("raw_data", subfolder_main)
+  }
   
   # ----- helpers -----
   parse_project <- function(lbl) {
@@ -299,7 +305,13 @@ separate_by_project <- function(
   for (lbl in names(parts)) {
     d <- parts[[lbl]]
     pid_clean <- parse_project(lbl)$pid
-    varname <- sprintf("data_%s_p_%s_%s", sample_name, pid_clean, env_suffix)
+    varname <- sprintf(
+      "data_%s_p_%s_%s%s",
+      sample_name,
+      pid_clean,
+      env_suffix,
+      if (pilot_mode) "_pilot" else ""
+    )
     assign(varname, d, envir = .GlobalEnv) # side effect per original spec
     
     # skip empty/unknown later; still store bookkeeping
@@ -344,7 +356,13 @@ separate_by_project <- function(
   }
   
   # ===== Stage D: write composite "all projects" per-sample dataset ===============
-  if (length(split_list) > 0) {
+  # Project-specific adult pilot exports are already retained under
+  # <pid>_backbone/raw_data/pilot_data. Do not also place them in the regular
+  # all_projects_backbone tree, where they could be mistaken for main data.
+  write_composite <- length(split_list) > 0 &&
+    !(isTRUE(pilot_mode) && identical(sample_name, "adults"))
+
+  if (write_composite) {
     comp_list <- lapply(split_list, function(x) {
       d <- x$df
       if (!is.null(d)) {
@@ -354,7 +372,7 @@ separate_by_project <- function(
     })
     comp_df <- do.call(rbind, comp_list)
     
-    all_projects_dir <- file.path(base_dir, "all_projects_backbone", subfolder_main)
+    all_projects_dir <- file.path(base_dir, "all_projects_backbone", "raw_data", subfolder_main)
     ensure_dir(all_projects_dir)
     
     comp_base <- paste(c("ALL", date_str, if (pilot_mode) "PILOT" else NULL, sample_name, file_suffix), collapse = "_")
@@ -363,14 +381,16 @@ separate_by_project <- function(
       writexl::write_xlsx(comp_df, file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
     }
     if (verbose) message("Saved composite sample dataset: ", file.path(all_projects_dir, paste0(comp_base, ".xlsx")))
+  } else if (length(split_list) > 0 && verbose) {
+    message("Skipping composite write for pilot adults (kept under the project-specific pilot_data folder).")
   }
   
   # ===== finalize return value ====================================================
   collected_dirs <- unique(collected_dirs)
   if (pilot_mode) {
-    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))
+    names(collected_dirs) <- basename(dirname(dirname(dirname(collected_dirs))))
   } else {
-    names(collected_dirs) <- basename(dirname(collected_dirs))
+    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))
   }
   return(collected_dirs)
 }

@@ -39,7 +39,12 @@ write_project_slices <- function(
     }
     
     if (!is.null(comp_df)) {
-      all_projects_dir <- file.path(prep$base_dir, "all_projects_backbone", prep$subfolder_main)
+      all_projects_dir <- file.path(
+        prep$base_dir,
+        "all_projects_backbone",
+        "raw_data",
+        prep$subfolder_main
+      )
       .ensure_dir(all_projects_dir, dry_run)
       
       if (!dry_run) {
@@ -74,9 +79,9 @@ write_project_slices <- function(
   
   collected_dirs <- unique(collected_dirs)
   if (prep$pilot_mode) {
-    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))
+    names(collected_dirs) <- basename(dirname(dirname(dirname(collected_dirs))))
   } else {
-    names(collected_dirs) <- basename(dirname(collected_dirs))
+    names(collected_dirs) <- basename(dirname(dirname(collected_dirs)))
   }
   
   collected_dirs

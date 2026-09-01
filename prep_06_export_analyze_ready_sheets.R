@@ -21,9 +21,11 @@
 #
 #   COMPLETE (questionnaire-only, explicitly configured below):
 #   D) <samples>_complete_items.xlsx
-#      - ALL item columns belonging to CFG$questionnaire_scales
+#      - ALL item columns belonging to CFG$questionnaire_scales, including FHS
+#        plus fhs_*/qc_fhs_* outputs (direct-name/contact/free-text FHS fields
+#        are privacy-filtered)
 #   E) <samples>_complete_subscales.xlsx
-#      - existing score_* columns created by prep05 belonging to CFG$questionnaire_scales
+#      - existing score_* columns plus the fhs_* and qc_fhs_* outputs from prep05
 #
 # Optional filtered exports:
 #   same filenames with suffix _lt020 (or whatever threshold tag applies)
@@ -58,7 +60,25 @@ CFG <- list(
   export_enriched = TRUE,
   loading_threshold = 0.30,   # make more aggressive by increasing this, e.g. 0.30 / 0.35
   
-  questionnaire_scales = c("IDAS","CAPE","AQ","SUQ","ASRS","BISBAS","IUS","APS","TICS","CTQ","MAP-SR"),
+  questionnaire_scales = c(
+    "IDAS", "CAPE", "AQ", "SUQ", "ASRS", "BISBAS", "IUS", "APS",
+    "TICS", "CTQ", "MAP-SR", "FHSfamilytree"
+  ),
+  # FHS contains a mixture of numeric confidence ratings, Y/N fields and text.
+  # Preserve its source types in COMPLETE item exports instead of coercing all
+  # fields to numeric.
+  non_numeric_item_scales = c("FHSfamilytree"),
+  # Direct names/contact fields and unstructured free text are not appropriate
+  # in analysis-ready workbooks. Structured FHS items and derived FHS fields
+  # remain available.
+  complete_excluded_item_patterns = c(
+    "^parents(001|002)$", "names", "contact", "^relativesinfo$",
+    "^fhsopentext$", "^ownpsychdiagnother$"
+  ),
+  complete_auxiliary_column_pattern = paste0(
+    "^(fhs_(any_response|num_|parents_|siblings_|children_|relatives_|",
+    "prop_|all_diagnoses_|treated_diagnoses_)|qc_fhs_)"
+  ),
   enrichment_demographics_scale = "demographics",
   enrichment_date_candidates = c("date", "datum", "startdate", "start_date", "submit_date", "submitted_at", "enddate", "end_date"),
   enrichment_group_candidates = c("group", "paper_group", "clinical_group", "participant_group", "case_control", "patient_hc"),
@@ -551,7 +571,9 @@ message("Wrote: ", out_strat)
 # -----------------------------
 # Export builders
 # -----------------------------
-export_items_tbl <- function(d, id_col, ii_rows) {
+export_items_tbl <- function(d, id_col, ii_rows,
+                             include_complete_auxiliary = FALSE,
+                             dataset_label = NA_character_) {
   col_map <- tibble::tibble(orig = names(d), item_norm = normalize_id(names(d))) |>
     dplyr::distinct(.data$item_norm, .keep_all = TRUE)
   
@@ -562,12 +584,59 @@ export_items_tbl <- function(d, id_col, ii_rows) {
     unique()
   
   if (!length(item_cols)) return(NULL)
-  
-  d |>
-    dplyr::transmute(
-      !!id_col := as.character(.data[[id_col]]),
-      dplyr::across(dplyr::all_of(item_cols), ~ suppressWarnings(as.numeric(.x)))
+
+  non_numeric_items_norm <- ii_rows %>%
+    dplyr::filter(.data$scale %in% CFG$non_numeric_item_scales) %>%
+    dplyr::pull("item") %>%
+    normalize_id() %>%
+    unique()
+
+  out <- tibble::tibble(!!id_col := as.character(d[[id_col]]))
+  for (column in item_cols) {
+    if (normalize_id(column) %in% non_numeric_items_norm) {
+      out[[column]] <- d[[column]]
+    } else {
+      out[[column]] <- suppressWarnings(as.numeric(d[[column]]))
+    }
+  }
+
+  if (isTRUE(include_complete_auxiliary)) {
+    auxiliary_cols <- grep(
+      CFG$complete_auxiliary_column_pattern,
+      names(d),
+      value = TRUE
     )
+    required_fhs_cols <- c(
+      "fhs_any_response",
+      "fhs_num_diagnoses_self",
+      "fhs_num_treated_diagnoses_self",
+      "fhs_parents_with_diagnosis",
+      "fhs_siblings_with_diagnosis",
+      "fhs_children_with_diagnosis",
+      "fhs_relatives_total",
+      "fhs_relatives_with_diagnosis",
+      "fhs_all_diagnoses_self",
+      "fhs_treated_diagnoses_self"
+    )
+    missing_fhs_cols <- setdiff(required_fhs_cols, names(d))
+    if (length(missing_fhs_cols)) {
+      stop(
+        "COMPLETE item export is missing required FHS output columns",
+        if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
+        ": ", paste(missing_fhs_cols, collapse = ", "),
+        ". Run the updated prep_05_Score_Scales.R first.",
+        call. = FALSE
+      )
+    }
+    auxiliary_cols <- setdiff(auxiliary_cols, names(out))
+    if (length(auxiliary_cols)) {
+      out <- dplyr::bind_cols(
+        out,
+        d %>% dplyr::select(dplyr::all_of(auxiliary_cols))
+      )
+    }
+  }
+  out
 }
 
 expected_score_cols_from_keys <- function(
@@ -630,7 +699,8 @@ expected_score_cols_from_keys <- function(
 
 export_existing_scores_tbl <- function(d_scored, id_col, keys_obj, scales,
                                        total_override = c(),
-                                       dataset_label = NA_character_) {
+                                       dataset_label = NA_character_,
+                                       include_complete_auxiliary = FALSE) {
   if (is.null(d_scored)) {
     stop("Score export requested, but scored data is NULL", call. = FALSE)
   }
@@ -640,8 +710,43 @@ export_existing_scores_tbl <- function(d_scored, id_col, keys_obj, scales,
     scales = scales,
     total_override = total_override
   )
-  
-  if (!nrow(expected)) return(NULL)
+
+  auxiliary_cols <- if (isTRUE(include_complete_auxiliary)) {
+    grep(
+      CFG$complete_auxiliary_column_pattern,
+      names(d_scored),
+      value = TRUE
+    )
+  } else {
+    character(0)
+  }
+
+  if (isTRUE(include_complete_auxiliary)) {
+    required_fhs_cols <- c(
+      "fhs_any_response",
+      "fhs_num_diagnoses_self",
+      "fhs_num_treated_diagnoses_self",
+      "fhs_parents_with_diagnosis",
+      "fhs_siblings_with_diagnosis",
+      "fhs_children_with_diagnosis",
+      "fhs_relatives_total",
+      "fhs_relatives_with_diagnosis",
+      "fhs_all_diagnoses_self",
+      "fhs_treated_diagnoses_self"
+    )
+    missing_fhs_cols <- setdiff(required_fhs_cols, names(d_scored))
+    if (length(missing_fhs_cols)) {
+      stop(
+        "COMPLETE score export is missing required FHS output columns",
+        if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
+        ": ", paste(missing_fhs_cols, collapse = ", "),
+        ". Run the updated prep_05_Score_Scales.R first.",
+        call. = FALSE
+      )
+    }
+  }
+
+  if (!nrow(expected) && !length(auxiliary_cols)) return(NULL)
   
   present <- intersect(expected$col, names(d_scored))
   
@@ -671,8 +776,8 @@ export_existing_scores_tbl <- function(d_scored, id_col, keys_obj, scales,
   }
   
   present_nonempty <- unique(present_nonempty)
-  
-  if (!length(present_nonempty)) {
+
+  if (!length(present_nonempty) && !length(auxiliary_cols)) {
     message(
       "Score export: no non-missing score columns remained",
       if (!is.na(dataset_label)) paste0(" [", dataset_label, "]") else "",
@@ -684,11 +789,30 @@ export_existing_scores_tbl <- function(d_scored, id_col, keys_obj, scales,
     )
   }
   
-  d_scored %>%
-    dplyr::transmute(
-      !!id_col := as.character(.data[[id_col]]),
-      dplyr::across(dplyr::all_of(present_nonempty), ~ suppressWarnings(as.numeric(.x)))
+  out <- d_scored %>%
+    dplyr::transmute(!!id_col := as.character(.data[[id_col]]))
+
+  if (length(present_nonempty)) {
+    out <- dplyr::bind_cols(
+      out,
+      d_scored %>%
+        dplyr::transmute(
+          dplyr::across(
+            dplyr::all_of(present_nonempty),
+            ~ suppressWarnings(as.numeric(.x))
+          )
+        )
     )
+  }
+
+  if (length(auxiliary_cols)) {
+    out <- dplyr::bind_cols(
+      out,
+      d_scored %>% dplyr::select(dplyr::all_of(auxiliary_cols))
+    )
+  }
+
+  out
 }
 
 
@@ -828,6 +952,30 @@ make_enriched_existing_sheets <- function(x, masters, ii_rows,
   out
 }
 
+matches_any_pattern <- function(x, patterns) {
+  x <- as.character(x)
+  
+  patterns <- as.character(patterns)
+  patterns <- patterns[
+    !is.na(patterns) &
+      nzchar(trimws(patterns))
+  ]
+  
+  if (length(patterns) == 0L) {
+    return(rep(FALSE, length(x)))
+  }
+  
+  matched <- stringr::str_detect(
+    x,
+    stringr::regex(
+      paste0("(", paste(patterns, collapse = ")|("), ")"),
+      ignore_case = TRUE
+    )
+  )
+  
+  dplyr::coalesce(matched, FALSE)
+}
+
 # -----------------------------
 # HiTOP selection
 # -----------------------------
@@ -843,7 +991,26 @@ if (isTRUE(CFG$export_hitop) && length(hitop_cols)) {
 # -----------------------------
 ii_complete <- NULL
 if (isTRUE(CFG$export_complete)) {
-  ii_complete <- ii |> dplyr::filter(.data$scale %in% CFG$questionnaire_scales)
+  ii_complete_candidates <- ii |>
+    dplyr::filter(.data$scale %in% CFG$questionnaire_scales)
+
+  excluded_complete_items <- ii_complete_candidates |>
+    dplyr::filter(
+      matches_any_pattern(.data$item, CFG$complete_excluded_item_patterns)
+    )
+
+  ii_complete <- ii_complete_candidates |>
+    dplyr::filter(
+      !matches_any_pattern(.data$item, CFG$complete_excluded_item_patterns)
+    )
+
+  if (nrow(excluded_complete_items)) {
+    message(
+      "COMPLETE privacy filter excluded ", nrow(excluded_complete_items),
+      " direct-name/contact/free-text item(s): ",
+      paste(unique(excluded_complete_items$item), collapse = ", ")
+    )
+  }
   if (!nrow(ii_complete)) {
     stop("COMPLETE export: No Item Information rows match CFG$questionnaire_scales.", call. = FALSE)
   }
@@ -902,14 +1069,24 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
   scales_all <- unique(ii_complete$scale)
   
   for (obj in masters) {
-    tab_items <- export_items_tbl(obj$d, obj$id_col, ii_complete)
+    # Use the scored master here so reviewed FHS corrections and the
+    # existence-aware confidence recoding from prep05 are reflected in the
+    # COMPLETE item export as well as in the derived FHS columns.
+    tab_items <- export_items_tbl(
+      obj$d_scored_full,
+      obj$id_col,
+      ii_complete,
+      include_complete_auxiliary = TRUE,
+      dataset_label = paste0(obj$sample, " COMPLETE")
+    )
     tab_scores <- export_existing_scores_tbl(
       obj$d_scored_full,
       obj$id_col,
       obj$keys,
       scales_all,
       total_override = CFG$score_total_override,
-      dataset_label = paste0(obj$sample, " COMPLETE")
+      dataset_label = paste0(obj$sample, " COMPLETE"),
+      include_complete_auxiliary = TRUE
     )
     
     if (!is.null(tab_items)) {
@@ -1115,14 +1292,21 @@ if (isTRUE(CFG$export_loading_filtered)) {
           ii_complete
         }
         
-        tab_items <- export_items_tbl(obj$d, obj$id_col, ii_complete_filt)
+        tab_items <- export_items_tbl(
+          obj$d_scored_filtered,
+          obj$id_col,
+          ii_complete_filt,
+          include_complete_auxiliary = TRUE,
+          dataset_label = paste0(obj$sample, " COMPLETE_", threshold_tag)
+        )
         tab_scores <- export_existing_scores_tbl(
           obj$d_scored_filtered,
           obj$id_col,
           keys_filt,
           scales_all,
           total_override = CFG$score_total_override,
-          dataset_label = paste0(obj$sample, " COMPLETE_", threshold_tag)
+          dataset_label = paste0(obj$sample, " COMPLETE_", threshold_tag),
+          include_complete_auxiliary = TRUE
         )
         
         if (!is.null(tab_items)) {
@@ -1163,14 +1347,21 @@ if (isTRUE(CFG$export_loading_filtered)) {
           ii_complete
         }
         
-        tab_items_combined <- export_items_tbl(obj$d, obj$id_col, ii_complete_combined_filt)
+        tab_items_combined <- export_items_tbl(
+          obj$d_scored_combined,
+          obj$id_col,
+          ii_complete_combined_filt,
+          include_complete_auxiliary = TRUE,
+          dataset_label = paste0(combined_label, " COMPLETE_", threshold_tag)
+        )
         tab_scores_combined <- export_existing_scores_tbl(
           obj$d_scored_combined,
           obj$id_col,
           keys_combined_filt,
           scales_all,
           total_override = CFG$score_total_override,
-          dataset_label = paste0(combined_label, " COMPLETE_", threshold_tag)
+          dataset_label = paste0(combined_label, " COMPLETE_", threshold_tag),
+          include_complete_auxiliary = TRUE
         )
         
         if (!is.null(tab_items_combined)) {
@@ -1208,4 +1399,17 @@ if (isTRUE(CFG$export_loading_filtered)) {
       }
     }
   }
+}
+
+compact_column_name <- function(x) {
+  gsub("[^a-z0-9]", "", tolower(as.character(x)))
+}
+
+matches_any_pattern <- function(x, patterns) {
+  compact <- compact_column_name(x)
+  vapply(
+    compact,
+    function(one) any(vapply(patterns, grepl, logical(1), x = one)),
+    logical(1)
+  )
 }

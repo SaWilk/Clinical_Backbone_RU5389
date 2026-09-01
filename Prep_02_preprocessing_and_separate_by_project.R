@@ -260,8 +260,8 @@ write_project3_exp_split_exports <- function(exp1_df,
   type_stub <- if (identical(data_type, "questionnaires")) "questionnaire" else "cogtests"
   
   roots <- c(
-    file.path(out_path, "3_backbone", data_type),
-    file.path(out_path, "all_projects_backbone", data_type)
+    file.path(out_path, "3_backbone", "raw_data", data_type),
+    file.path(out_path, "all_projects_backbone", "raw_data", data_type)
   )
   
   f_exp1 <- sprintf("3_%s_%s_%s_exp-1.xlsx", today, sample_label, type_stub)
@@ -363,6 +363,38 @@ source(file.path(function_path, "analyze_rushing.R"))
 
 ## Move old Data ---------------------------------------------------------------
 move_old_backbones(out_path, dry_run = FALSE)
+
+## Create the clean target layout for this run ---------------------------------
+initialize_backbone_layout <- function(project_data_path) {
+  backbone_names <- c(paste0(2:9, "_backbone"), "all_projects_backbone")
+  standard_subdirs <- c(
+    file.path("raw_data", "questionnaires"),
+    file.path("raw_data", "experiment_data"),
+    "derivatives"
+  )
+
+  for (backbone_name in backbone_names) {
+    for (subdir in standard_subdirs) {
+      dir.create(
+        file.path(project_data_path, backbone_name, subdir),
+        recursive = TRUE,
+        showWarnings = FALSE
+      )
+    }
+  }
+
+  for (subdir in c("questionnaires", "experiment_data")) {
+    dir.create(
+      file.path(project_data_path, "9_backbone", "raw_data", "pilot_data", subdir),
+      recursive = TRUE,
+      showWarnings = FALSE
+    )
+  }
+
+  invisible(TRUE)
+}
+
+initialize_backbone_layout(out_path)
 
 ## Setup Logging ---------------------------------------------------------------
 dir.create(file.path(out_path, "logs"), recursive = TRUE, showWarnings = FALSE)
@@ -2237,7 +2269,8 @@ write_project3_exp_split_exports(
 )
 
 # ================= Pilot exception for Project 9 ==============================
-# Save pilot rows that belong to project 9 into '<pid>_backbone/pilot_data/'
+# Save pilot rows that belong to project 9 into
+# '<pid>_backbone/raw_data/pilot_data/'
 # using separate_by_project(..., pilot_mode = TRUE).
 
 write_p9_pilots <- function(df, sample_label, data_type, metadata_info) {
@@ -2300,7 +2333,7 @@ build_dest_dirs <- function(paths_vec) {
   if (!length(roots)) stop("No per-project folders (<digits>_backbone) found among the given paths.")
   
   proj_keys <- sub("^([0-9]+).*", "\\1", basename(roots))
-  stats::setNames(roots, proj_keys)
+  stats::setNames(file.path(roots, "raw_data"), proj_keys)
 }
 
 
@@ -2365,19 +2398,23 @@ copy_psytool_files(
   write_all_projects= TRUE
 )
 
-# Expose the P9 adults pilot subset under the name copy_psytool_files() expects
-if (exists("pilot_psytool_adults") && NROW(pilot_psytool_adults)) {
-  data_adults_p_9_cogtest <- pilot_psytool_adults
+# `write_p9_pilots()` creates the Project-9-only pilot object under the distinct
+# name `data_adults_p_9_cogtest_pilot`. Keeping this separate is essential:
+# overwriting `data_adults_p_9_cogtest` here would replace the main P9 slice.
+if (exists("data_adults_p_9_cogtest_pilot", envir = .GlobalEnv, inherits = FALSE) &&
+    NROW(get("data_adults_p_9_cogtest_pilot", envir = .GlobalEnv))) {
+  log_copy_p9_pilot <- copy_psytool_files(
+    env_objects        = "data_adults_p_9_cogtest_pilot",
+    cogtest_out_path   = out_path,
+    meta_env_name      = "cogtest_info",
+    allowed_projects   = "9",
+    middle_subdir      = NULL,
+    project_subdir     = "pilot_data",
+    folder_label       = "PILOT",
+    purge_old_dated    = TRUE,
+    write_all_projects = FALSE
+  )
 }
-
-# Copy P9 adults pilot experiment files under 01_project_data/9_backbone/pilot_data/experiment_data/...
-copy_psytool_files(
-  env_objects      = "data_adults_p_9_cogtest",
-  cogtest_out_path = out_path,
-  meta_env_name    = "cogtest_info",
-  allowed_projects = "9",
-  middle_subdir    = "pilot_data"   # <<< puts results under pilot_data/experiment_data
-)
 
 ## Export ID change/deletion/sample-move audit ---------------------------------
 
@@ -2534,81 +2571,73 @@ qc_results <- imap(datasets, function(dat, nm) {
 })
 
 
-# Final project-folder layout --------------------------------------------------
-# The existing writer functions produce files directly inside each
-# <project>_backbone folder. Only after every writer/QC step has finished, move
-# those raw/preprocessed outputs into that project's raw_data folder and create
-# the sibling derivatives folder. The move plan is conflict-checked in full
-# before any file is touched, and attempted moves are rolled back on failure.
-organize_project_backbone_outputs <- function(project_data_path) {
-  project_roots <- list.dirs(project_data_path, recursive = FALSE, full.names = TRUE)
-  project_roots <- project_roots[
-    grepl("^([2-9]|all_projects)_backbone$", basename(project_roots), ignore.case = TRUE)
-  ]
-  if (!length(project_roots)) {
-    warning("No project backbone folders found below: ", project_data_path)
-    return(invisible(NULL))
-  }
-
-  plan <- list()
-  k <- 0L
-  for (project_root in project_roots) {
-    raw_dir <- file.path(project_root, "raw_data")
-    derivatives_dir <- file.path(project_root, "derivatives")
-    dir.create(raw_dir, recursive = TRUE, showWarnings = FALSE)
-    dir.create(derivatives_dir, recursive = TRUE, showWarnings = FALSE)
-
-    entries <- list.files(
-      project_root,
-      full.names = TRUE,
-      all.files = FALSE,
-      no.. = TRUE
-    )
-    entries <- entries[!basename(entries) %in% c("raw_data", "derivatives")]
-    for (source in entries) {
-      destination <- file.path(raw_dir, basename(source))
-      k <- k + 1L
-      plan[[k]] <- list(source = source, destination = destination)
-    }
-  }
-
-  conflicts <- vapply(
-    plan,
-    function(x) file.exists(x$destination) || dir.exists(x$destination),
-    logical(1)
+# Final project-folder validation ----------------------------------------------
+# Writers now target the final raw_data paths directly. Nothing is moved here;
+# this check only prevents a silently mixed old/new layout from going unnoticed.
+validate_project_backbone_layout <- function(project_data_path) {
+  backbone_names <- c(paste0(2:9, "_backbone"), "all_projects_backbone")
+  required_relative_paths <- c(
+    file.path("raw_data", "questionnaires"),
+    file.path("raw_data", "experiment_data"),
+    "derivatives"
   )
-  if (any(conflicts)) {
-    details <- vapply(
-      plan[conflicts],
-      function(x) paste0(x$source, " -> ", x$destination),
-      character(1)
+
+  required_paths <- unlist(
+    lapply(
+      backbone_names,
+      function(backbone_name) {
+        file.path(project_data_path, backbone_name, required_relative_paths)
+      }
+    ),
+    use.names = FALSE
+  )
+  required_paths <- c(
+    required_paths,
+    file.path(
+      project_data_path,
+      "9_backbone",
+      "raw_data",
+      "pilot_data",
+      c("questionnaires", "experiment_data")
     )
+  )
+
+  missing_paths <- required_paths[!dir.exists(required_paths)]
+  if (length(missing_paths)) {
     stop(
-      "Project-folder organization stopped before moving anything because ",
-      "destination paths already exist:\n", paste(details, collapse = "\n")
+      "Backbone layout is incomplete; these required folders are missing:\n",
+      paste(missing_paths, collapse = "\n")
     )
   }
 
-  moved <- list()
-  for (i in seq_along(plan)) {
-    step <- plan[[i]]
-    if (!file.rename(step$source, step$destination)) {
-      if (length(moved)) {
-        for (done in rev(moved)) file.rename(done$destination, done$source)
+  legacy_paths <- unlist(
+    lapply(
+      backbone_names,
+      function(backbone_name) {
+        file.path(
+          project_data_path,
+          backbone_name,
+          c("questionnaires", "experiment_data", "pilot_data")
+        )
       }
-      stop(
-        "Could not move project output; completed moves were rolled back: ",
-        step$source, " -> ", step$destination
-      )
-    }
-    moved[[length(moved) + 1L]] <- step
+    ),
+    use.names = FALSE
+  )
+  legacy_paths <- legacy_paths[dir.exists(legacy_paths)]
+  if (length(legacy_paths)) {
+    warning(
+      "Legacy output folders remain outside raw_data because one or more old ",
+      "files could not be archived. Current outputs still use raw_data, so ",
+      "preprocessing will continue:\n",
+      paste(legacy_paths, collapse = "\n")
+    )
   }
 
   message(
-    "Organized ", length(project_roots),
-    " project folder(s): raw outputs are in raw_data; derivatives folders exist."
+    "Backbone layout validated for current outputs: raw_data and derivatives ",
+    "folders exist."
   )
-  invisible(plan)
+  invisible(TRUE)
 }
 
-organize_project_backbone_outputs(out_path)
+validate_project_backbone_layout(out_path)

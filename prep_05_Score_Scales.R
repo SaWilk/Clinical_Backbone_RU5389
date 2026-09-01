@@ -1,12 +1,13 @@
 # --- prep05_Score_Scales.R -----------------------------------------------
 # FOR: Add questionnaire score columns to already cleaned Backbone masters
-# Authors: Saskia Wilken
+# Authors: Saskia Wilken, Michel Wrede
 # New split step: 2026-03-16
 #
 # Description:
 # Reads item-level clean masters from 02_cleaned/<sample>/, reads keys + scoring,
 # optionally removes low-loading items flagged by analyze_backbone_scales.R,
-# computes score_* columns, and writes scored masters.
+# computes score_* columns plus FHS family-history outputs, and writes scored
+# masters without dropping participants who have no FHS response.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 rm(list = ls())
@@ -31,6 +32,8 @@ CFG <- list(
   combined_label = "adults_adolescents",
   min_prop_items_default = 0.30,
   add_z_scores_to_scored_masters = FALSE,
+  fhs_confidence_cutoff = 1,
+  fhs_apply_legacy_manual_corrections = TRUE,
   # For reduced/loading-filtered score variants, use means so scores remain
   # interpretable when the number of retained items differs from the original scale.
   force_filtered_scores_to_mean = TRUE,
@@ -47,6 +50,33 @@ CFG <- list(
 NON_SCORABLE_SCALES <- c(
   "FHSfamilytree", "health", "demographics", "times",
   "date", "id", "project"
+)
+
+# Auditable carry-over of the reviewed free-text corrections from
+# 2026_05_21_Chramow_Wende_scoring_quality_check.R. These corrections are
+# applied only when both the participant and target column exist.
+FHS_LEGACY_CONFIDENCE_CORRECTIONS <- tibble::tribble(
+  ~vp_id,  ~column_compact,                 ~value,
+  "20014", "psyconfidenceparent1",              2,
+  "20014", "sudconfidenceparent1",              2,
+  "30007", "depressionconfidenceparent1",       3,
+  "30007", "maniaconfidenceparent1",            2,
+  "30041", "depressionconfidenceparent1",       3,
+  "30066", "sudconfidenceparent2",              2,
+  "50058", "sudconfidenceparent1",              2,
+  "50058", "sudconfidenceparent2",              2,
+  "70004", "sudconfidenceparent2",              2,
+  "70231", "depressionconfidenceparent2",       3,
+  "70115", "gasconfidenceself",                 3
+)
+
+FHS_LEGACY_DIAGNOSIS_CORRECTIONS <- tibble::tribble(
+  ~vp_id,  ~column_compact,       ~value,
+  "20014", "ownpsychdiagnpsy",   "Y",
+  "20023", "ownpsychdiagnpsy",   "Y",
+  "32071", "ownpsychdiagnmde",   "Y",
+  "80002", "ownpsychdiagnmde",   "Y",
+  "90015", "ownpsychdiagnpsy",   "Y"
 )
 
 script_dir <- function() {
@@ -103,6 +133,18 @@ latest_file_by_pattern <- function(dir, pattern) {
 
 latest_scoring <- function() {
   patt <- "^\\d{4}-\\d{2}-\\d{2}_Scoring\\.xlsx$"
+  latest_file_by_pattern(DIR_INFO, patt)
+}
+
+latest_iteminfo_for_sample <- function(sample) {
+  sample_label <- sample %>%
+    stringr::str_replace_all("_", " ") %>%
+    stringr::str_to_title()
+  patt <- paste0(
+    "^\\d{4}-\\d{2}-\\d{2}_Item_Information_",
+    sample_label,
+    "\\.xlsx$"
+  )
   latest_file_by_pattern(DIR_INFO, patt)
 }
 
@@ -725,6 +767,411 @@ assert_no_missing_scores <- function(df, sample, suffix = NULL) {
   invisible(TRUE)
 }
 
+# ---- FHS family-history scoring ----------------------------------------------
+fhs_compact_name <- function(x) {
+  gsub("[^a-z0-9]", "", tolower(as.character(x)))
+}
+
+fhs_value_present <- function(x) {
+  !is.na(x) & nzchar(trimws(as.character(x)))
+}
+
+fhs_as_numeric <- function(x) {
+  suppressWarnings(as.numeric(as.character(x)))
+}
+
+read_fhs_item_info <- function(sample) {
+  path <- latest_iteminfo_for_sample(sample)
+  if (is.na(path) || !fs::file_exists(path)) {
+    fallback <- latest_iteminfo_for_sample("adults")
+    if (!is.na(fallback) && fs::file_exists(fallback)) path <- fallback
+  }
+  if (is.na(path) || !fs::file_exists(path)) {
+    log_msg(
+      "No Item Information found for FHS scoring in sample '", sample,
+      "'. Falling back to column-name detection."
+    )
+    return(NULL)
+  }
+  log_msg("Using Item Information for FHS scoring: ", path)
+  suppressMessages(readxl::read_excel(path)) %>% janitor::clean_names()
+}
+
+get_fhs_source_columns <- function(df, item_info = NULL) {
+  df_compact <- fhs_compact_name(names(df))
+
+  if (!is.null(item_info) && all(c("item", "scale") %in% names(item_info))) {
+    fhs_items <- item_info %>%
+      dplyr::filter(fhs_compact_name(.data$scale) == "fhsfamilytree") %>%
+      dplyr::pull("item") %>%
+      fhs_compact_name() %>%
+      unique()
+    matched <- names(df)[df_compact %in% fhs_items]
+    if (length(matched)) return(matched)
+  }
+
+  # Schema-drift fallback. The Item Information route above is preferred.
+  is_fhs <- grepl(
+    "^[a-z0-9]+confidence(self|parent[1-9]|sibling[1-9]|child[1-9])$",
+    df_compact
+  ) |
+    grepl("^ownpsychdiagn", df_compact) |
+    df_compact %in% c(
+      "siblings", "children", "relativesinfo", "fhsopentext",
+      "parents001", "parents002", "parentsgender001", "parentsgender002"
+    )
+  names(df)[is_fhs]
+}
+
+first_fhs_column <- function(df, compact_targets) {
+  compact <- fhs_compact_name(names(df))
+  for (target in compact_targets) {
+    hit <- which(compact == fhs_compact_name(target))
+    if (length(hit)) return(names(df)[hit[1]])
+  }
+  NA_character_
+}
+
+apply_fhs_legacy_corrections <- function(df, id_col, sample) {
+  if (!isTRUE(CFG$fhs_apply_legacy_manual_corrections)) return(df)
+  if (is.na(id_col) || !id_col %in% names(df)) {
+    log_msg(
+      "Legacy FHS corrections for sample '", sample,
+      "' skipped because no participant-ID column was found."
+    )
+    return(df)
+  }
+
+  id_values <- trimws(as.character(df[[id_col]]))
+  column_compact <- fhs_compact_name(names(df))
+  n_applied <- 0L
+
+  for (i in seq_len(nrow(FHS_LEGACY_CONFIDENCE_CORRECTIONS))) {
+    correction <- FHS_LEGACY_CONFIDENCE_CORRECTIONS[i, ]
+    target_col_index <- match(correction$column_compact, column_compact)
+    target_rows <- !is.na(id_values) & id_values == correction$vp_id
+    if (!is.na(target_col_index) && any(target_rows)) {
+      target_col <- names(df)[target_col_index]
+      df[[target_col]][target_rows] <- correction$value
+      n_applied <- n_applied + sum(target_rows)
+    }
+  }
+
+  for (i in seq_len(nrow(FHS_LEGACY_DIAGNOSIS_CORRECTIONS))) {
+    correction <- FHS_LEGACY_DIAGNOSIS_CORRECTIONS[i, ]
+    target_col_index <- match(correction$column_compact, column_compact)
+    target_rows <- !is.na(id_values) & id_values == correction$vp_id
+    if (!is.na(target_col_index) && any(target_rows)) {
+      target_col <- names(df)[target_col_index]
+      df[[target_col]][target_rows] <- correction$value
+      n_applied <- n_applied + sum(target_rows)
+    }
+  }
+
+  log_msg(
+    "Applied ", n_applied, " legacy reviewed FHS correction(s) in sample '",
+    sample, "'."
+  )
+  df
+}
+
+fhs_numeric_matrix <- function(df, columns) {
+  if (!length(columns)) {
+    return(matrix(numeric(0), nrow = nrow(df), ncol = 0L))
+  }
+  do.call(cbind, lapply(columns, function(column) fhs_as_numeric(df[[column]])))
+}
+
+fhs_character_matrix <- function(df, columns) {
+  if (!length(columns)) {
+    return(matrix(character(0), nrow = nrow(df), ncol = 0L))
+  }
+  do.call(cbind, lapply(columns, function(column) as.character(df[[column]])))
+}
+
+fhs_diagnosis_list <- function(values, diagnoses, cutoff, none_label) {
+  if (!nrow(values)) return(character(0))
+  apply(values, 1L, function(one_row) {
+    if (all(is.na(one_row))) return(NA_character_)
+    present <- unique(diagnoses[!is.na(one_row) & one_row >= cutoff])
+    if (!length(present)) none_label else paste(present, collapse = ", ")
+  })
+}
+
+add_fhs_scores <- function(df, sample, item_info = NULL) {
+  input_n <- nrow(df)
+  source_cols <- get_fhs_source_columns(df, item_info)
+  if (!length(source_cols)) {
+    stop(
+      "No FHSfamilytree source columns found for sample '", sample,
+      "'. Refusing to write scored masters without the requested FHS output."
+    )
+  }
+
+  work <- df
+  id_col <- first_fhs_column(work, c("vp_id", "vpid", "id"))
+  work <- apply_fhs_legacy_corrections(work, id_col, sample)
+
+  present_matrix <- do.call(
+    cbind,
+    lapply(source_cols, function(column) fhs_value_present(work[[column]]))
+  )
+  fhs_answered <- rowSums(present_matrix) > 0L
+
+  duplicate_id <- rep(FALSE, nrow(work))
+  if (!is.na(id_col)) {
+    ids <- trimws(as.character(work[[id_col]]))
+    valid_id <- !is.na(ids) & nzchar(ids)
+    duplicate_id <- valid_id & (duplicated(ids) | duplicated(ids, fromLast = TRUE))
+  }
+
+  open_text_col <- first_fhs_column(work, "FHSOpenText")
+  own_other_col <- first_fhs_column(work, "ownpsychdiagnother")
+  open_text_review <- if (is.na(open_text_col)) {
+    rep(FALSE, nrow(work))
+  } else {
+    fhs_value_present(work[[open_text_col]])
+  }
+  own_other_review <- if (is.na(own_other_col)) {
+    rep(FALSE, nrow(work))
+  } else {
+    fhs_value_present(work[[own_other_col]])
+  }
+
+  compact <- fhs_compact_name(names(work))
+  confidence_match <- stringr::str_match(
+    compact,
+    "^(.+?)confidence(self|parent|sibling|child)([1-9]?)$"
+  )
+  confidence_rows <- which(!is.na(confidence_match[, 1]))
+  if (!length(confidence_rows)) {
+    stop(
+      "FHS columns were found for sample '", sample,
+      "', but no diagnosis-confidence columns matched the expected schema."
+    )
+  }
+
+  confidence_meta <- tibble::tibble(
+    column = names(work)[confidence_rows],
+    diagnosis = confidence_match[confidence_rows, 2],
+    relation = confidence_match[confidence_rows, 3],
+    index = confidence_match[confidence_rows, 4]
+  )
+  confidence_meta$index[confidence_meta$index == ""] <- "0"
+
+  siblings_col <- first_fhs_column(work, "siblings")
+  children_col <- first_fhs_column(work, "children")
+  siblings_n <- if (is.na(siblings_col)) rep(NA_real_, nrow(work)) else fhs_as_numeric(work[[siblings_col]])
+  children_n <- if (is.na(children_col)) rep(NA_real_, nrow(work)) else fhs_as_numeric(work[[children_col]])
+
+  # Missing confidence means zero only when the person/relative exists. For
+  # people with no FHS response, values and all derived FHS fields stay NA.
+  for (i in seq_len(nrow(confidence_meta))) {
+    column <- confidence_meta$column[i]
+    relation <- confidence_meta$relation[i]
+    relative_index <- suppressWarnings(as.integer(confidence_meta$index[i]))
+    values <- fhs_as_numeric(work[[column]])
+    relative_exists <- switch(
+      relation,
+      self = rep(TRUE, nrow(work)),
+      parent = rep(TRUE, nrow(work)),
+      sibling = !is.na(siblings_n) & relative_index <= siblings_n,
+      child = !is.na(children_n) & relative_index <= children_n,
+      rep(FALSE, nrow(work))
+    )
+    replace_zero <- fhs_answered & relative_exists & is.na(values)
+    values[replace_zero] <- 0
+    work[[column]] <- values
+  }
+
+  work$fhs_any_response <- fhs_answered
+  work$qc_fhs_duplicate_vp_id <- duplicate_id
+  work$qc_fhs_open_text_requires_review <- open_text_review
+  work$qc_fhs_own_diagnosis_other_requires_review <- own_other_review
+
+  cutoff <- CFG$fhs_confidence_cutoff
+  self_meta <- confidence_meta[confidence_meta$relation == "self", , drop = FALSE]
+  self_values <- fhs_numeric_matrix(work, self_meta$column)
+  self_count <- if (ncol(self_values)) {
+    rowSums(self_values >= cutoff, na.rm = TRUE)
+  } else {
+    rep(NA_real_, nrow(work))
+  }
+  self_count[!fhs_answered] <- NA_real_
+  work$fhs_num_diagnoses_self <- as.integer(self_count)
+
+  own_match <- stringr::str_match(compact, "^ownpsychdiagn(.+)$")
+  own_rows <- which(!is.na(own_match[, 1]) & own_match[, 2] != "other")
+  own_meta <- tibble::tibble(
+    column = names(work)[own_rows],
+    diagnosis = own_match[own_rows, 2]
+  )
+  own_values <- fhs_character_matrix(work, own_meta$column)
+  own_yes <- matrix(FALSE, nrow = nrow(work), ncol = ncol(own_values))
+  if (ncol(own_values)) {
+    own_yes <- matrix(
+      toupper(trimws(as.character(own_values))) == "Y",
+      nrow = nrow(work),
+      ncol = ncol(own_values)
+    )
+    own_yes[is.na(own_yes)] <- FALSE
+  }
+  treated_count <- if (ncol(own_yes)) rowSums(own_yes) else rep(NA_real_, nrow(work))
+  treated_count[!fhs_answered] <- NA_real_
+  work$fhs_num_treated_diagnoses_self <- as.integer(treated_count)
+
+  entity_meta <- confidence_meta %>%
+    dplyr::filter(.data$relation != "self") %>%
+    dplyr::distinct(.data$relation, .data$index)
+  entity_counts <- list()
+  entity_info <- tibble::tibble(
+    key = character(), relation = character(), index = character()
+  )
+
+  for (i in seq_len(nrow(entity_meta))) {
+    relation <- entity_meta$relation[i]
+    relative_index <- entity_meta$index[i]
+    columns <- confidence_meta$column[
+      confidence_meta$relation == relation & confidence_meta$index == relative_index
+    ]
+    diagnoses <- confidence_meta$diagnosis[
+      confidence_meta$relation == relation & confidence_meta$index == relative_index
+    ]
+    values <- fhs_numeric_matrix(work, columns)
+    has_observation <- rowSums(!is.na(values)) > 0L
+    count <- ifelse(
+      has_observation,
+      rowSums(values >= cutoff, na.rm = TRUE),
+      NA_real_
+    )
+    count[!fhs_answered] <- NA_real_
+    key <- paste(relation, relative_index, sep = "_")
+    output_name <- paste0("fhs_num_diagnoses_", key)
+    work[[output_name]] <- as.integer(count)
+    entity_counts[[key]] <- count
+    entity_info <- dplyr::bind_rows(
+      entity_info,
+      tibble::tibble(key = key, relation = relation, index = relative_index)
+    )
+
+    diagnosis_list <- fhs_diagnosis_list(values, diagnoses, cutoff, "nodiagn")
+    diagnosis_list[!fhs_answered] <- NA_character_
+    work[[paste0("fhs_all_diagnoses_", key)]] <- diagnosis_list
+  }
+
+  entity_count_matrix <- if (length(entity_counts)) {
+    do.call(cbind, entity_counts)
+  } else {
+    matrix(numeric(0), nrow = nrow(work), ncol = 0L)
+  }
+
+  diagnosed_by_relation <- function(relation) {
+    keys <- entity_info$key[entity_info$relation == relation]
+    if (!length(keys)) return(rep(NA_integer_, nrow(work)))
+    values <- entity_count_matrix[, keys, drop = FALSE]
+    has_relative <- rowSums(!is.na(values)) > 0L
+    result <- ifelse(
+      has_relative,
+      rowSums(values >= 1, na.rm = TRUE),
+      NA_real_
+    )
+    result[!fhs_answered] <- NA_real_
+    as.integer(result)
+  }
+
+  work$fhs_parents_with_diagnosis <- diagnosed_by_relation("parent")
+  work$fhs_siblings_with_diagnosis <- diagnosed_by_relation("sibling")
+  work$fhs_children_with_diagnosis <- diagnosed_by_relation("child")
+
+  relatives_total <- siblings_n + children_n + 2
+  relatives_total[!fhs_answered] <- NA_real_
+  work$fhs_relatives_total <- as.integer(relatives_total)
+
+  relatives_with_diagnosis <- if (ncol(entity_count_matrix)) {
+    rowSums(entity_count_matrix >= 1, na.rm = TRUE)
+  } else {
+    rep(NA_real_, nrow(work))
+  }
+  relatives_with_diagnosis[!fhs_answered] <- NA_real_
+  work$fhs_relatives_with_diagnosis <- as.integer(relatives_with_diagnosis)
+
+  relative_diagnoses <- unique(
+    confidence_meta$diagnosis[confidence_meta$relation != "self"]
+  )
+  for (diagnosis in relative_diagnoses) {
+    columns <- confidence_meta$column[
+      confidence_meta$relation != "self" & confidence_meta$diagnosis == diagnosis
+    ]
+    values <- fhs_numeric_matrix(work, columns)
+    diagnosis_count <- rowSums(values >= cutoff, na.rm = TRUE)
+    diagnosis_count[!fhs_answered] <- NA_real_
+    safe_diagnosis <- safe_score_name(diagnosis)
+    count_name <- paste0("fhs_relatives_with_", safe_diagnosis)
+    prop_name <- paste0("fhs_prop_relatives_with_", safe_diagnosis)
+    work[[count_name]] <- as.integer(diagnosis_count)
+    proportion <- diagnosis_count / relatives_total
+    proportion[!is.finite(proportion)] <- NA_real_
+    work[[prop_name]] <- proportion
+  }
+
+  self_diagnosis_list <- if (ncol(self_values)) {
+    fhs_diagnosis_list(self_values, self_meta$diagnosis, cutoff, "nodiagn")
+  } else {
+    rep(NA_character_, nrow(work))
+  }
+  self_diagnosis_list[!fhs_answered] <- NA_character_
+  work$fhs_all_diagnoses_self <- self_diagnosis_list
+
+  treated_diagnosis_list <- rep(NA_character_, nrow(work))
+  if (ncol(own_yes)) {
+    treated_diagnosis_list <- apply(own_yes, 1L, function(one_row) {
+      present <- unique(own_meta$diagnosis[one_row])
+      if (!length(present)) "nodiagntreated" else paste(present, collapse = ", ")
+    })
+  }
+  treated_diagnosis_list[!fhs_answered] <- NA_character_
+  work$fhs_treated_diagnoses_self <- treated_diagnosis_list
+
+  required_fhs_output <- c(
+    "fhs_any_response",
+    "fhs_num_diagnoses_self",
+    "fhs_num_treated_diagnoses_self",
+    "fhs_parents_with_diagnosis",
+    "fhs_siblings_with_diagnosis",
+    "fhs_children_with_diagnosis",
+    "fhs_relatives_total",
+    "fhs_relatives_with_diagnosis",
+    "fhs_all_diagnoses_self",
+    "fhs_treated_diagnoses_self"
+  )
+  missing_output <- setdiff(required_fhs_output, names(work))
+  if (length(missing_output)) {
+    stop(
+      "FHS scoring failed to create required output columns for sample '",
+      sample, "': ", paste(missing_output, collapse = ", ")
+    )
+  }
+  if (nrow(work) != input_n) {
+    stop(
+      "FHS scoring changed the number of rows for sample '", sample,
+      "' (", input_n, " -> ", nrow(work), ")."
+    )
+  }
+
+  log_msg(
+    "FHS scoring for sample '", sample, "': retained all ", nrow(work),
+    " row(s); ", sum(fhs_answered), " had at least one FHS response and ",
+    sum(!fhs_answered), " retained row(s) received NA for derived FHS fields."
+  )
+  if (sum(open_text_review | own_other_review) > 0L) {
+    log_msg(
+      "FHS free-text review flag for sample '", sample, "': ",
+      sum(open_text_review | own_other_review), " participant(s) require review."
+    )
+  }
+  work
+}
+
 write_master_variant <- function(df, sample, suffix = NULL) {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
@@ -751,6 +1198,11 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
   
   df   <- read_master_csv_robust(master_path)
   keys <- readRDS(keys_path)
+
+  # FHS remains outside the internal-consistency/item-loading workflow, but its
+  # derived family-history variables belong in every scored master variant.
+  fhs_item_info <- read_fhs_item_info(sample)
+  df <- add_fhs_scores(df, sample, item_info = fhs_item_info)
   
   # round 1: unfiltered scores
   df_scored <- df

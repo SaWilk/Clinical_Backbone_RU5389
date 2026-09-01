@@ -47,7 +47,9 @@ script_dir <- function() {
 
 ROOT <- script_dir()
 
-DIR_QUESTIONNAIRES  <- fs::path(ROOT, "01_project_data","all_projects_backbone", "questionnaires")
+DIR_QUESTIONNAIRES  <- fs::path(
+  ROOT, "01_project_data", "all_projects_backbone", "raw_data", "questionnaires"
+)
 DIR_INFO            <- fs::path(ROOT, "information")
 DIR_EXPORT          <- fs::path(ROOT, "02_cleaned")
 DIR_KEYS            <- fs::path(DIR_EXPORT, "keys")
@@ -507,6 +509,8 @@ NON_SCORABLE_SCALES <- c(
   "FHSfamilytree", "health", "demographics", "times",
   "date", "id", "project"
 )
+# "Non-scorable" means excluded from reverse coding, missing-item handling and
+# psychometric scoring. It does not mean that these columns are removed.
 
 normalize_scale_chr <- function(x) toupper(trimws(as.character(x)))
 
@@ -1007,6 +1011,50 @@ clean_duplicate_parent_gender <- function(df, sample) {
   df
 }
 
+assert_fhs_columns_retained <- function(input_df, output_df, item_info, sample) {
+  if (is.null(item_info) || !all(c("item", "scale") %in% names(item_info))) {
+    log_msg(
+      "FHS retention check for sample '", sample,
+      "': skipped because Item Information is unavailable."
+    )
+    return(invisible(TRUE))
+  }
+
+  fhs_item_norm <- item_info %>%
+    dplyr::mutate(
+      item_norm = normalize_id(.data$item),
+      scale_norm = normalize_scale_chr(.data$scale)
+    ) %>%
+    dplyr::filter(.data$scale_norm == normalize_scale_chr("FHSfamilytree")) %>%
+    dplyr::pull("item_norm") %>%
+    unique()
+
+  fhs_input_cols <- names(input_df)[normalize_id(names(input_df)) %in% fhs_item_norm]
+  if (!length(fhs_input_cols)) {
+    log_msg(
+      "FHS retention check for sample '", sample,
+      "': no FHS columns were present in the questionnaire input."
+    )
+    return(invisible(TRUE))
+  }
+
+  output_norm <- normalize_id(names(output_df))
+  missing_cols <- fhs_input_cols[!(normalize_id(fhs_input_cols) %in% output_norm)]
+  if (length(missing_cols)) {
+    stop(
+      "FHS retention check failed for sample '", sample,
+      "'. The following input columns disappeared during cleaning: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  log_msg(
+    "FHS retention check for sample '", sample, "': passed; all ",
+    length(fhs_input_cols), " FHS input column(s) remain in the cleaned master."
+  )
+  invisible(TRUE)
+}
+
 # ---- Demographics / health ---------------------------------------------------
 label_demographics_health <- function(df) {
   out <- df
@@ -1318,6 +1366,10 @@ process_sample <- function(sample,
   q_final <- attach_groupings(q_final, sample)
   
   q_ready <- enrich_demographics_and_health_fields(q_final, sample)
+
+  # FHS is deliberately excluded from internal-consistency preparation, but
+  # every raw FHS column must remain available for the later FHS scoring step.
+  assert_fhs_columns_retained(q_clean0, q_ready, ii_all, sample)
   
   keys <- build_keys(ii)
   save_keys(keys, sample)

@@ -1,5 +1,6 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # FOR: Backbone cognitive-test scoring (BACS, WCST, LNS)
+# Authors: Artem Chramow, Michel Wrede, Saskia Wilken
 # Adapted for the RU5389 Backbone pipeline
 #
 # Input (per project):
@@ -13,9 +14,7 @@
 #
 # Methodological note:
 # The FHS questionnaire block from the internship script is intentionally not
-# part of this cognitive-test pipeline. It needs questionnaire and item-info
-# inputs that are not contained in experiment_data and must be reviewed as a
-# separate analysis.
+# part of this cognitive-test pipeline. It is scored in prep_05_Score_Scales.R.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 rm(list = ls())
@@ -799,7 +798,25 @@ process_master <- function(master) {
 masters <- discover_master_files(input_root)
 outputs <- lapply(masters, process_master)
 
+master_scopes <- vapply(masters, `[[`, character(1), "scope")
+master_samples <- vapply(masters, `[[`, character(1), "sample")
+combined_samples <- unique(master_samples[master_scopes == "ALL"])
+missing_combined <- setdiff(unique(master_samples), combined_samples)
+
+if (length(missing_combined)) {
+  warning(
+    "No all-project cognitive master was found for sample(s): ",
+    paste(missing_combined, collapse = ", "),
+    ". Their per-project outputs were written, but no combined output could be created."
+  )
+} else {
+  message(
+    "Combined all-project cognitive output written for sample(s): ",
+    paste(combined_samples, collapse = ", ")
+  )
+}
+
 message(
-  "Finished. ", length(outputs), " derivative Excel file(s) written below ",
-  normalize_path(derivatives_root)
+  "Finished. ", length(outputs), " derivative Excel file(s) written:\n",
+  paste(vapply(outputs, normalize_path, character(1)), collapse = "\n")
 )

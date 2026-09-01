@@ -9,6 +9,8 @@ copy_psytool_files <- function(
     test_cols          = NULL,                      # NULL => auto-detect
     allowed_projects   = as.character(2:9),
     middle_subdir      = NULL,
+    project_subdir     = NULL,                      # e.g. "pilot_data"
+    folder_label       = NULL,                      # e.g. "PILOT"
     purge_old_dated    = TRUE,                      # delete old *_cogtest_data folders
     write_all_projects = TRUE,                      # also mirror under ALL_..._cogtest_data
     progress           = TRUE,                      # show a compact progress bar
@@ -22,6 +24,21 @@ copy_psytool_files <- function(
   if (!dir.exists(cogtest_out_path)) {
     dir.create(cogtest_out_path, recursive = TRUE, showWarnings = FALSE)
   }
+
+  clean_optional_component <- function(x, argument) {
+    if (is.null(x)) return(NULL)
+    if (length(x) != 1L || is.na(x) || !nzchar(trimws(x))) {
+      stop(argument, " must be NULL or one non-empty directory/name component.")
+    }
+    x <- trimws(as.character(x))
+    if (x %in% c(".", "..") || grepl("[/\\\\]", x)) {
+      stop(argument, " must be a single relative component without slashes.")
+    }
+    x
+  }
+
+  project_subdir <- clean_optional_component(project_subdir, "project_subdir")
+  folder_label   <- clean_optional_component(folder_label, "folder_label")
   
   valid_samples <- c("adults", "adolescents", "children", "children_parents", "adults_remote")
   sample_root <- function(sample) {
@@ -137,7 +154,10 @@ copy_psytool_files <- function(
   
   ensure_experiment_dir <- function(project) {
     project_block  <- sprintf("%s_backbone", project)
-    experiment_dir <- file.path(cogtest_out_path, project_block, "experiment_data")
+    experiment_dir <- do.call(
+      file.path,
+      as.list(c(cogtest_out_path, project_block, "raw_data", project_subdir, "experiment_data"))
+    )
     if (!dir.exists(experiment_dir)) dir.create(experiment_dir, recursive = TRUE, showWarnings = FALSE)
     
     # purge once per project
@@ -159,7 +179,9 @@ copy_psytool_files <- function(
   for (obj in env_objects) {
     if (!exists(obj, envir = .GlobalEnv, inherits = FALSE)) next
     
-    m <- regexec("^data_(.+)_p_([0-9]+)_cogtest$", obj)
+    # Pilot exports use a distinct *_cogtest_pilot object name so they cannot
+    # overwrite (or be picked up as) the main per-project cogtest slice.
+    m <- regexec("^data_(.+)_p_([0-9]+)_cogtest(?:_pilot)?$", obj, perl = TRUE)
     parts <- regmatches(obj, m)[[1]]
     if (length(parts) < 3) next
     
@@ -198,7 +220,10 @@ copy_psytool_files <- function(
     
     # project-specific target
     exp_dir <- ensure_experiment_dir(project)
-    dated_folder_name <- sprintf("%s_%s_%s_cogtest_data", project, date_tag, sample)
+    dated_folder_name <- paste(
+      c(project, date_tag, folder_label, sample, "cogtest_data"),
+      collapse = "_"
+    )
     if (!is.null(suffix_tag)) {
       dated_folder_name <- paste0(dated_folder_name, "_", suffix_tag)
     }
@@ -207,7 +232,10 @@ copy_psytool_files <- function(
     
     # ALL mirror (purge ONCE per sample + suffix)
     if (isTRUE(write_all_projects)) {
-      all_exp_dir <- file.path(cogtest_out_path, "all_projects_backbone", "experiment_data")
+      all_exp_dir <- do.call(
+        file.path,
+        as.list(c(cogtest_out_path, "all_projects_backbone", "raw_data", project_subdir, "experiment_data"))
+      )
       if (!dir.exists(all_exp_dir)) dir.create(all_exp_dir, recursive = TRUE, showWarnings = FALSE)
       
       purge_key <- paste(sample, ifelse(is.null(suffix_tag), "base", suffix_tag), sep = "::")
@@ -228,7 +256,10 @@ copy_psytool_files <- function(
         purged_samples_all <<- c(purged_samples_all, purge_key)
       }
       
-      all_dated_name <- sprintf("ALL_%s_%s_cogtest_data", date_tag, sample)
+      all_dated_name <- paste(
+        c("ALL", date_tag, folder_label, sample, "cogtest_data"),
+        collapse = "_"
+      )
       if (!is.null(suffix_tag)) {
         all_dated_name <- paste0(all_dated_name, "_", suffix_tag)
       }
