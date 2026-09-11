@@ -398,7 +398,8 @@ initialize_backbone_layout(out_path)
 
 ## Setup Logging ---------------------------------------------------------------
 dir.create(file.path(out_path, "logs"), recursive = TRUE, showWarnings = FALSE)
-logger <- setup_logging(file.path(out_path, "logs", "all_action_points.log"))
+all_action_points_log <- file.path(out_path, "logs", "all_action_points.log")
+logger <- setup_logging(all_action_points_log)
 
 ## Backbone surveys ------------------------------------------------------------
 file_adults            <- "results-survey564757_remids_translated.csv"
@@ -1201,6 +1202,19 @@ dat_children_parents <- audit_id_change(
   criterion = "Project 8 questionnaire children/parents: known wrong VPID 80553 corrected to 80533."
 )
 
+dat_children_parents <- audit_id_change(
+  dat_children_parents,
+  idx = dat_children_parents[[vp_col]] == 80752L &
+    dat_children_parents[[project_col]] == PROJECT &
+    .date_berlin(dat_children_parents$startdate) < as.Date("2026-09-01"),
+  id_col = vp_col,
+  new_id = 80751L,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "questionnaire",
+  criterion = "Project 8 questionnaire children/parents: known wrong VPID 80752 corrected to 80751 only for rows with startdate before 2026-09-01."
+)
+
 dat_children_parents <- audit_snapshot(dat_children_parents)
 before_p8_child_questionnaire_mapping <- dat_children_parents
 
@@ -1239,6 +1253,17 @@ dat_adults <- audit_id_change(
   criterion = "Project 9 questionnaire: missing zero/project-prefix format; VPID 9901 corrected to 99001."
 )
 
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 90696L,
+  id_col = vp_col,
+  new_id = 90027L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 9 questionnaire: known wrong VPID 90696 corrected to 90027."
+)
+
 # Exclude participant without data-use permission ------------------------------
 # Participant 20080 did not allow use of their data.
 # Therefore, neither questionnaire nor cogtest data may be used/exported.
@@ -1258,6 +1283,34 @@ dat_adults <- audit_row_action(
 pilots_ad_auto <- find_pilot_ids(dat_general, dat_adults)
 pilots_asc_auto <- find_pilot_ids(dat_general, dat_adolescents)
 pilots_ch_auto <- find_pilot_ids(dat_general, dat_children_parents)
+
+# Confirmed main-study exception: 70084 is not a pilot even if the general
+# participant overview causes find_pilot_ids() to classify it as one.
+confirmed_main_asc_7 <- c(70084L)
+auto_pilot_overlap_asc_7 <- intersect(
+  suppressWarnings(as.integer(pilots_asc_auto)),
+  confirmed_main_asc_7
+)
+
+if (length(auto_pilot_overlap_asc_7) > 0L) {
+  dat_adolescents <- audit_row_action(
+    dat_adolescents,
+    idx = dat_adolescents$vpid %in% auto_pilot_overlap_asc_7,
+    id_col = "vpid",
+    project_col = "project",
+    sample = "adolescents",
+    data_type = "questionnaire",
+    criterion = "Project 7 questionnaire adolescents: VPID 70084 was automatically classified as a pilot but is confirmed as a main-study participant; kept in the main-study data.",
+    action = "pilot_status_corrected",
+    new_id = 70084L
+  )
+}
+
+pilots_asc_auto <- setdiff(
+  suppressWarnings(as.integer(pilots_asc_auto)),
+  confirmed_main_asc_7
+)
+rm(confirmed_main_asc_7, auto_pilot_overlap_asc_7)
 
 pilot_ad_2 <- c(20004)
 pilot_ad_9 <- c()
@@ -1936,7 +1989,6 @@ psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30047, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30048 row with latest TIME_start corrected to 30047.")
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30058L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30058L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30057, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30058 row with latest TIME_start corrected to 30057.")
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30099L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == min(psytool_info_adults$TIME_start[psytool_info_adults$id == 30099L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30100, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30099 row with earliest TIME_start corrected to 30100.")
-psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30101L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30101L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30102, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30101 row with latest TIME_start corrected to 30102.")
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30111L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == min(psytool_info_adults$TIME_start[psytool_info_adults$id == 30111L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30112, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30111 row with earliest TIME_start corrected to 30112.")
 
 psytool_info_adults <- audit_id_change(
@@ -2039,11 +2091,11 @@ psytool_info_children <- audit_id_change(
   idx = psytool_info_children[[vp_col]] == 80418L &
     psytool_info_children[[project_col]] == PROJECT,
   id_col = vp_col,
-  new_id = 8518L,
+  new_id = 80518L,
   project_col = project_col,
   sample = "children_parents",
   data_type = "experiment_data",
-  criterion = "Project 8 cogtests children/parents: known wrong ID 80418 corrected to 8518."
+  criterion = "Project 8 cogtests children/parents: known wrong ID 80418 corrected to 80518."
 )
 
 psytool_info_children <- audit_id_change(
@@ -2056,6 +2108,19 @@ psytool_info_children <- audit_id_change(
   sample = "children_parents",
   data_type = "experiment_data",
   criterion = "Project 8 cogtests children/parents: known wrong ID 80553 corrected to 80533."
+)
+
+psytool_info_children <- audit_id_change(
+  psytool_info_children,
+  idx = psytool_info_children[[vp_col]] == 80752L &
+    psytool_info_children[[project_col]] == PROJECT &
+    .date_berlin(psytool_info_children$TIME_start) < as.Date("2026-09-01"),
+  id_col = vp_col,
+  new_id = 80751L,
+  project_col = project_col,
+  sample = "children_parents",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests children/parents: known wrong ID 80752 corrected to 80751 only for rows with TIME_start before 2026-09-01."
 )
 
 psytool_info_children <- audit_snapshot(psytool_info_children)
@@ -2096,6 +2161,17 @@ psytool_info_adults <- audit_id_change(
   criterion = "Project 9 cogtests: missing zero/project-prefix format; ID 9901 corrected to 99001."
 )
 
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 90696L,
+  id_col = vp_col,
+  new_id = 90027L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 9 cogtests: known wrong ID 90696 corrected to 90027."
+)
+
 # Exclude participant without data-use permission ------------------------------
 # Participant 20080 did not allow use of their data.
 # Therefore, neither questionnaire nor cogtest data may be used/exported.
@@ -2116,6 +2192,34 @@ psytool_info_adults <- audit_row_action(
 pilots_ad_auto  <- find_pilot_ids(dat_general, psytool_info_adults,      vpid_col_df2 = vp_col)
 pilots_asc_auto <- find_pilot_ids(dat_general, psytool_info_adolescents, vpid_col_df2 = vp_col)
 pilots_ch_auto  <- find_pilot_ids(dat_general, psytool_info_children,    vpid_col_df2 = vp_col)
+
+# Confirmed main-study exception: 70084 is not a pilot even if the general
+# participant overview causes find_pilot_ids() to classify it as one.
+confirmed_main_asc_7 <- c(70084L)
+auto_pilot_overlap_asc_7 <- intersect(
+  suppressWarnings(as.integer(pilots_asc_auto)),
+  confirmed_main_asc_7
+)
+
+if (length(auto_pilot_overlap_asc_7) > 0L) {
+  psytool_info_adolescents <- audit_row_action(
+    psytool_info_adolescents,
+    idx = psytool_info_adolescents$id %in% auto_pilot_overlap_asc_7,
+    id_col = "id",
+    project_col = "p",
+    sample = "adolescents",
+    data_type = "experiment_data",
+    criterion = "Project 7 cogtests adolescents: ID 70084 was automatically classified as a pilot but is confirmed as a main-study participant; kept in the main-study data.",
+    action = "pilot_status_corrected",
+    new_id = 70084L
+  )
+}
+
+pilots_asc_auto <- setdiff(
+  suppressWarnings(as.integer(pilots_asc_auto)),
+  confirmed_main_asc_7
+)
+rm(confirmed_main_asc_7, auto_pilot_overlap_asc_7)
 
 pilot_ad_2  <- c(20004)
 pilot_ad_9  <- c()
@@ -2174,6 +2278,44 @@ psytool_info_adults <- audit_row_action(
 )
 
 rm(drop_p3_cog_mask, time_start_berlin_p3)
+
+# Project 3: after deleting the known faulty 30102 row above, the earliest
+# remaining 30102 cogtest from 2025-10-13 belongs to participant 30101.
+idx_30102_p3_remaining <- which(
+  psytool_info_adults[[project_col]] == 3L &
+    psytool_info_adults[[vp_col]] == 30102L &
+    .date_berlin(psytool_info_adults[[start_col]]) == as.Date("2025-10-13")
+)
+
+if (length(idx_30102_p3_remaining) > 0L) {
+  time_30102_p3_remaining <- as_time_safely(
+    psytool_info_adults[[start_col]][idx_30102_p3_remaining],
+    tz = "Europe/Berlin"
+  )
+
+  if (all(is.na(time_30102_p3_remaining))) {
+    stop("Project 3 cogtests: remaining ID 30102 rows from 2025-10-13 have no valid TIME_start.")
+  }
+
+  earliest_30102_p3_idx <- idx_30102_p3_remaining[
+    which.min(time_30102_p3_remaining)
+  ]
+  mask_30102_to_30101 <- seq_len(nrow(psytool_info_adults)) == earliest_30102_p3_idx
+
+  psytool_info_adults <- audit_id_change(
+    psytool_info_adults,
+    idx = mask_30102_to_30101,
+    id_col = "id",
+    new_id = 30101L,
+    project_col = "p",
+    sample = "adults",
+    data_type = "experiment_data",
+    criterion = "Project 3 cogtests: after deletion of the known faulty 30102 row, the earliest remaining ID 30102 row from 2025-10-13 was corrected to 30101."
+  )
+
+  rm(time_30102_p3_remaining, earliest_30102_p3_idx, mask_30102_to_30101)
+}
+rm(idx_30102_p3_remaining)
 
 # Project 7
 psytool_info_adolescents <- audit_row_action(
@@ -2359,6 +2501,34 @@ logger$split(dest_dirs)
 
 # 4️⃣ Close when done
 logger$close()
+
+# Keep the complete, unsplit log with the combined raw-data exports as well.
+all_projects_log_dir <- file.path(
+  out_path,
+  "all_projects_backbone",
+  "raw_data"
+)
+dir.create(all_projects_log_dir, recursive = TRUE, showWarnings = FALSE)
+
+all_projects_log_file <- file.path(
+  all_projects_log_dir,
+  "all_action_points.log"
+)
+
+log_copy_ok <- file.copy(
+  from = all_action_points_log,
+  to = all_projects_log_file,
+  overwrite = TRUE
+)
+
+if (!isTRUE(log_copy_ok)) {
+  stop(
+    "Could not copy the complete action-points log to: ",
+    all_projects_log_file
+  )
+}
+
+message("Wrote complete action-points log: ", all_projects_log_file)
 
 ## Get the Experimental Data Sets Associated with the project ------------------
 
