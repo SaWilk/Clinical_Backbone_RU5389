@@ -1,6 +1,6 @@
-# --- prep06_export_analyze-ready_sheets.R -----------------------------------------------
+# --- prep_06_export_analyze_ready_sheets.R ----------------------------------------------
 # FOR: Export HiTOP-mapped + COMPLETE questionnaire-only inputs for factor analysis
-# Date: 2026-03-16
+# Date: 2026-09-14
 #
 # Assumes:
 #   - Item-level clean master file in: ROOT/02_cleaned/<sample>/
@@ -26,6 +26,13 @@
 #        are privacy-filtered)
 #   E) <samples>_complete_subscales.xlsx
 #      - existing score_* columns plus the fhs_* and qc_fhs_* outputs from prep05
+#   F) <samples>_complete_subscales_enriched.xlsx
+#      - complete analysis input containing questionnaire items, score_* columns,
+#        z-scores, demographics, project/group information and FHS/QC outputs
+#      - copied unchanged to
+#        ROOT/01_project_data/all_projects_backbone/derivatives/questionnaire/
+#      - split into one adults or adolescents workbook per project-specific
+#        questionnaire folder
 #
 # Optional filtered exports:
 #   same filenames with suffix _lt020 (or whatever threshold tag applies)
@@ -58,6 +65,8 @@ CFG <- list(
   export_complete = TRUE,
   export_loading_filtered = TRUE,
   export_enriched = TRUE,
+  export_questionnaire_copies = TRUE,
+  questionnaire_copy_projects = 2:9,
   loading_threshold = 0.30,   # make more aggressive by increasing this, e.g. 0.30 / 0.35
   
   questionnaire_scales = c(
@@ -907,7 +916,34 @@ add_enrichment_to_tbl <- function(tab, obj, ii_rows) {
   if (length(duplicate_cols)) {
     enrich <- enrich %>% dplyr::select(-dplyr::all_of(duplicate_cols))
   }
-  
+
+  # Tables created from the same master retain identical row order. Bind those
+  # rows directly so duplicate participant IDs cannot cause a many-to-many join.
+  if (nrow(tab) == nrow(enrich)) {
+    tab_ids <- as.character(tab[[by_col]])
+    enrich_ids <- as.character(enrich[[by_col]])
+    same_ids <- (is.na(tab_ids) & is.na(enrich_ids)) |
+      (!is.na(tab_ids) & !is.na(enrich_ids) & tab_ids == enrich_ids)
+
+    if (all(same_ids)) {
+      enrichment_cols <- setdiff(names(enrich), by_col)
+      return(
+        dplyr::bind_cols(
+          tab,
+          enrich %>% dplyr::select(dplyr::all_of(enrichment_cols))
+        )
+      )
+    }
+  }
+
+  if (anyDuplicated(enrich[[by_col]])) {
+    stop(
+      "Cannot safely enrich sample '", obj$sample,
+      "': enrichment IDs are duplicated and rows are not aligned.",
+      call. = FALSE
+    )
+  }
+
   tab %>% dplyr::left_join(enrich, by = by_col)
 }
 
@@ -924,6 +960,179 @@ make_enriched_sample_sheets <- function(x, masters, ii_rows,
   }
   
   make_export_sheets(enriched, combined_sheet = combined_sheet, z_scores = z_scores)
+}
+
+combine_items_and_scores <- function(items, scores, id_col, dataset_label) {
+  if (is.null(items) || is.null(scores)) {
+    stop(
+      "Cannot build complete analysis input for '", dataset_label,
+      "': item or score table is missing.",
+      call. = FALSE
+    )
+  }
+
+  if (nrow(items) != nrow(scores)) {
+    stop(
+      "Cannot build complete analysis input for '", dataset_label,
+      "': item and score tables have different row counts.",
+      call. = FALSE
+    )
+  }
+
+  if (!(id_col %in% names(items)) || !(id_col %in% names(scores))) {
+    stop(
+      "Cannot build complete analysis input for '", dataset_label,
+      "': ID column '", id_col, "' is missing.",
+      call. = FALSE
+    )
+  }
+
+  item_ids <- as.character(items[[id_col]])
+  score_ids <- as.character(scores[[id_col]])
+  same_ids <- (is.na(item_ids) & is.na(score_ids)) |
+    (!is.na(item_ids) & !is.na(score_ids) & item_ids == score_ids)
+
+  if (!all(same_ids)) {
+    stop(
+      "Cannot build complete analysis input for '", dataset_label,
+      "': item and score rows are not aligned by ID.",
+      call. = FALSE
+    )
+  }
+
+  score_only_cols <- setdiff(names(scores), names(items))
+  if (!length(score_only_cols)) return(items)
+
+  dplyr::bind_cols(
+    items,
+    scores %>% dplyr::select(dplyr::all_of(score_only_cols))
+  )
+}
+
+make_complete_analysis_tables <- function(items_list, scores_list, masters) {
+  out <- list()
+
+  for (obj in masters) {
+    sample <- obj$sample
+    out[[sample]] <- combine_items_and_scores(
+      items = items_list[[sample]],
+      scores = scores_list[[sample]],
+      id_col = obj$id_col,
+      dataset_label = sample
+    )
+  }
+
+  out
+}
+
+normalize_project_number <- function(x) {
+  x_norm <- x %>%
+    as.character() %>%
+    stringr::str_trim() %>%
+    stringr::str_to_lower() %>%
+    stringr::str_replace("^project[ _-]*", "") %>%
+    stringr::str_replace("^p[ _-]*", "")
+
+  x_num <- suppressWarnings(as.numeric(x_norm))
+  out <- suppressWarnings(as.integer(x_num))
+  out[is.na(x_num) | x_num != out | !(out %in% 2:9)] <- NA_integer_
+  out
+}
+
+write_questionnaire_copies <- function(enriched_sheets,
+                                       source_workbook,
+                                       root,
+                                       projects = 2:9) {
+  if (!isTRUE(CFG$export_questionnaire_copies)) return(invisible(NULL))
+
+  if (is.null(enriched_sheets) || !length(enriched_sheets)) {
+    stop("Questionnaire copies requested, but enriched sheets are missing.", call. = FALSE)
+  }
+
+  if (!fs::file_exists(source_workbook)) {
+    stop(
+      "Questionnaire copies requested, but source workbook is missing: ",
+      source_workbook,
+      call. = FALSE
+    )
+  }
+
+  project_data_root <- fs::path(root, "01_project_data")
+  if (!fs::dir_exists(project_data_root)) {
+    stop(
+      "Cannot create questionnaire copies because the project-data directory ",
+      "does not exist: ", project_data_root,
+      call. = FALSE
+    )
+  }
+
+  sample_names <- intersect(c("adults", "adolescents"), names(enriched_sheets))
+
+  if (all(c("adults", "adolescents") %in% sample_names)) {
+    all_projects_dir <- fs::path(
+      project_data_root,
+      "all_projects_backbone",
+      "derivatives",
+      "questionnaire"
+    )
+    fs::dir_create(all_projects_dir)
+    all_projects_copy <- fs::path(all_projects_dir, basename(source_workbook))
+    fs::file_copy(source_workbook, all_projects_copy, overwrite = TRUE)
+    message("Copied: ", all_projects_copy)
+  } else {
+    message(
+      "Skipped all-projects questionnaire copy because this run does not ",
+      "contain both adults and adolescents."
+    )
+  }
+
+  for (sample in sample_names) {
+    sample_tbl <- enriched_sheets[[sample]]
+
+    if (is.null(sample_tbl) || !nrow(sample_tbl)) next
+    if (!("project" %in% names(sample_tbl))) {
+      stop(
+        "Cannot create project questionnaire copies for sample '", sample,
+        "': enriched table has no 'project' column.",
+        call. = FALSE
+      )
+    }
+
+    project_number <- normalize_project_number(sample_tbl$project)
+    unresolved <- is.na(project_number)
+    if (any(unresolved)) {
+      unresolved_values <- unique(as.character(sample_tbl$project[unresolved]))
+      unresolved_values[is.na(unresolved_values)] <- "<NA>"
+      stop(
+        "Cannot create project questionnaire copies for sample '", sample,
+        "': ", sum(unresolved), " row(s) have an unresolved project value: ",
+        paste(unresolved_values, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    for (project in projects) {
+      project_tbl <- sample_tbl[project_number == project, , drop = FALSE]
+      if (!nrow(project_tbl)) next
+
+      project_dir <- fs::path(
+        project_data_root,
+        paste0(project, "_backbone"),
+        "derivatives",
+        "questionnaire"
+      )
+      fs::dir_create(project_dir)
+
+      project_file <- fs::path(
+        project_dir,
+        paste0(sample, "_complete_subscales_enriched.xlsx")
+      )
+      writexl::write_xlsx(stats::setNames(list(project_tbl), sample), project_file)
+      message("Wrote: ", project_file)
+    }
+  }
+
+  invisible(NULL)
 }
 
 make_enriched_existing_sheets <- function(x, masters, ii_rows,
@@ -1115,8 +1324,26 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
   
   if (isTRUE(CFG$export_enriched)) {
     out_scores_all_enriched <- add_enriched_suffix(out_scores_all)
-    writexl::write_xlsx(make_enriched_sample_sheets(scores_list, masters, ii, z_scores = TRUE), out_scores_all_enriched)
+    complete_analysis_tables <- make_complete_analysis_tables(
+      items_list = items_list,
+      scores_list = scores_list,
+      masters = masters
+    )
+    complete_analysis_sheets <- make_enriched_sample_sheets(
+      complete_analysis_tables,
+      masters,
+      ii,
+      z_scores = TRUE
+    )
+    writexl::write_xlsx(complete_analysis_sheets, out_scores_all_enriched)
     message("Wrote: ", out_scores_all_enriched)
+
+    write_questionnaire_copies(
+      enriched_sheets = complete_analysis_sheets,
+      source_workbook = out_scores_all_enriched,
+      root = ROOT,
+      projects = CFG$questionnaire_copy_projects
+    )
   }
 }
 
