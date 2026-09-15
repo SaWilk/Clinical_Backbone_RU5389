@@ -28,7 +28,7 @@ ensure_packages <- function(pkgs) {
 }
 
 ensure_packages(c(
-  "readr","jsonlite","tibble","dplyr","tidyr","purrr","stringr",
+  "jsonlite","tibble","dplyr","tidyr","purrr","stringr",
   "fs","glue","janitor","psych","rprojroot","readxl","openxlsx"
 ))
 
@@ -40,7 +40,6 @@ CFG <- list(
   export_combined = TRUE,
   combined_label = "adults_adolescents",
   
-  delim = ";",
   omega_timeout_sec = 20,
   
   export_loading_filtered = TRUE,
@@ -87,7 +86,9 @@ project_root <- function() {
 
 ROOT <- project_root()
 DIR_INFO           <- fs::path(ROOT, "information")
-DIR_QUESTIONNAIRES <- fs::path(ROOT, "01_project_data", "all_projects_backbone", "questionnaires")
+DIR_QUESTIONNAIRES <- fs::path(
+  ROOT, "01_project_data", "all_projects_backbone", "raw_data", "questionnaires"
+)
 DIR_EXPORT         <- fs::path(ROOT, "02_cleaned")
 DIR_KEYS           <- fs::path(DIR_EXPORT, "keys")
 DIR_FUNCTIONS      <- fs::path(ROOT, "functions")
@@ -110,27 +111,8 @@ make_threshold_tag <- function(x) {
   paste0("lt", gsub("\\.", "", formatC(x, format = "f", digits = 2)))
 }
 
-read_master_csv_robust <- function(master_csv, default_delim = ";") {
-  first_line <- readr::read_lines(master_csv, n_max = 1)
-  delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
-    sub("^sep=", "", first_line, ignore.case = TRUE)
-  } else default_delim
-  
-  skip_n <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) 1L else 0L
-  
-  suppressMessages(
-    readr::read_delim(
-      master_csv,
-      delim = delim,
-      skip = skip_n,
-      show_col_types = FALSE,
-      locale = readr::locale(
-        encoding = "UTF-8",
-        decimal_mark = if (identical(delim, ";")) "," else ".",
-        grouping_mark = if (identical(delim, ";")) "." else ","
-      )
-    )
-  ) %>%
+read_master_xlsx <- function(master_xlsx) {
+  suppressMessages(readxl::read_excel(master_xlsx)) %>%
     janitor::clean_names()
 }
 
@@ -254,17 +236,40 @@ filter_key_tables <- function(key_tbls) {
 }
 
 read_sample_bundle <- function(sample) {
-  master_csv <- fs::path(DIR_EXPORT, sample, glue::glue("{sample}_clean_master.csv"))
-  keys_json  <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.json"))
-  stopifnot(fs::file_exists(master_csv), fs::file_exists(keys_json))
+  q_file <- latest_questionnaire_for_sample(sample, DIR_QUESTIONNAIRES)
+  if (length(q_file) != 1L || is.na(q_file) || !fs::file_exists(q_file)) {
+    stop(
+      "No dated questionnaire input found for sample '", sample,
+      "' in '", DIR_QUESTIONNAIRES, "'."
+    )
+  }
+
+  input_date <- extract_date_string(q_file)
+  master_xlsx <- fs::path(
+    DIR_EXPORT,
+    sample,
+    glue::glue("{input_date}_{sample}_clean_master.xlsx")
+  )
+  keys_json <- fs::path(
+    DIR_KEYS,
+    glue::glue("{input_date}_{sample}_keys.json")
+  )
+
+  required_files <- c(master_xlsx, keys_json)
+  missing_files <- required_files[!fs::file_exists(required_files)]
+  if (length(missing_files)) {
+    stop(
+      "Step 03 outputs matching questionnaire date ", input_date,
+      " are missing for sample '", sample, "': ",
+      paste(missing_files, collapse = ", ")
+    )
+  }
   
-  df <- read_master_csv_robust(master_csv, CFG$delim) %>%
+  df <- read_master_xlsx(master_xlsx) %>%
     normalize_group_col()
   
   key_tbls <- flatten_keys(keys_json)
   key_tbls <- filter_key_tables(key_tbls)
-  
-  q_file <- latest_questionnaire_for_sample(sample, DIR_QUESTIONNAIRES)
   
   list(
     sample    = sample,
@@ -274,7 +279,7 @@ read_sample_bundle <- function(sample) {
     scale_tbl = key_tbls$scale_tbl,
     sub_tbl   = key_tbls$sub_tbl,
     q_file    = q_file,
-    master_csv = master_csv,
+    master_xlsx = master_xlsx,
     keys_json  = keys_json
   )
 }

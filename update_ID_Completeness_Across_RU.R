@@ -16,7 +16,7 @@
 # * Project 6 is excluded completely.
 # * IDs from 80500 through 89999 are excluded completely.
 # * Existing rows from these child samples are removed from the Overview and
-#   never appear in MANUAL_CHECKS.
+#   never appear in the manual-review sheet.
 # * ID absent from the filtered report -> QUEST = FALSE, COG-TEST = FALSE
 # * New report ID -> new row; other actively maintained modality columns are
 #   initialized to FALSE
@@ -27,8 +27,18 @@
 #   Change Audit is the primary source. If no matching audit row exists, the
 #   unique report submitdate is used only where the established fallback rules
 #   allow it.
+# * Existing header cells, their comments, and conditional formatting are
+#   preserved. The SOLVED column is never rewritten.
+# * Additional Overview columns are treated as optional, unmanaged columns.
+#   They may be added or removed without changing this script, and their
+#   existing values and formulas are preserved.
+# * Merged cells in Overview data rows are removed. Each row represents one
+#   record, and mixed merge sizes prevent Excel from sorting the table. The
+#   header row and all other worksheets are left unchanged.
+# * Existing TASK, ECG, and PUPIL values are normalized to genuine Excel
+#   booleans when they contain recognized logical values.
 # * Ambiguous values are never guessed. The field remains blank and the case is
-#   described in MANUAL_CHECKS.
+#   described in the existing manual-review sheet.
 #
 # The script creates a backup before every successful replacement.
 # The Excel workbook must be closed while the script runs.
@@ -58,7 +68,8 @@ BACKUP_DIR <- file.path(
 
 OVERVIEW_SHEET_WANTED <- "Completeness Overview"
 AUDIT_SHEET_WANTED <- "Change Audit"
-MANUAL_SHEET <- "MANUAL_CHECKS"
+MANUAL_SHEET_WANTED <- "Manual Checks Still Outstanding"
+MANUAL_SHEET_ALIASES <- c(MANUAL_SHEET_WANTED, "MANUAL_CHECKS")
 
 # Child samples that do not belong in this Overview.
 EXCLUDED_PROJECTS <- 6L
@@ -66,7 +77,7 @@ PROJECT_8_CHILD_MIN_ID <- 80500
 PROJECT_8_CHILD_MAX_ID <- 89999
 
 # This identifier is printed at startup so the executed version is explicit.
-SCRIPT_REVISION <- "2026-09-01_duplicate-time-hard-skip-v3"
+SCRIPT_REVISION <- "2026-09-15_sortable-overview-unmerge-v7"
 
 # The 1.29 series supports the modern/threaded Excel comments and workbook
 # relationships used by this workbook.
@@ -188,9 +199,24 @@ normalize_bool <- function(x) {
   }
 
   z <- toupper(trimws(as.character(x)))
+  localized_true <- intToUtf8(c(87L, 65L, 72L, 82L))
+  localized_false <- intToUtf8(c(70L, 65L, 76L, 83L, 67L, 72L))
   out <- rep(NA, length(z))
-  out[z %in% c("TRUE", "1")] <- TRUE
-  out[z %in% c("FALSE", "0")] <- FALSE
+  out[z %in% c("TRUE", localized_true, "1")] <- TRUE
+  out[z %in% c("FALSE", localized_false, "0")] <- FALSE
+  out
+}
+
+normalize_bool_checked <- function(x, context) {
+  out <- normalize_bool(x)
+  invalid <- !is_blank(x) & is.na(out)
+  if (any(invalid)) {
+    stopf(
+      "Unsupported logical value in %s: %s",
+      context,
+      paste(unique(as.character(x[invalid])), collapse = ", ")
+    )
+  }
   out
 }
 
@@ -295,6 +321,99 @@ resolve_name <- function(actual_names, wanted, what) {
     )
   }
   actual_names[hit]
+}
+
+resolve_optional_name <- function(actual_names, candidates, what) {
+  actual_norm <- normalize_token(actual_names)
+  candidate_norm <- normalize_token(candidates)
+  hit <- which(actual_norm %in% candidate_norm)
+
+  if (length(hit) > 1L) {
+    stopf(
+      "Several %s candidates were found: %s",
+      what,
+      paste(actual_names[hit], collapse = ", ")
+    )
+  }
+
+  if (length(hit) == 0L) NA_character_ else actual_names[hit]
+}
+
+snapshot_object <- function(x) {
+  paste(capture.output(dput(x)), collapse = "\n")
+}
+
+snapshot_workbook_annotations <- function(wb) {
+  list(
+    comments = sort(flatten_xml_text(wb$comments)),
+    threads = sort(flatten_xml_text(wb$threadComments)),
+    persons = sort(flatten_xml_text(wb$persons))
+  )
+}
+
+flatten_xml_text <- function(x) {
+  if (is.null(x) || length(x) == 0L) {
+    return(character())
+  }
+  if (is.list(x)) {
+    return(unlist(lapply(x, flatten_xml_text), use.names = FALSE))
+  }
+  paste(as.character(x), collapse = "")
+}
+
+snapshot_conditional_formatting <- function(wb, sheet) {
+  sheet_names <- openxlsx2::wb_get_sheet_names(wb)
+  sheet_index <- match(sheet, sheet_names)
+  if (is.na(sheet_index)) {
+    stopf("Worksheet not found while snapshotting conditional formatting: %s", sheet)
+  }
+  sort(flatten_xml_text(wb$worksheets[[sheet_index]]$conditionalFormatting))
+}
+
+snapshot_merged_cells <- function(wb, sheet) {
+  sheet_names <- openxlsx2::wb_get_sheet_names(wb)
+  sheet_index <- match(sheet, sheet_names)
+  if (is.na(sheet_index)) {
+    stopf("Worksheet not found while snapshotting merged cells: %s", sheet)
+  }
+
+  xml <- paste(
+    flatten_xml_text(wb$worksheets[[sheet_index]]$mergeCells),
+    collapse = ""
+  )
+  if (length(xml) == 0L || identical(xml, "")) {
+    return(character())
+  }
+
+  matches <- regmatches(
+    xml,
+    gregexpr('ref="[A-Z]+[0-9]+:[A-Z]+[0-9]+"', xml, perl = TRUE)
+  )[[1L]]
+  if (length(matches) == 0L || identical(matches, "")) {
+    return(character())
+  }
+
+  sort(unique(sub('^ref="|"$', "", matches)))
+}
+
+snapshot_cell_data <- function(wb, sheet, rows, cols) {
+  if (length(rows) == 0L || length(cols) == 0L) {
+    return(snapshot_object(NULL))
+  }
+
+  snapshot_object(openxlsx2::wb_to_df(
+    wb,
+    sheet = sheet,
+    rows = rows,
+    cols = cols,
+    col_names = FALSE,
+    skip_empty_rows = FALSE,
+    skip_empty_cols = FALSE,
+    detect_dates = FALSE,
+    show_formula = TRUE,
+    convert = FALSE,
+    check_names = FALSE
+  ))
 }
 
 resolve_columns <- function(actual_names, wanted, context) {
@@ -576,34 +695,46 @@ main <- function() {
   sheet_names <- openxlsx2::wb_get_sheet_names(wb)
   overview_sheet <- resolve_name(sheet_names, OVERVIEW_SHEET_WANTED, "worksheet")
   audit_sheet <- resolve_name(sheet_names, AUDIT_SHEET_WANTED, "worksheet")
+  manual_sheet_existing <- resolve_optional_name(
+    sheet_names,
+    MANUAL_SHEET_ALIASES,
+    "manual-review worksheet"
+  )
+  manual_sheet_exists <- !is.na(manual_sheet_existing)
+  manual_sheet <- if (manual_sheet_exists) manual_sheet_existing else MANUAL_SHEET_WANTED
 
   overview_raw <- openxlsx2::wb_to_df(
     wb,
     sheet = overview_sheet,
-    cols = 1:15,
     col_names = TRUE,
     skip_empty_rows = FALSE,
-    skip_empty_cols = FALSE,
+    skip_empty_cols = TRUE,
     detect_dates = TRUE,
     check_names = FALSE
   )
 
-  overview_wanted <- c(
-    "ID", "P", "TASK", "TASK TIME", "ECG", "ECG_comments", "ECG TIME",
-    "PUPIL", "PUPIL TIME", "QUEST", "QUEST TIME", "OLD QUEST ID",
-    "COG-TEST", "COG-TEST TIME", "OLD COG-TEST ID"
+  overview_headers <- names(overview_raw)
+  if (any(is_blank(overview_headers)) || anyDuplicated(normalize_token(overview_headers))) {
+    stopf("Overview headers must be nonblank and unique; no changes were made.")
+  }
+
+  overview_required <- c(
+    "ID", "P", "TASK", "ECG", "PUPIL", "QUEST", "COG-TEST",
+    "QUEST TIME", "OLD QUEST ID", "COG-TEST TIME", "OLD COG-TEST ID"
   )
   overview_idx <- resolve_columns(
-    names(overview_raw),
-    overview_wanted,
+    overview_headers,
+    overview_required,
     paste0("sheet '", overview_sheet, "'")
   )
-  overview <- as.data.frame(
-    overview_raw[, unname(overview_idx), drop = FALSE],
-    stringsAsFactors = FALSE,
-    check.names = FALSE
+  overview <- as.data.frame(overview_raw, stringsAsFactors = FALSE, check.names = FALSE)
+
+  overview_last_col <- openxlsx2::int2col(length(overview_headers))
+  workbook_annotations_before <- snapshot_workbook_annotations(wb)
+  overview_conditional_formatting_before <- snapshot_conditional_formatting(
+    wb,
+    overview_sheet
   )
-  names(overview) <- overview_wanted
 
   existing_ids_all <- normalize_id(overview$ID)
   nonblank_id_rows <- which(!is.na(existing_ids_all))
@@ -616,9 +747,66 @@ main <- function() {
   original_existing_data_rows <- max(nonblank_id_rows)
   overview <- overview[seq_len(original_existing_data_rows), , drop = FALSE]
 
+  # Data-row merges make Excel sorting impossible when merge sizes differ.
+  # Unmerge only the populated Overview data area. Values remain in the
+  # original top-left cells, while row 1 and every other worksheet are untouched.
+  overview_data_range <- paste0(
+    "A2:", overview_last_col, original_existing_data_rows + 1L
+  )
+  overview_merged_cells_before <- snapshot_merged_cells(wb, overview_sheet)
+  wb <- openxlsx2::wb_unmerge_cells(
+    wb,
+    sheet = overview_sheet,
+    dims = overview_data_range
+  )
+  overview_merged_cells_after_cleanup <- snapshot_merged_cells(
+    wb,
+    overview_sheet
+  )
+  overview_data_merges_removed <- !identical(
+    overview_merged_cells_before,
+    overview_merged_cells_after_cleanup
+  )
+
+  other_modalities <- c("TASK", "ECG", "PUPIL")
+  rewritten_overview_headers <- c(
+    other_modalities,
+    "QUEST", "COG-TEST", "QUEST TIME", "OLD QUEST ID",
+    "COG-TEST TIME", "OLD COG-TEST ID"
+  )
+  preserved_overview_columns <- which(
+    !normalize_token(overview_headers) %in%
+      normalize_token(rewritten_overview_headers)
+  )
+  preserved_overview_data_rows <- seq.int(2L, original_existing_data_rows + 1L)
+  preserved_overview_data_before <- snapshot_cell_data(
+    wb,
+    overview_sheet,
+    preserved_overview_data_rows,
+    preserved_overview_columns
+  )
+
+  for (header in other_modalities) {
+    overview[[header]] <- normalize_bool_checked(
+      overview[[header]],
+      paste0("column '", header, "' in sheet '", overview_sheet, "'")
+    )
+  }
+
   # Remove any excluded child-sample rows left by an older script or a manual
   # edit, then compact the retained rows without changing their order.
   overview_excluded_mask <- is_excluded_population(overview$ID, overview$P)
+  if (any(overview_excluded_mask) && "SOLVED" %in% overview_headers) {
+    stopf(
+      paste0(
+        "Excluded IDs are present in the Overview. Automatic row compaction is ",
+        "disabled when a SOLVED column exists so its values, formulas, and ",
+        "conditional formatting cannot be shifted incorrectly. Remove these ",
+        "rows manually and rerun: %s"
+      ),
+      paste(unique(normalize_id(overview$ID[overview_excluded_mask])), collapse = ", ")
+    )
+  }
   excluded_overview_ids <- unique(normalize_id(overview$ID[overview_excluded_mask]))
   excluded_overview_ids <- excluded_overview_ids[!is.na(excluded_overview_ids)]
   excluded_overview_excel_rows <- which(overview_excluded_mask) + 1L
@@ -1066,7 +1254,7 @@ main <- function() {
   }
 
   # New non-numeric IDs are written as text. Add the exception now so it is
-  # included in the MANUAL_CHECKS sheet created below.
+  # included in the manual-review sheet updated below.
   nonnumeric_new_ids <- new_ids[
     !grepl("^[0-9]{1,15}$", new_ids) | grepl("^0[0-9]+$", new_ids)
   ]
@@ -1114,14 +1302,19 @@ main <- function() {
 
   # ---- Update the workbook ---------------------------------------------------
 
+  overview_col_index <- stats::setNames(seq_along(overview_headers), overview_headers)
   col_letter <- function(header) {
-    openxlsx2::int2col(unname(overview_idx[header]))
+    idx <- overview_col_index[[header]]
+    if (is.null(idx) || length(idx) != 1L || is.na(idx)) {
+      stopf("Overview column not found while writing: %s", header)
+    }
+    openxlsx2::int2col(idx)
   }
 
   excluded_overview_count <- length(excluded_overview_excel_rows)
   if (excluded_overview_count > 0L) {
-    first_overview_col <- openxlsx2::int2col(min(unname(overview_idx)))
-    last_overview_col <- openxlsx2::int2col(max(unname(overview_idx)))
+    first_overview_col <- "A"
+    last_overview_col <- overview_last_col
     original_last_excel_row <- original_existing_data_rows + 1L
 
     # Clear values while preserving styles and comments, then rewrite all
@@ -1140,7 +1333,7 @@ main <- function() {
     )
 
     identifier_headers <- c("ID", "OLD QUEST ID", "OLD COG-TEST ID")
-    for (header in overview_wanted) {
+    for (header in overview_headers) {
       if (header %in% identifier_headers) {
         wb <- write_id_vector(
           wb,
@@ -1170,8 +1363,8 @@ main <- function() {
     new_end_excel_row <- old_last_excel_row + new_count
 
     # Copy each column's style from the last existing data row.
-    for (j in seq_along(overview_wanted)) {
-      col <- openxlsx2::int2col(unname(overview_idx[j]))
+    for (j in seq_along(overview_headers)) {
+      col <- openxlsx2::int2col(j)
       style <- openxlsx2::wb_get_cell_style(
         wb,
         sheet = overview_sheet,
@@ -1213,7 +1406,6 @@ main <- function() {
 
     # For new IDs, set only other status columns already maintained in the
     # existing Overview to FALSE. Entirely unused columns remain blank.
-    other_modalities <- c("TASK", "ECG", "PUPIL")
     active_other_modalities <- other_modalities[vapply(
       overview[other_modalities],
       function(x) any(!is_blank(x)),
@@ -1228,6 +1420,17 @@ main <- function() {
         rep(FALSE, new_count)
       )
     }
+  }
+
+  # Normalize existing non-report modality statuses to genuine Excel booleans.
+  for (header in other_modalities) {
+    wb <- write_vector(
+      wb,
+      overview_sheet,
+      col_letter(header),
+      2L,
+      overview[[header]]
+    )
   }
 
   # Rewrite QUEST, COG, and their four related fields entirely from the rules
@@ -1253,31 +1456,82 @@ main <- function() {
     numfmt = "yyyy-mm-dd"
   )
 
-  # Recreate MANUAL_CHECKS on every run. Change Audit remains the second sheet
-  # and its content is never modified.
-  current_sheets <- openxlsx2::wb_get_sheet_names(wb)
-  existing_manual <- which(normalize_token(current_sheets) == normalize_token(MANUAL_SHEET))
-  if (length(existing_manual) > 0L) {
-    wb <- openxlsx2::wb_remove_worksheet(wb, sheet = current_sheets[existing_manual[1L]])
+  # Update the existing manual-review sheet in place so its header comments and
+  # other sheet-level properties survive. Create it only when no known alias is
+  # present.
+  manual_columns <- c(
+    "ID", "Field", "Problem", "Candidate_Details", "Overview_Rows", "Source"
+  )
+  if (manual_sheet_exists) {
+    manual_raw_before <- openxlsx2::wb_to_df(
+      wb,
+      sheet = manual_sheet,
+      cols = 1:6,
+      col_names = TRUE,
+      skip_empty_rows = FALSE,
+      skip_empty_cols = FALSE,
+      detect_dates = TRUE,
+      check_names = FALSE
+    )
+    manual_idx <- resolve_columns(
+      names(manual_raw_before),
+      manual_columns,
+      paste0("sheet '", manual_sheet, "'")
+    )
+    manual_clear_last_row <- max(
+      2L,
+      nrow(manual_raw_before) + 1L,
+      nrow(checks_df) + 1L
+    )
+    manual_first_col <- openxlsx2::int2col(min(unname(manual_idx)))
+    manual_last_col <- openxlsx2::int2col(max(unname(manual_idx)))
+
+    wb <- openxlsx2::wb_clean_sheet(
+      wb,
+      sheet = manual_sheet,
+      dims = paste0(manual_first_col, "2:", manual_last_col, manual_clear_last_row),
+      numbers = TRUE,
+      characters = TRUE,
+      styles = FALSE,
+      merged_cells = FALSE,
+      hyperlinks = FALSE
+    )
+    for (header in manual_columns) {
+      wb <- write_vector(
+        wb,
+        manual_sheet,
+        openxlsx2::int2col(unname(manual_idx[header])),
+        2L,
+        checks_df[[header]]
+      )
+    }
+    wb <- openxlsx2::wb_remove_filter(wb, sheet = manual_sheet)
+    wb <- openxlsx2::wb_add_filter(
+      wb,
+      sheet = manual_sheet,
+      rows = 1L,
+      cols = sort(unname(manual_idx))
+    )
+  } else {
+    wb <- openxlsx2::wb_add_worksheet(wb, sheet = manual_sheet)
+    wb <- openxlsx2::wb_add_data(
+      wb,
+      sheet = manual_sheet,
+      x = checks_df,
+      dims = "A1",
+      col_names = TRUE,
+      row_names = FALSE,
+      with_filter = TRUE,
+      na = "_openxlsx_NULL"
+    )
+    wb <- openxlsx2::wb_freeze_pane(wb, sheet = manual_sheet, first_row = TRUE)
+    wb <- openxlsx2::wb_set_col_widths(
+      wb,
+      sheet = manual_sheet,
+      cols = 1:6,
+      widths = c(14, 22, 48, 70, 22, 38)
+    )
   }
-  wb <- openxlsx2::wb_add_worksheet(wb, sheet = MANUAL_SHEET)
-  wb <- openxlsx2::wb_add_data(
-    wb,
-    sheet = MANUAL_SHEET,
-    x = checks_df,
-    dims = "A1",
-    col_names = TRUE,
-    row_names = FALSE,
-    with_filter = TRUE,
-    na = "_openxlsx_NULL"
-  )
-  wb <- openxlsx2::wb_freeze_pane(wb, sheet = MANUAL_SHEET, first_row = TRUE)
-  wb <- openxlsx2::wb_set_col_widths(
-    wb,
-    sheet = MANUAL_SHEET,
-    cols = 1:6,
-    widths = c(14, 22, 48, 70, 22, 38)
-  )
 
   # ---- Save, reload, and validate --------------------------------------------
 
@@ -1309,13 +1563,56 @@ main <- function() {
   )
 
   check_sheets <- openxlsx2::wb_get_sheet_names(check_wb)
-  if (!all(c(overview_sheet, audit_sheet, MANUAL_SHEET) %in% check_sheets)) {
+  if (!all(c(overview_sheet, audit_sheet, manual_sheet) %in% check_sheets)) {
     stopf("Validation failed: expected worksheets are missing.")
+  }
+
+  check_workbook_annotations <- snapshot_workbook_annotations(check_wb)
+  if (!identical(workbook_annotations_before, check_workbook_annotations)) {
+    stopf("Validation failed: workbook comments, threads, or persons changed.")
+  }
+
+  check_overview_conditional_formatting <- snapshot_conditional_formatting(
+    check_wb,
+    overview_sheet
+  )
+  if (!identical(
+    overview_conditional_formatting_before,
+    check_overview_conditional_formatting
+  )) {
+    stopf("Validation failed: Overview conditional formatting changed.")
+  }
+
+  check_overview_merged_cells <- snapshot_merged_cells(check_wb, overview_sheet)
+  if (!identical(
+    overview_merged_cells_after_cleanup,
+    check_overview_merged_cells
+  )) {
+    stopf("Validation failed: Overview merged-cell cleanup did not persist.")
+  }
+
+  check_preserved_overview_data <- snapshot_cell_data(
+    check_wb,
+    overview_sheet,
+    preserved_overview_data_rows,
+    preserved_overview_columns
+  )
+  if (!identical(
+    preserved_overview_data_before,
+    check_preserved_overview_data
+  )) {
+    stopf(
+      paste0(
+        "Validation failed: values or formulas changed in Overview columns ",
+        "that are not managed by this script."
+      )
+    )
   }
 
   check_manual_raw <- openxlsx2::wb_to_df(
     check_wb,
-    sheet = MANUAL_SHEET,
+    sheet = manual_sheet,
+    cols = 1:6,
     col_names = TRUE,
     skip_empty_rows = FALSE,
     skip_empty_cols = FALSE,
@@ -1325,7 +1622,7 @@ main <- function() {
   check_manual_idx <- resolve_columns(
     names(check_manual_raw),
     c("ID", "Field", "Problem", "Candidate_Details", "Overview_Rows", "Source"),
-    "MANUAL_CHECKS validation"
+    "manual-review sheet validation"
   )
   check_manual <- as.data.frame(
     check_manual_raw[, unname(check_manual_idx), drop = FALSE],
@@ -1337,10 +1634,8 @@ main <- function() {
   manual_excluded_mask <- is_excluded_id_range(check_manual$ID)
   if (any(manual_excluded_mask)) {
     stopf(
-      paste0(
-        "Validation failed: excluded IDs appear in ",
-        "MANUAL_CHECKS: %s"
-      ),
+      "Validation failed: excluded IDs appear in '%s': %s",
+      manual_sheet,
       paste(unique(normalize_id(check_manual$ID[manual_excluded_mask])), collapse = ", ")
     )
   }
@@ -1348,16 +1643,18 @@ main <- function() {
   check_overview_raw <- openxlsx2::wb_to_df(
     check_wb,
     sheet = overview_sheet,
-    cols = 1:15,
     col_names = TRUE,
     skip_empty_rows = FALSE,
-    skip_empty_cols = FALSE,
+    skip_empty_cols = TRUE,
     detect_dates = TRUE,
     check_names = FALSE
   )
+  if (!identical(names(check_overview_raw), overview_headers)) {
+    stopf("Validation failed: the Overview header row changed.")
+  }
   check_idx <- resolve_columns(
     names(check_overview_raw),
-    overview_wanted,
+    overview_required,
     "updated Overview validation"
   )
   check_overview <- as.data.frame(
@@ -1365,7 +1662,17 @@ main <- function() {
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
-  names(check_overview) <- overview_wanted
+  names(check_overview) <- overview_required
+
+  logical_status_headers <- c(other_modalities, "QUEST", "COG-TEST")
+  for (header in logical_status_headers) {
+    if (!is.logical(check_overview_raw[[header]])) {
+      stopf(
+        "Validation failed: column '%s' was not stored as logical values.",
+        header
+      )
+    }
+  }
 
   check_ids <- normalize_id(check_overview$ID)
   check_q <- normalize_bool(check_overview$QUEST)
@@ -1494,6 +1801,10 @@ main <- function() {
     "; IDs 80500-89999: ", length(report_excluded_p8_ids), ")"
   )
   message("  New IDs added:            ", new_count)
+  message(
+    "  Data-row merges removed:   ",
+    if (overview_data_merges_removed) "yes" else "none found"
+  )
   message("  QUEST = TRUE/FALSE:      ", sum(quest_status %in% TRUE, na.rm = TRUE),
           " / ", sum(quest_status %in% FALSE, na.rm = TRUE))
   message("  COG = TRUE/FALSE:        ", sum(cog_status %in% TRUE, na.rm = TRUE),
@@ -1525,7 +1836,7 @@ main <- function() {
       paste0(
         manual_count,
         " ambiguous or manually resolvable cases are listed in sheet '",
-        MANUAL_SHEET,
+        manual_sheet,
         "'."
       ),
       call. = FALSE,
@@ -1542,6 +1853,7 @@ main <- function() {
     removed_overview_ids = excluded_overview_ids,
     new_ids = new_ids,
     duplicate_history_ids = intersect(unique_ids_all, duplicate_history_ids),
+    manual_sheet = manual_sheet,
     manual_checks = checks_df
   ))
 }

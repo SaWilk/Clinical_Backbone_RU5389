@@ -25,7 +25,7 @@ ensure_packages <- function(pkgs) {
 
 ensure_packages(c(
   "readxl", "janitor", "stringr", "dplyr", 
-  "purrr", "lubridate", "tibble", "glue", "fs", "jsonlite", "readr",
+  "purrr", "lubridate", "tibble", "glue", "fs", "jsonlite", "writexl",
   "forcats"
 ))
 
@@ -55,14 +55,13 @@ DIR_EXPORT          <- fs::path(ROOT, "02_cleaned")
 DIR_KEYS            <- fs::path(DIR_EXPORT, "keys")
 DIR_LOGS            <- fs::path(ROOT, "logs")
 DIR_PRIVATE         <- fs::path(ROOT, "private_information")
-SANITY_LOG_FILE     <- fs::path(DIR_LOGS, "sanity_check_backbone_data_log.txt")
 DIR_FUNCTIONS       <- fs::path(ROOT, "functions")
 
 fs::dir_create(DIR_EXPORT)
-fs::dir_create(DIR_KEYS)
 fs::dir_create(DIR_LOGS)
 
-logfile <- fs::path(DIR_LOGS, glue::glue("clean_questionnaires_items_only_{format(Sys.time(), '%Y-%m-%d_%H%M%S')}.log"))
+logfile <- NULL
+SANITY_LOG_FILE <- NULL
 
 log_msg <- function(..., .sep = "", .newline = TRUE) {
   msg <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", paste0(..., collapse = .sep))
@@ -72,7 +71,6 @@ log_msg <- function(..., .sep = "", .newline = TRUE) {
 }
 
 # ---- Source required functions -----------------------------------------------
-source(file.path(DIR_FUNCTIONS, "write_excel_friendly_csv.R"))
 source(file.path(DIR_FUNCTIONS, "normalize_id.R"))
 source(file.path(DIR_FUNCTIONS, "get_project_col.R"))
 
@@ -92,6 +90,113 @@ normalize_sample_case <- function(sample) {
 extract_date <- function(x) {
   d <- stringr::str_match(x, "(\\d{4}-\\d{2}-\\d{2})")[,2]
   suppressWarnings(lubridate::ymd(d))
+}
+
+input_date_prefix <- function(filepath) {
+  date_value <- extract_date(basename(filepath))
+  if (length(date_value) != 1L || is.na(date_value)) {
+    stop(
+      "Could not extract a YYYY-MM-DD date from questionnaire input file: ",
+      filepath
+    )
+  }
+  format(date_value, "%Y-%m-%d")
+}
+
+initialize_run_logs <- function(input_dates) {
+  valid_dates <- suppressWarnings(as.Date(input_dates))
+  run_date <- if (all(is.na(valid_dates))) {
+    format(Sys.Date(), "%Y-%m-%d")
+  } else {
+    format(max(valid_dates, na.rm = TRUE), "%Y-%m-%d")
+  }
+  run_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+  logfile <<- fs::path(
+    DIR_LOGS,
+    glue::glue("{run_date}_clean_questionnaires_items_only_{run_stamp}.log")
+  )
+  SANITY_LOG_FILE <<- fs::path(
+    DIR_LOGS,
+    glue::glue("{run_date}_sanity_check_backbone_data_{run_stamp}.txt")
+  )
+}
+
+archive_existing_clean_outputs <- function(export_dir = DIR_EXPORT) {
+  fs::dir_create(export_dir)
+  old_root <- fs::path(export_dir, "old")
+  fs::dir_create(old_root)
+
+  entries <- fs::dir_ls(
+    export_dir,
+    recurse = FALSE,
+    type = "any",
+    all = TRUE,
+    fail = FALSE
+  )
+  entries <- entries[fs::path_file(entries) != "old"]
+
+  if (!length(entries)) {
+    log_msg("No previous files found in ", export_dir, "; nothing to archive.")
+    return(invisible(NULL))
+  }
+
+  archive_stamp <- format(Sys.time(), "%Y-%m-%d_%H%M%S")
+  archive_dir <- fs::path(old_root, archive_stamp)
+  suffix <- 1L
+  while (fs::dir_exists(archive_dir) || fs::file_exists(archive_dir)) {
+    archive_dir <- fs::path(old_root, paste0(archive_stamp, "_", suffix))
+    suffix <- suffix + 1L
+  }
+  fs::dir_create(archive_dir)
+
+  moved <- character(0)
+  for (src in entries) {
+    dst <- fs::path(archive_dir, fs::path_file(src))
+    move_error <- tryCatch(
+      {
+        fs::file_move(src, dst)
+        NULL
+      },
+      error = function(e) e
+    )
+
+    if (!is.null(move_error)) {
+      rollback_errors <- character(0)
+      for (old_src in rev(moved)) {
+        old_dst <- fs::path(archive_dir, fs::path_file(old_src))
+        rollback_error <- tryCatch(
+          {
+            if (fs::file_exists(old_dst) || fs::dir_exists(old_dst)) {
+              fs::file_move(old_dst, old_src)
+            }
+            NULL
+          },
+          error = function(e) conditionMessage(e)
+        )
+        if (!is.null(rollback_error)) {
+          rollback_errors <- c(rollback_errors, rollback_error)
+        }
+      }
+
+      stop(
+        "Could not archive previous clean outputs before writing new files. ",
+        "Failed while moving '", src, "': ", conditionMessage(move_error),
+        if (length(rollback_errors)) {
+          paste0(" Rollback also reported: ", paste(rollback_errors, collapse = " | "))
+        } else {
+          " All earlier moves from this attempt were rolled back."
+        }
+      )
+    }
+    moved <- c(moved, src)
+  }
+
+  log_msg(
+    "Archived ", length(moved), " previous top-level output item(s) to: ",
+    archive_dir
+  )
+  invisible(archive_dir)
 }
 
 latest_file_by_pattern <- function(dir, pattern) {
@@ -405,6 +510,38 @@ build_keys <- function(item_info) {
 }
 
 # ---- Row filtering -----------------------------------------------------------
+find_participant_id_col <- function(df) {
+  candidates <- c(
+    "vpid", "vp_id", "vp", "participant_id", "participantid",
+    "participant", "subject_id", "subjectid", "subject", "id"
+  )
+  name_norm <- normalize_id(names(df))
+  candidate_norm <- normalize_id(candidates)
+  hit <- match(candidate_norm, name_norm)
+  hit <- hit[!is.na(hit)]
+  if (!length(hit)) return(NULL)
+  names(df)[hit[1]]
+}
+
+make_participant_exclusion_key <- function(df, id_col = find_participant_id_col(df)) {
+  if (is.null(id_col) || !id_col %in% names(df)) {
+    return(rep(NA_character_, nrow(df)))
+  }
+
+  id_value <- normalize_vpid(df[[id_col]])
+  id_value[is.na(id_value) | id_value == ""] <- NA_character_
+
+  project_col <- get_project_col(df)
+  if (is.null(project_col)) return(id_value)
+
+  project_value <- normalize_project_key(df[[project_col]])
+  ifelse(
+    is.na(id_value),
+    NA_character_,
+    paste0(dplyr::coalesce(project_value, "project_unknown"), "::", id_value)
+  )
+}
+
 remove_flagged_rows <- function(q_df, sample) {
   as_flag_logical <- function(x) {
     if (is.logical(x)) return(dplyr::coalesce(x, FALSE))
@@ -434,15 +571,29 @@ remove_flagged_rows <- function(q_df, sample) {
     as_flag_logical(q_df[[idas_col]])
   }
 
-  remove_row <- rushing_flag | idas_flag
+  directly_flagged <- rushing_flag | idas_flag
+  id_col <- find_participant_id_col(q_df)
+  participant_key <- make_participant_exclusion_key(q_df, id_col)
+  flagged_participant_keys <- unique(
+    participant_key[directly_flagged & !is.na(participant_key)]
+  )
+
+  # Exclusion is participant-based, not merely row-based. This matters when a
+  # participant has duplicate questionnaire rows but only one row is flagged.
+  same_flagged_participant <- !is.na(participant_key) &
+    participant_key %in% flagged_participant_keys
+  remove_row <- directly_flagged | same_flagged_participant
 
   discarded <- q_df[remove_row, , drop = FALSE]
   if (nrow(discarded)) {
     discarded$.__reason__ <- dplyr::case_when(
-      rushing_flag[remove_row] & idas_flag[remove_row] ~
+      directly_flagged[remove_row] & rushing_flag[remove_row] & idas_flag[remove_row] ~
         "rushing_flag_and_same_response_on_all_raw_IDAS_items",
-      rushing_flag[remove_row] ~ "rushing_flag",
-      idas_flag[remove_row] ~ "same_response_on_all_raw_IDAS_items",
+      directly_flagged[remove_row] & rushing_flag[remove_row] ~ "rushing_flag",
+      directly_flagged[remove_row] & idas_flag[remove_row] ~
+        "same_response_on_all_raw_IDAS_items",
+      same_flagged_participant[remove_row] ~
+        "same_participant_as_rushing_or_IDAS_flagged_row",
       TRUE ~ "flagged_for_exclusion"
     )
   }
@@ -450,13 +601,63 @@ remove_flagged_rows <- function(q_df, sample) {
   clean <- q_df[!remove_row, , drop = FALSE]
 
   log_msg(glue::glue(
-    "Sample '{sample}': removed {sum(remove_row)} flagged row(s) in prep03 "
+    "Sample '{sample}': removed {sum(remove_row)} row(s) belonging to "
   ),
-  "(rushing: ", sum(rushing_flag),
+  length(flagged_participant_keys), " identified flagged participant(s) in prep03 ",
+  "(directly flagged rows: ", sum(directly_flagged),
+  "; additional duplicate rows from the same participants: ",
+  sum(remove_row & !directly_flagged),
+  "; rushing: ", sum(rushing_flag),
   "; invariant IDAS responding: ", sum(idas_flag),
   "; both: ", sum(rushing_flag & idas_flag), ").")
 
-  list(clean = clean, discarded = discarded)
+  if (any(directly_flagged & is.na(participant_key))) {
+    log_msg(
+      "Sample '", sample, "': ",
+      sum(directly_flagged & is.na(participant_key)),
+      " directly flagged row(s) had no usable participant ID and were therefore ",
+      "excluded row-wise."
+    )
+  }
+
+  list(
+    clean = clean,
+    discarded = discarded,
+    excluded_participant_keys = flagged_participant_keys,
+    participant_id_col = id_col
+  )
+}
+
+assert_flagged_participants_absent <- function(clean_df, dropped, sample) {
+  excluded_keys <- dropped$excluded_participant_keys
+  if (is.null(excluded_keys) || !length(excluded_keys)) {
+    log_msg("Exclusion check for sample '", sample, "': no identified flagged participants.")
+    return(invisible(TRUE))
+  }
+
+  clean_keys <- make_participant_exclusion_key(
+    clean_df,
+    id_col = dropped$participant_id_col
+  )
+  overlap <- intersect(unique(clean_keys[!is.na(clean_keys)]), excluded_keys)
+
+  if (length(overlap)) {
+    stop(
+      "Exclusion integrity check failed for sample '", sample, "': ",
+      length(overlap),
+      " participant key(s) flagged for rushing or invariant IDAS responding ",
+      "are still present in the cleaned master. No outputs were written for ",
+      "this sample. Affected key(s): ", paste(overlap, collapse = ", ")
+    )
+  }
+
+  log_msg(
+    "Exclusion check for sample '", sample, "': all ",
+    length(excluded_keys),
+    " identified participant(s) flagged for rushing or invariant IDAS ",
+    "responding are absent from the cleaned master."
+  )
+  invisible(TRUE)
 }
 
 # ---- Wide-only preprocessing helpers -----------------------------------------
@@ -924,7 +1125,11 @@ rename_master_item_columns_inplace <- function(df, item_info = NULL, preserve_sc
   list(df = df, map = map_tbl)
 }
 
-export_per_project <- function(df_clean, df_discard, sample, delim = ";", item_info = NULL) {
+export_per_project <- function(df_clean,
+                               df_discard,
+                               sample,
+                               input_date,
+                               item_info = NULL) {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
@@ -932,16 +1137,24 @@ export_per_project <- function(df_clean, df_discard, sample, delim = ";", item_i
   df_clean <- ren$df
   map_tbl  <- ren$map
   
-  ts <- format(Sys.time(), "%Y-%m-%d_%H%M%S")
-  map_path <- fs::path(out_dir, glue::glue("rename_map_master_items_{sample}_{ts}.csv"))
-  readr::write_csv(map_tbl, map_path)
+  map_path <- fs::path(
+    out_dir,
+    glue::glue("{input_date}_rename_map_master_items_{sample}.xlsx")
+  )
+  writexl::write_xlsx(map_tbl, map_path)
   log_msg("Wrote rename map: ", map_path, "  (renamed n=", sum(map_tbl$renamed), ")")
   
-  master_path <- fs::path(out_dir, glue::glue("{sample}_clean_master.csv"))
-  disc_path   <- fs::path(out_dir, glue::glue("{sample}_discarded.csv"))
+  master_path <- fs::path(
+    out_dir,
+    glue::glue("{input_date}_{sample}_clean_master.xlsx")
+  )
+  disc_path <- fs::path(
+    out_dir,
+    glue::glue("{input_date}_{sample}_discarded.xlsx")
+  )
   
-  readr::write_excel_csv2(df_clean, master_path, na = "")
-  readr::write_excel_csv2(df_discard, disc_path, na = "")
+  writexl::write_xlsx(df_clean, master_path)
+  writexl::write_xlsx(df_discard, disc_path)
   
   log_msg("Wrote master (items only, no score columns): ", master_path)
   log_msg("Wrote discarded: ", disc_path)
@@ -955,16 +1168,26 @@ export_per_project <- function(df_clean, df_discard, sample, delim = ";", item_i
   df_split <- split(df_clean, df_clean[[proj_col]])
   purrr::iwalk(df_split, function(dd, proj) {
     safe_proj <- gsub("[^A-Za-z0-9_-]+", "_", proj)
-    filepath  <- fs::path(out_dir, glue::glue("{sample}_project-{safe_proj}_clean.csv"))
-    write_excel_friendly_csv(dd, filepath, delim)
+    filepath <- fs::path(
+      out_dir,
+      glue::glue("{input_date}_{sample}_project-{safe_proj}_clean.xlsx")
+    )
+    writexl::write_xlsx(dd, filepath)
   })
   
-  log_msg(glue::glue("Exported {length(df_split)} CSVs with BOM + sep='{delim}' for '{sample}'."))
+  log_msg(glue::glue("Exported {length(df_split)} per-project XLSX files for '{sample}'."))
 }
 
-save_keys <- function(keys, sample) {
-  path_rds  <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.rds"))
-  path_json <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.json"))
+save_keys <- function(keys, sample, input_date) {
+  fs::dir_create(DIR_KEYS)
+  path_rds <- fs::path(
+    DIR_KEYS,
+    glue::glue("{input_date}_{sample}_keys.rds")
+  )
+  path_json <- fs::path(
+    DIR_KEYS,
+    glue::glue("{input_date}_{sample}_keys.json")
+  )
   saveRDS(keys, path_rds)
   jsonlite::write_json(keys, path_json, pretty = TRUE, auto_unbox = TRUE)
   log_msg(glue::glue("Saved keys for '{sample}' to: {path_rds} and {path_json}"))
@@ -1280,6 +1503,7 @@ process_sample <- function(sample,
     return(invisible(NULL))
   }
   if (is.null(iteminfo_path)) iteminfo_path <- latest_iteminfo_for_sample(sample)
+  input_date <- input_date_prefix(questionnaire_path)
   
   if (is.null(iteminfo_path) || is.na(iteminfo_path) || !fs::file_exists(iteminfo_path)) {
     fallback <- latest_iteminfo_for_sample("adults")
@@ -1370,11 +1594,18 @@ process_sample <- function(sample,
   # FHS is deliberately excluded from internal-consistency preparation, but
   # every raw FHS column must remain available for the later FHS scoring step.
   assert_fhs_columns_retained(q_clean0, q_ready, ii_all, sample)
+  assert_flagged_participants_absent(q_ready, dropped, sample)
   
   keys <- build_keys(ii)
-  save_keys(keys, sample)
+  save_keys(keys, sample, input_date)
   
-  export_per_project(q_ready, q_discard, sample, item_info = ii_all)
+  export_per_project(
+    q_ready,
+    q_discard,
+    sample,
+    input_date = input_date,
+    item_info = ii_all
+  )
   
   log_msg("--- Done sample: ", sample, " ---\n")
   invisible(list(
@@ -1387,6 +1618,30 @@ process_sample <- function(sample,
 # ---- Main --------------------------------------------------------------------
 SAMPLES_TO_PROCESS <- c("adults", "adolescents")
 
+QUESTIONNAIRE_PATHS <- stats::setNames(
+  purrr::map_chr(SAMPLES_TO_PROCESS, latest_questionnaire_for_sample_local),
+  SAMPLES_TO_PROCESS
+)
+
+missing_questionnaires <- names(QUESTIONNAIRE_PATHS)[
+  is.na(QUESTIONNAIRE_PATHS) | !fs::file_exists(QUESTIONNAIRE_PATHS)
+]
+if (length(missing_questionnaires)) {
+  stop(
+    "No dated questionnaire input was found for sample(s): ",
+    paste(missing_questionnaires, collapse = ", "),
+    ". Expected ALL_YYYY-MM-DD_<sample>_questionnaire.xlsx in '",
+    DIR_QUESTIONNAIRES, "'. Existing clean outputs were not archived."
+  )
+}
+
+INPUT_DATES <- purrr::map_chr(QUESTIONNAIRE_PATHS, input_date_prefix)
+initialize_run_logs(INPUT_DATES)
+
+purrr::iwalk(QUESTIONNAIRE_PATHS, function(path, sample) {
+  log_msg("Selected questionnaire input for '", sample, "': ", path)
+})
+
 SCORING_PATH <- latest_scoring()
 if (is.na(SCORING_PATH)) {
   stop(glue::glue(
@@ -1395,4 +1650,39 @@ if (is.na(SCORING_PATH)) {
 }
 SCORING <- read_scoring(SCORING_PATH)
 
-results <- purrr::map(SAMPLES_TO_PROCESS, ~ process_sample(.x, scoring_df = SCORING))
+ITEMINFO_PATHS <- stats::setNames(
+  purrr::map_chr(SAMPLES_TO_PROCESS, function(sample) {
+    path <- latest_iteminfo_for_sample(sample)
+    if (!is.na(path) && fs::file_exists(path)) return(path)
+
+    fallback <- latest_iteminfo_for_sample("adults")
+    if (!is.na(fallback) && fs::file_exists(fallback)) return(fallback)
+    NA_character_
+  }),
+  SAMPLES_TO_PROCESS
+)
+
+missing_iteminfo <- names(ITEMINFO_PATHS)[
+  is.na(ITEMINFO_PATHS) | !fs::file_exists(ITEMINFO_PATHS)
+]
+if (length(missing_iteminfo)) {
+  stop(
+    "No Item Information workbook was found for sample(s): ",
+    paste(missing_iteminfo, collapse = ", "),
+    ". Existing clean outputs were not archived."
+  )
+}
+
+# Archive the complete previous Step-03 output tree only after all required
+# input files have been located successfully and before any new file is written.
+archive_existing_clean_outputs(DIR_EXPORT)
+
+results <- purrr::imap(
+  QUESTIONNAIRE_PATHS,
+  ~ process_sample(
+    sample = .y,
+    questionnaire_path = .x,
+    iteminfo_path = ITEMINFO_PATHS[[.y]],
+    scoring_df = SCORING
+  )
+)
