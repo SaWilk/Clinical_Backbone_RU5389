@@ -893,6 +893,56 @@ if ("id" %in% names(psytool_info_adults))      psytool_info_adults$id      <- as
 if ("id" %in% names(psytool_info_adolescents)) psytool_info_adolescents$id <- as_int_safely(psytool_info_adolescents$id)
 if ("id" %in% names(psytool_info_children))    psytool_info_children$id    <- as_int_safely(psytool_info_children$id)
 
+# --- Hard questionnaire exclusion: comp == "cogn" ---------------------------
+# Rows with comp == "cogn" are routing records for cognitive testing only.
+# They must never enter questionnaire outputs, even if administrative fields
+# such as VPID, project, timestamps or lastpage are populated. The earlier
+# project-specific empty-row rules did not cover Project 2, which allowed such
+# rows (for example the cognitive-only row for VPID 20118) to survive until the
+# duplicate check.
+exclude_cogn_questionnaire_rows <- function(df,
+                                            sample) {
+  mask <- .comp_is_cogn(df, link_col)
+  dropped <- df[mask, , drop = FALSE]
+
+  if (nrow(dropped)) {
+    dropped$.__reason__ <- "comp_cogn_cognitive_only"
+    df <- df[!mask, , drop = FALSE]
+  }
+
+  message(
+    "Questionnaire comp exclusion for ", sample, ": removed ",
+    nrow(dropped), " row(s) with comp == 'cogn'."
+  )
+
+  list(clean = df, dropped = dropped)
+}
+
+cogn_exclusion_adults <- exclude_cogn_questionnaire_rows(
+  dat_adults, "adults"
+)
+dat_adults <- cogn_exclusion_adults$clean
+
+cogn_exclusion_adolescents <- exclude_cogn_questionnaire_rows(
+  dat_adolescents, "adolescents"
+)
+dat_adolescents <- cogn_exclusion_adolescents$clean
+
+cogn_exclusion_children_parents <- exclude_cogn_questionnaire_rows(
+  dat_children_parents, "children_parents"
+)
+dat_children_parents <- cogn_exclusion_children_parents$clean
+
+cogn_exclusion_children_p6 <- exclude_cogn_questionnaire_rows(
+  dat_children_p6, "children_p6"
+)
+dat_children_p6 <- cogn_exclusion_children_p6$clean
+
+cogn_exclusion_parents_p6 <- exclude_cogn_questionnaire_rows(
+  dat_parents_p6, "parents_p6"
+)
+dat_parents_p6 <- cogn_exclusion_parents_p6$clean
+
 # --- Project 4 Special-case Probanden-Fix: TIME_end (UTC) -> id = 40016 ----------------
 
 psytool_info_adults <- audit_id_change(
@@ -1029,6 +1079,23 @@ all_empty_ad$.__reason__.   <- "empty"
 all_empty_ch$.__reason__.   <- "empty"
 empty_adlsc_7$.__reason__.  <- "empty"
 
+# Retain the globally excluded cognitive-only routing rows in the discarded
+# workbooks while preserving their more specific exclusion reason.
+all_empty_ad <- dplyr::bind_rows(
+  all_empty_ad,
+  cogn_exclusion_adults$dropped
+)
+all_empty_ch <- dplyr::bind_rows(
+  all_empty_ch,
+  cogn_exclusion_children_parents$dropped,
+  cogn_exclusion_children_p6$dropped,
+  cogn_exclusion_parents_p6$dropped
+)
+empty_adlsc_7 <- dplyr::bind_rows(
+  empty_adlsc_7,
+  cogn_exclusion_adolescents$dropped
+)
+
 # Fix ID naming issues ---------------------------------------------------------
 # All manual ID changes in this block are audited in id_change_audit.
 
@@ -1106,6 +1173,99 @@ dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10005 & dat_ad
 dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10006 & dat_adults[[project_col]] == PROJECT, vp_col, 30006, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10006 corrected to 30006.")
 dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 10007 & dat_adults[[project_col]] == PROJECT, vp_col, 30007, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 10007 corrected to 30007.")
 dat_adults <- audit_id_change(dat_adults, dat_adults[[vp_col]] == 40019 & dat_adults[[project_col]] == PROJECT, vp_col, 30019, project_col, "adults", "questionnaire", "Project 3 questionnaire: wrong initial project digit; VPID 40019 corrected to 30019.")
+
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 31016L &
+    dat_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 32016L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 3 questionnaire: known wrong VPID 31016 corrected to 32016."
+)
+
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 30016L &
+    dat_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 32015L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 3 questionnaire: known wrong VPID 30016 corrected to 32015."
+)
+
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 30078L &
+    dat_adults[[project_col]] == PROJECT &
+    .date_berlin(dat_adults$startdate) == as.Date("2026-02-19"),
+  id_col = vp_col,
+  new_id = 32074L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 3 questionnaire: VPID 30078 with startdate 2026-02-19 corrected directly to 32074 before the general exp-2 relabeling."
+)
+
+# Two Project 3 questionnaire records from 2026-07-20 would otherwise both
+# resolve to VPID 32026. Keep the earlier record as 32026 and assign 32027 to
+# the record with the later start time before the general exp-2 relabeling.
+idx_32026_questionnaire_20260720 <- which(
+  dat_adults[[vp_col]] %in% c(30026L, 32026L) &
+    dat_adults[[project_col]] == PROJECT &
+    .date_berlin(dat_adults$startdate) == as.Date("2026-07-20")
+)
+time_32026_questionnaire_20260720 <- NULL
+later_32026_questionnaire_idx <- NULL
+
+if (length(idx_32026_questionnaire_20260720) >= 2L) {
+  if (length(idx_32026_questionnaire_20260720) != 2L) {
+    stop(
+      "Project 3 questionnaire: expected exactly two records resolving to ID 32026 on 2026-07-20, found ",
+      length(idx_32026_questionnaire_20260720),
+      "."
+    )
+  }
+
+  time_32026_questionnaire_20260720 <- as_time_safely(
+    dat_adults$startdate[idx_32026_questionnaire_20260720],
+    tz = "Europe/Berlin"
+  )
+
+  if (
+    any(is.na(time_32026_questionnaire_20260720)) ||
+      length(unique(time_32026_questionnaire_20260720)) != 2L
+  ) {
+    stop(
+      "Project 3 questionnaire: the two records resolving to ID 32026 on 2026-07-20 need two valid, distinct start times."
+    )
+  }
+
+  later_32026_questionnaire_idx <- idx_32026_questionnaire_20260720[
+    which.max(time_32026_questionnaire_20260720)
+  ]
+
+  dat_adults <- audit_id_change(
+    dat_adults,
+    idx = seq_len(nrow(dat_adults)) == later_32026_questionnaire_idx,
+    id_col = vp_col,
+    new_id = 32027L,
+    project_col = project_col,
+    sample = "adults",
+    data_type = "questionnaire",
+    criterion = "Project 3 questionnaire: of the two records on 2026-07-20 that would resolve to VPID 32026, the record with the later startdate was corrected to 32027 before the general exp-2 relabeling."
+  )
+}
+
+rm(
+  idx_32026_questionnaire_20260720,
+  time_32026_questionnaire_20260720,
+  later_32026_questionnaire_idx
+)
 
 dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 227 & dat_adults[[project_col]] == PROJECT, vp_col, 30047, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 227 known to belong to VPID 30047.")
 dat_adults <- audit_id_change(dat_adults, dat_adults[[id_col]] == 316 & dat_adults[[project_col]] == PROJECT, vp_col, 30057, project_col, "adults", "questionnaire", "Project 3 questionnaire: LimeSurvey response id 316 known to belong to VPID 30057.")
@@ -1698,6 +1858,22 @@ trash_adolescents <- res_adolescents$trash_bin
 
 dat_adolescents <- track_adolescent_vpids(dat_adolescents, "after resolve_duplicates adolescents")
 
+# Project 7 is collected in both adults and adolescents. The ordinary duplicate
+# pass runs within each sample, so explicitly flag IDs that remain in both
+# samples. Do not remove either record automatically because the correct sample
+# assignment requires manual review.
+flag_cross_sample_duplicates(
+  df_left = dat_adults,
+  df_right = dat_adolescents,
+  vp_col = "vpid",
+  project_col = "project",
+  project = 7L,
+  sample_left = "adults",
+  sample_right = "adolescents",
+  data_type = "questionnaire",
+  logger = logger
+)
+
 # Children/Parents
 res_children_parents <- resolve_duplicates(
   dat_children_parents,
@@ -1804,6 +1980,26 @@ samples <- list(
   children_p6      = dat_children_p6,
   parents_p6       = dat_parents_p6
 )
+
+# Final hard stop immediately before questionnaire slicing/export. This guards
+# against a later processing step accidentally reintroducing cognitive-only
+# routing rows.
+remaining_cogn_rows <- vapply(
+  samples,
+  function(df) sum(.comp_is_cogn(df, link_col), na.rm = TRUE),
+  integer(1)
+)
+if (any(remaining_cogn_rows > 0L)) {
+  stop(
+    "Questionnaire export blocked: comp == 'cogn' rows remain in sample(s): ",
+    paste(
+      paste0(names(remaining_cogn_rows)[remaining_cogn_rows > 0L],
+             " (n=", remaining_cogn_rows[remaining_cogn_rows > 0L], ")"),
+      collapse = ", "
+    )
+  )
+}
+message("Questionnaire export integrity check passed: no comp == 'cogn' rows remain.")
 
 # ---- Deterministic questionnaire ID schema before slicing/export --------------
 
@@ -1984,6 +2180,99 @@ psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 40019 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30019, project_col, "adults", "experiment_data", "Project 3 cogtests: wrong initial project digit; ID 40019 corrected to 30019.")
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults[[vp_col]] == 104 & psytool_info_adults[[project_col]] == PROJECT, vp_col, 30104, project_col, "adults", "experiment_data", "Project 3 cogtests: missing project prefix; ID 104 corrected to 30104.")
 
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 31016L &
+    psytool_info_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 32016L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests: known wrong ID 31016 corrected to 32016."
+)
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 30016L &
+    psytool_info_adults[[project_col]] == PROJECT,
+  id_col = vp_col,
+  new_id = 32015L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests: known wrong ID 30016 corrected to 32015."
+)
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 30078L &
+    psytool_info_adults[[project_col]] == PROJECT &
+    .date_berlin(psytool_info_adults$TIME_start) == as.Date("2026-02-19"),
+  id_col = vp_col,
+  new_id = 32074L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 3 cogtests: ID 30078 with TIME_start 2026-02-19 corrected directly to 32074 before the general exp-2 relabeling."
+)
+
+# Apply the same time-based distinction to the Project 3 cogtests: of the two
+# records from 2026-07-20 that would otherwise resolve to ID 32026, the later
+# one becomes 32027 before the general exp-2 relabeling.
+idx_32026_cogtest_20260720 <- which(
+  psytool_info_adults[[vp_col]] %in% c(30026L, 32026L) &
+    psytool_info_adults[[project_col]] == PROJECT &
+    .date_berlin(psytool_info_adults$TIME_start) == as.Date("2026-07-20")
+)
+time_32026_cogtest_20260720 <- NULL
+later_32026_cogtest_idx <- NULL
+
+if (length(idx_32026_cogtest_20260720) >= 2L) {
+  if (length(idx_32026_cogtest_20260720) != 2L) {
+    stop(
+      "Project 3 cogtests: expected exactly two records resolving to ID 32026 on 2026-07-20, found ",
+      length(idx_32026_cogtest_20260720),
+      "."
+    )
+  }
+
+  time_32026_cogtest_20260720 <- as_time_safely(
+    psytool_info_adults$TIME_start[idx_32026_cogtest_20260720],
+    tz = "Europe/Berlin"
+  )
+
+  if (
+    any(is.na(time_32026_cogtest_20260720)) ||
+      length(unique(time_32026_cogtest_20260720)) != 2L
+  ) {
+    stop(
+      "Project 3 cogtests: the two records resolving to ID 32026 on 2026-07-20 need two valid, distinct TIME_start values."
+    )
+  }
+
+  later_32026_cogtest_idx <- idx_32026_cogtest_20260720[
+    which.max(time_32026_cogtest_20260720)
+  ]
+
+  psytool_info_adults <- audit_id_change(
+    psytool_info_adults,
+    idx = seq_len(nrow(psytool_info_adults)) == later_32026_cogtest_idx,
+    id_col = vp_col,
+    new_id = 32027L,
+    project_col = project_col,
+    sample = "adults",
+    data_type = "experiment_data",
+    criterion = "Project 3 cogtests: of the two records on 2026-07-20 that would resolve to ID 32026, the record with the later TIME_start was corrected to 32027 before the general exp-2 relabeling."
+  )
+}
+
+rm(
+  idx_32026_cogtest_20260720,
+  time_32026_cogtest_20260720,
+  later_32026_cogtest_idx
+)
+
 psytool_info_adults$id <- suppressWarnings(as.integer(psytool_info_adults$id))
 
 psytool_info_adults <- audit_id_change(psytool_info_adults, psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L & psytool_info_adults$TIME_start == max(psytool_info_adults$TIME_start[psytool_info_adults$id == 30048L & psytool_info_adults$p == 3L], na.rm = TRUE), "id", 30047, "p", "adults", "experiment_data", "Project 3 cogtests: falsely named dataset; ID 30048 row with latest TIME_start corrected to 30047.")
@@ -2084,6 +2373,19 @@ psytool_info_adults <- audit_id_change(
   sample = "adults",
   data_type = "experiment_data",
   criterion = "Project 8 cogtests adults: known wrong ID 80144 corrected to 80090."
+)
+
+psytool_info_adults <- audit_id_change(
+  psytool_info_adults,
+  idx = psytool_info_adults[[vp_col]] == 80114L &
+    psytool_info_adults[[project_col]] == PROJECT &
+    .date_berlin(psytool_info_adults$TIME_start) == as.Date("2026-06-25"),
+  id_col = vp_col,
+  new_id = 80090L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "experiment_data",
+  criterion = "Project 8 cogtests adults: ID 80114 with TIME_start 2026-06-25 corrected to 80090."
 )
 
 psytool_info_children <- audit_id_change(
@@ -2360,6 +2662,20 @@ res_adolescents <- resolve_duplicates(psytool_info_adolescents, vp_col, submit_c
                                       project_col, logger = logger)
 psytool_info_adolescents <- res_adolescents$cleaned
 trash_adolescents        <- res_adolescents$trash_bin
+
+# Apply the same Project 7 cross-sample check to the cognitive-test data after
+# the ordinary within-sample duplicate passes.
+flag_cross_sample_duplicates(
+  df_left = psytool_info_adults,
+  df_right = psytool_info_adolescents,
+  vp_col = "id",
+  project_col = "p",
+  project = 7L,
+  sample_left = "adults",
+  sample_right = "adolescents",
+  data_type = "experiment_data",
+  logger = logger
+)
 
 # Children
 res_children <- resolve_duplicates(psytool_info_children, vp_col, submit_col,

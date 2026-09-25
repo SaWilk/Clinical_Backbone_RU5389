@@ -256,3 +256,98 @@ resolve_duplicates <- function(df,
   
   list(cleaned = cleaned, trash_bin = trash_bin, warnings = out_warnings)
 }
+
+
+# -------------------------------------------------------------------------
+# flag_cross_sample_duplicates()
+#
+# Detect IDs that survive duplicate resolution in two different samples of the
+# same project. These cannot be found by resolve_duplicates(), because that
+# function intentionally processes one sample at a time.
+#
+# The function only flags the conflict. It never removes or moves a row because
+# the data alone do not establish which sample assignment is correct.
+# -------------------------------------------------------------------------
+flag_cross_sample_duplicates <- function(df_left,
+                                         df_right,
+                                         vp_col,
+                                         project_col,
+                                         project = 7L,
+                                         sample_left = "adults",
+                                         sample_right = "adolescents",
+                                         data_type = "data",
+                                         logger = NULL) {
+  required <- c(vp_col, project_col)
+
+  if (!all(required %in% names(df_left))) {
+    stop(sprintf(
+      "[%s | %s] Missing required columns for cross-sample duplicate detection: %s",
+      sample_left,
+      data_type,
+      paste(setdiff(required, names(df_left)), collapse = ", ")
+    ))
+  }
+
+  if (!all(required %in% names(df_right))) {
+    stop(sprintf(
+      "[%s | %s] Missing required columns for cross-sample duplicate detection: %s",
+      sample_right,
+      data_type,
+      paste(setdiff(required, names(df_right)), collapse = ", ")
+    ))
+  }
+
+  ids_for_project <- function(df) {
+    ids <- trimws(as.character(df[[vp_col]]))
+    projects <- suppressWarnings(as.integer(as.character(df[[project_col]])))
+    ids[!is.na(projects) & projects == as.integer(project) & !is.na(ids) & ids != ""]
+  }
+
+  left_ids <- ids_for_project(df_left)
+  right_ids <- ids_for_project(df_right)
+  duplicate_ids <- intersect(unique(left_ids), unique(right_ids))
+
+  if (length(duplicate_ids) > 1L) {
+    duplicate_id_numbers <- suppressWarnings(as.numeric(duplicate_ids))
+    duplicate_ids <- duplicate_ids[order(
+      is.na(duplicate_id_numbers),
+      duplicate_id_numbers,
+      duplicate_ids
+    )]
+  }
+
+  if (!length(duplicate_ids)) {
+    return(invisible(character(0)))
+  }
+
+  prefix <- if (isTRUE(getOption("utf8_symbols", TRUE))) "⚠️ " else "WARNING: "
+  tag <- sprintf("[%s + %s | %s]", sample_left, sample_right, data_type)
+
+  for (id in duplicate_ids) {
+    left_n <- sum(left_ids == id, na.rm = TRUE)
+    right_n <- sum(right_ids == id, na.rm = TRUE)
+    text <- sprintf(
+      paste0(
+        "Cross-sample duplicate ID %s in project %s: present in %s (%s row%s) ",
+        "and %s (%s row%s). No row was removed automatically"
+      ),
+      id,
+      as.integer(project),
+      sample_left,
+      left_n,
+      ifelse(left_n == 1L, "", "s"),
+      sample_right,
+      right_n,
+      ifelse(right_n == 1L, "", "s")
+    )
+
+    message(paste0(prefix, tag, " ", text, " — please resolve manually."))
+
+    if (!is.null(logger) && !is.null(logger$write)) {
+      safe_line <- paste0("Warning: ", tag, " ", text)
+      try(logger$write(safe_line), silent = TRUE)
+    }
+  }
+
+  invisible(duplicate_ids)
+}

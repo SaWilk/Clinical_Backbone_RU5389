@@ -10,23 +10,23 @@
 #         distribution_of_backbone_scores_and_internal_consistency/
 #
 # Exports:
-#   C) <samples>_stratification_info.xlsx
+#   C) <input-date>_<samples>_stratification_info.xlsx
 #      - project, age, gender, group (from clean master)
 #
 #   HiTOP (Item Information-based):
-#   A) <samples>_HiTOP_items.xlsx
+#   A) <input-date>_<samples>_HiTOP_items.xlsx
 #      - ONLY item columns that have ANY HiTOP mapping in Item Information
-#   B) <samples>_HiTOP_subscales.xlsx
+#   B) <input-date>_<samples>_HiTOP_subscales.xlsx
 #      - existing score_* columns created by prep05 for the SAME HiTOP-mapped scales
 #
 #   COMPLETE (questionnaire-only, explicitly configured below):
-#   D) <samples>_complete_items.xlsx
+#   D) <input-date>_<samples>_complete_items.xlsx
 #      - ALL item columns belonging to CFG$questionnaire_scales, including FHS
 #        plus fhs_*/qc_fhs_* outputs (direct-name/contact/free-text FHS fields
 #        are privacy-filtered)
-#   E) <samples>_complete_subscales.xlsx
+#   E) <input-date>_<samples>_complete_subscales.xlsx
 #      - existing score_* columns plus the fhs_* and qc_fhs_* outputs from prep05
-#   F) <samples>_complete_subscales_enriched.xlsx
+#   F) <input-date>_<samples>_complete_subscales_enriched.xlsx
 #      - complete analysis input containing questionnaire items, score_* columns,
 #        z-scores, demographics, project/group information and FHS/QC outputs
 #      - copied unchanged to
@@ -198,22 +198,49 @@ latest_file_by_pattern <- function(dir, pattern, recurse = FALSE) {
 
 latest_clean_master_for_sample <- function(root, sample) {
   folder <- fs::path(root, "02_cleaned", sample)
-  cand <- fs::path(folder, paste0(sample, "_clean_master.csv"))
-  if (fs::file_exists(cand)) return(cand)
-  
-  files <- fs::dir_ls(folder, regexp = "clean_master\\.csv$", type = "file", fail = FALSE)
+  patt <- paste0(
+    "^\\d{4}-\\d{2}-\\d{2}_",
+    sample,
+    "_clean_master\\.xlsx$"
+  )
+
+  files_all <- fs::dir_ls(folder, type = "file", recurse = FALSE, fail = FALSE)
+  files <- files_all[grepl(patt, basename(files_all))]
   if (!length(files)) return(NA_character_)
+
   dts <- extract_date(basename(files))
-  files[order(dts, decreasing = TRUE)][1]
+  valid <- !is.na(dts)
+  files <- files[valid]
+  dts <- dts[valid]
+  if (!length(files)) return(NA_character_)
+
+  newest_date <- max(dts)
+  candidates <- files[dts == newest_date]
+  if (length(candidates) == 1L) return(candidates)
+
+  info <- file.info(candidates)
+  candidates[which.max(info$mtime)]
 }
 
-latest_scored_master_for_sample <- function(root, sample, suffix = NULL) {
+dated_master_input_date <- function(path) {
+  date_value <- extract_date(basename(path))
+  if (length(date_value) != 1L || is.na(date_value)) {
+    stop(
+      "Could not extract a YYYY-MM-DD input date from master file: ",
+      path,
+      call. = FALSE
+    )
+  }
+  format(date_value, "%Y-%m-%d")
+}
+
+latest_scored_master_for_sample <- function(root, sample, input_date, suffix = NULL) {
   folder <- fs::path(root, "02_cleaned", sample)
   
   fname <- if (is.null(suffix) || !nzchar(suffix)) {
-    paste0(sample, "_clean_master_scored.csv")
+    paste0(input_date, "_", sample, "_clean_master_scored.xlsx")
   } else {
-    paste0(sample, "_clean_master_scored_", suffix, ".csv")
+    paste0(input_date, "_", sample, "_clean_master_scored_", suffix, ".xlsx")
   }
   
   cand <- fs::path(folder, fname)
@@ -278,7 +305,22 @@ sample_tag <- function(samples) {
   paste(samples, collapse = "_")
 }
 
-read_master_csv_robust <- function(master_csv, default_delim = ";") {
+read_master_robust <- function(master_path, default_delim = ";") {
+  extension <- tolower(fs::path_ext(master_path))
+
+  if (identical(extension, "xlsx")) {
+    return(
+      suppressMessages(readxl::read_excel(master_path)) %>%
+        janitor::clean_names() %>%
+        tibble::as_tibble()
+    )
+  }
+
+  if (!identical(extension, "csv")) {
+    stop("Unsupported master file type: ", master_path, call. = FALSE)
+  }
+
+  master_csv <- master_path
   first_line <- readr::read_lines(master_csv, n_max = 1)
   
   delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
@@ -378,13 +420,14 @@ drop_flagged_items_from_keys <- function(keys, flagged_tbl) {
 }
 
 # ---- Flag-helper handling ----------------------------------------------------
-latest_flag_helper <- function(root, combined_label, threshold_tag) {
+latest_flag_helper <- function(root, combined_label, threshold_tag, input_date) {
   base_dir <- fs::path(
     root, "out", "internal_data_analysis",
-    "distribution_of_backbone_scores_and_internal_consistency"
+    "distribution_of_backbone_scores_and_internal_consistency",
+    paste0(input_date, "_", combined_label)
   )
   patt <- paste0("^", combined_label, "_flagged_items_", threshold_tag, "\\.xlsx$")
-  latest_file_by_pattern(base_dir, patt, recurse = TRUE)
+  latest_file_by_pattern(base_dir, patt, recurse = FALSE)
 }
 
 read_flagged_items <- function(path, dataset_label, threshold_value) {
@@ -485,24 +528,49 @@ read_one_sample_master <- function(sample) {
   }
   
   if (is.na(master_path) || !fs::file_exists(master_path)) {
-    stop("Missing clean master for sample '", sample, "'. Looked for: ", master_path, call. = FALSE)
+    stop(
+      "Missing dated Step 03 clean master for sample '", sample,
+      "'. Expected YYYY-MM-DD_", sample,
+      "_clean_master.xlsx in ", fs::path(ROOT, "02_cleaned", sample),
+      call. = FALSE
+    )
   }
-  
-  keys_path <- fs::path(ROOT, "02_cleaned", "keys", paste0(sample, "_keys.rds"))
+
+  input_date <- dated_master_input_date(master_path)
+  keys_path <- fs::path(
+    ROOT,
+    "02_cleaned",
+    "keys",
+    paste0(input_date, "_", sample, "_keys.rds")
+  )
   if (!fs::file_exists(keys_path)) {
-    stop("Missing keys for sample '", sample, "'. Looked for: ", keys_path, call. = FALSE)
+    stop(
+      "Missing Step 03 keys matching input date ", input_date,
+      " for sample '", sample, "'. Looked for: ", keys_path,
+      call. = FALSE
+    )
   }
   
-  d <- read_master_csv_robust(master_path)
+  d <- read_master_robust(master_path)
   
-  scored_full_path <- latest_scored_master_for_sample(ROOT, sample)
+  scored_full_path <- latest_scored_master_for_sample(
+    ROOT,
+    sample,
+    input_date = input_date
+  )
   if (is.na(scored_full_path) || !fs::file_exists(scored_full_path)) {
-    stop("Missing unfiltered scored master for sample '", sample, "'. Run Step 3 first.", call. = FALSE)
+    stop(
+      "Missing Step 05 unfiltered scored master matching input date ",
+      input_date, " for sample '", sample, "'. Looked for: ",
+      scored_full_path, ". Run Step 05 first.",
+      call. = FALSE
+    )
   }
   
   scored_filtered_path <- latest_scored_master_for_sample(
     ROOT,
     sample,
+    input_date = input_date,
     suffix = threshold_tag
   )
   
@@ -510,19 +578,20 @@ read_one_sample_master <- function(sample) {
   scored_combined_path <- latest_scored_master_for_sample(
     ROOT,
     sample,
+    input_date = input_date,
     suffix = scored_combined_suffix
   )
   
-  d_scored_full <- read_master_csv_robust(scored_full_path)
+  d_scored_full <- read_master_robust(scored_full_path)
   
   d_scored_filtered <- if (!is.na(scored_filtered_path) && fs::file_exists(scored_filtered_path)) {
-    read_master_csv_robust(scored_filtered_path)
+    read_master_robust(scored_filtered_path)
   } else {
     NULL
   }
   
   d_scored_combined <- if (!is.na(scored_combined_path) && fs::file_exists(scored_combined_path)) {
-    read_master_csv_robust(scored_combined_path)
+    read_master_robust(scored_combined_path)
   } else {
     NULL
   }
@@ -534,6 +603,7 @@ read_one_sample_master <- function(sample) {
   
   list(
     sample = sample,
+    input_date = input_date,
     master_path = master_path,
     keys_path = keys_path,
     d = d,
@@ -549,6 +619,15 @@ read_one_sample_master <- function(sample) {
 }
 
 masters <- purrr::map(samples, read_one_sample_master)
+
+master_dates <- suppressWarnings(as.Date(
+  purrr::map_chr(masters, "input_date")
+))
+if (any(is.na(master_dates))) {
+  stop("Could not determine the input date for every selected sample.", call. = FALSE)
+}
+output_date <- format(max(master_dates), "%Y-%m-%d")
+message("Output date: ", output_date)
 
 # -----------------------------
 # Build stratification tables
@@ -573,7 +652,7 @@ make_strat <- function(obj) {
 strat_list <- purrr::map(masters, make_strat)
 strat_combined <- dplyr::bind_rows(strat_list)
 
-out_strat <- fs::path(OUT_DIR, glue::glue("{combined_label}_stratification_info.xlsx"))
+out_strat <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_stratification_info.xlsx"))
 writexl::write_xlsx(list(strat_all = strat_combined), out_strat)
 message("Wrote: ", out_strat)
 
@@ -1125,7 +1204,12 @@ write_questionnaire_copies <- function(enriched_sheets,
 
       project_file <- fs::path(
         project_dir,
-        paste0(sample, "_complete_subscales_enriched.xlsx")
+        paste0(
+          dated_master_input_date(source_workbook),
+          "_",
+          sample,
+          "_complete_subscales_enriched.xlsx"
+        )
       )
       writexl::write_xlsx(stats::setNames(list(project_tbl), sample), project_file)
       message("Wrote: ", project_file)
@@ -1251,7 +1335,7 @@ if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
     }
   }
   
-  out_items <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_items.xlsx"))
+  out_items <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_HiTOP_items.xlsx"))
   writexl::write_xlsx(make_export_sheets(items_list), out_items)
   message("Wrote: ", out_items)
   
@@ -1261,7 +1345,7 @@ if (isTRUE(CFG$export_hitop) && !is.null(ii_hitop) && nrow(ii_hitop)) {
     message("Wrote: ", out_items_enriched)
   }
   
-  out_scores <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales.xlsx"))
+  out_scores <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_HiTOP_subscales.xlsx"))
   writexl::write_xlsx(make_export_sheets(scores_list, z_scores = TRUE), out_scores)
   message("Wrote: ", out_scores)
   
@@ -1308,7 +1392,7 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
     }
   }
   
-  out_items_all <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_items.xlsx"))
+  out_items_all <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_complete_items.xlsx"))
   writexl::write_xlsx(make_export_sheets(items_list), out_items_all)
   message("Wrote: ", out_items_all)
   
@@ -1318,7 +1402,7 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
     message("Wrote: ", out_items_all_enriched)
   }
   
-  out_scores_all <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales.xlsx"))
+  out_scores_all <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_complete_subscales.xlsx"))
   writexl::write_xlsx(make_export_sheets(scores_list, z_scores = TRUE), out_scores_all)
   message("Wrote: ", out_scores_all)
   
@@ -1353,7 +1437,12 @@ if (isTRUE(CFG$export_complete) && !is.null(ii_complete) && nrow(ii_complete)) {
 # - combined sheet uses combined flags + combined-filtered scored masters
 # -----------------------------
 if (isTRUE(CFG$export_loading_filtered)) {
-  flag_helper <- latest_flag_helper(ROOT, combined_label, threshold_tag)
+  flag_helper <- latest_flag_helper(
+    ROOT,
+    combined_label,
+    threshold_tag,
+    input_date = output_date
+  )
   
   if (is.na(flag_helper) || !fs::file_exists(flag_helper)) {
     message("No flagged-item helper found for filtered exports. Skipping filtered outputs.")
@@ -1373,7 +1462,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         if (is.null(obj$d_scored_filtered)) {
           stop(
             "Missing sample-specific filtered scored master for sample '",
-            obj$sample, "'. Run Step 3 with export_filtered_scores = TRUE.",
+            obj$sample, "'. Run Step 05 with export_filtered_scores = TRUE.",
             call. = FALSE
           )
         }
@@ -1421,7 +1510,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         if (is.null(obj$d_scored_combined)) {
           stop(
             "Missing combined-filtered scored master for sample '",
-            obj$sample, "'. Run Step 3 with export_combined_filtered_scores = TRUE.",
+            obj$sample, "'. Run Step 05 with export_combined_filtered_scores = TRUE.",
             call. = FALSE
           )
         }
@@ -1464,7 +1553,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
       items_list[["combined"]]  <- dplyr::bind_rows(combined_items_parts)
       scores_list[["combined"]] <- dplyr::bind_rows(combined_scores_parts)
       
-      out_items_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_items_{threshold_tag}.xlsx"))
+      out_items_f <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_HiTOP_items_{threshold_tag}.xlsx"))
       writexl::write_xlsx(items_list, out_items_f)
       message("Wrote: ", out_items_f)
       
@@ -1474,7 +1563,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         message("Wrote: ", out_items_f_enriched)
       }
       
-      out_scores_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_HiTOP_subscales_{threshold_tag}.xlsx"))
+      out_scores_f <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_HiTOP_subscales_{threshold_tag}.xlsx"))
       scores_list <- purrr::map(scores_list, add_z_score_columns)
       writexl::write_xlsx(scores_list, out_scores_f)
       message("Wrote: ", out_scores_f)
@@ -1499,7 +1588,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         if (is.null(obj$d_scored_filtered)) {
           stop(
             "Missing sample-specific filtered scored master for sample '",
-            obj$sample, "'. Run Step 3 with export_filtered_scores = TRUE.",
+            obj$sample, "'. Run Step 05 with export_filtered_scores = TRUE.",
             call. = FALSE
           )
         }
@@ -1554,7 +1643,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         if (is.null(obj$d_scored_combined)) {
           stop(
             "Missing combined-filtered scored master for sample '",
-            obj$sample, "'. Run Step 3 with export_combined_filtered_scores = TRUE.",
+            obj$sample, "'. Run Step 05 with export_combined_filtered_scores = TRUE.",
             call. = FALSE
           )
         }
@@ -1604,7 +1693,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
       items_list[["combined"]]  <- dplyr::bind_rows(combined_items_parts)
       scores_list[["combined"]] <- dplyr::bind_rows(combined_scores_parts)
       
-      out_items_all_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_items_{threshold_tag}.xlsx"))
+      out_items_all_f <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_complete_items_{threshold_tag}.xlsx"))
       writexl::write_xlsx(items_list, out_items_all_f)
       message("Wrote: ", out_items_all_f)
       
@@ -1614,7 +1703,7 @@ if (isTRUE(CFG$export_loading_filtered)) {
         message("Wrote: ", out_items_all_f_enriched)
       }
       
-      out_scores_all_f <- fs::path(OUT_DIR, glue::glue("{combined_label}_complete_subscales_{threshold_tag}.xlsx"))
+      out_scores_all_f <- fs::path(OUT_DIR, glue::glue("{output_date}_{combined_label}_complete_subscales_{threshold_tag}.xlsx"))
       scores_list <- purrr::map(scores_list, add_z_score_columns)
       writexl::write_xlsx(scores_list, out_scores_all_f)
       message("Wrote: ", out_scores_all_f)

@@ -21,7 +21,7 @@ ensure_packages <- function(pkgs) {
 
 ensure_packages(c(
   "readxl", "readr", "janitor", "dplyr", "stringr", "tibble",
-  "purrr", "fs", "glue", "rprojroot"
+  "purrr", "fs", "glue", "rprojroot", "writexl"
 ))
 
 CFG <- list(
@@ -148,7 +148,92 @@ latest_iteminfo_for_sample <- function(sample) {
   latest_file_by_pattern(DIR_INFO, patt)
 }
 
-read_master_csv_robust <- function(master_csv, default_delim = ";") {
+extract_date_string <- function(path) {
+  hit <- stringr::str_match(
+    basename(path),
+    "^(\\d{4}-\\d{2}-\\d{2})_"
+  )[, 2]
+  if (length(hit) != 1L || is.na(hit)) {
+    stop("Could not extract the leading YYYY-MM-DD date from: ", path)
+  }
+  hit
+}
+
+latest_dated_master_for_sample <- function(sample) {
+  sample_dir <- fs::path(DIR_EXPORT, sample)
+  patt <- paste0(
+    "^\\d{4}-\\d{2}-\\d{2}_",
+    sample,
+    "_clean_master\\.xlsx$"
+  )
+
+  files_all <- fs::dir_ls(
+    sample_dir,
+    type = "file",
+    recurse = FALSE,
+    fail = FALSE
+  )
+  files <- files_all[grepl(patt, basename(files_all))]
+  if (!length(files)) return(NA_character_)
+
+  dates <- suppressWarnings(as.Date(vapply(files, extract_date_string, character(1))))
+  valid <- !is.na(dates)
+  files <- files[valid]
+  dates <- dates[valid]
+  if (!length(files)) return(NA_character_)
+
+  newest_date <- max(dates)
+  candidates <- files[dates == newest_date]
+  if (length(candidates) == 1L) return(candidates)
+
+  info <- file.info(candidates)
+  candidates[which.max(info$mtime)]
+}
+
+resolve_sample_inputs <- function(sample) {
+  master_path <- latest_dated_master_for_sample(sample)
+  if (is.na(master_path) || !fs::file_exists(master_path)) {
+    stop(
+      "No dated Step 03 master found for sample '", sample, "' in '",
+      fs::path(DIR_EXPORT, sample), "'. Expected a file named ",
+      "YYYY-MM-DD_", sample, "_clean_master.xlsx."
+    )
+  }
+
+  input_date <- extract_date_string(master_path)
+  keys_path <- fs::path(
+    DIR_KEYS,
+    glue::glue("{input_date}_{sample}_keys.rds")
+  )
+  if (!fs::file_exists(keys_path)) {
+    stop(
+      "The Step 03 key matching the selected master date is missing for sample '",
+      sample, "': ", keys_path
+    )
+  }
+
+  list(
+    master_path = master_path,
+    keys_path = keys_path,
+    input_date = input_date
+  )
+}
+
+read_master_robust <- function(master_path, default_delim = ";") {
+  extension <- tolower(fs::path_ext(master_path))
+
+  if (identical(extension, "xlsx")) {
+    return(
+      suppressMessages(readxl::read_excel(master_path)) %>%
+        janitor::clean_names()
+    )
+  }
+
+  if (!identical(extension, "csv")) {
+    stop("Unsupported master file type: ", master_path)
+  }
+
+  master_csv <- master_path
   first_line <- readr::read_lines(master_csv, n_max = 1)
   
   delim <- if (length(first_line) && grepl("^sep=", first_line, ignore.case = TRUE)) {
@@ -412,6 +497,78 @@ score_items_wide <- function(d, items, col_map, agg = c("mean","sum")) {
   out
 }
 
+# CTQ-SF items 10, 16 and 22 form a separate 0-3 Minimization/Denial
+# indicator. They must never contribute to the CTQ maltreatment total.
+is_ctq_md_subscale <- function(scale, subscale) {
+  if (!identical(toupper(trimws(as.character(scale))), "CTQ")) return(FALSE)
+  label <- safe_score_name(subscale)
+  isTRUE(grepl("minimi[sz]|denial|verleugn|bagatellis|^m_d$|^md$", label))
+}
+
+is_ctq_md_item_number <- function(items) {
+  compact <- gsub("[^a-z0-9]", "", normalize_id_local(items))
+  grepl("^(ctq)?0?(10|16|22)$", compact)
+}
+
+get_ctq_md_definition <- function(keys) {
+  scale_rows <- keys$items_by_scale
+  if (is.null(scale_rows) || !nrow(scale_rows)) return(NULL)
+  ctq_rows <- scale_rows[!is.na(scale_rows$scale) &
+                            toupper(trimws(as.character(scale_rows$scale))) == "CTQ", , drop = FALSE]
+  if (!nrow(ctq_rows)) return(NULL)
+
+  subs <- keys$items_by_subscale
+  md_rows <- if (!is.null(subs) && nrow(subs)) {
+    subs[vapply(seq_len(nrow(subs)), function(i) {
+      is_ctq_md_subscale(subs$scale[i], subs$subscale[i])
+    }, logical(1)), , drop = FALSE]
+  } else NULL
+
+  # Prefer the explicit subscale key, allowing dataset-specific item names.
+  # Fall back to the three standard CTQ-SF item numbers in the CTQ scale key.
+  items <- if (!is.null(md_rows) && nrow(md_rows)) {
+    unique(unlist(md_rows$items, use.names = FALSE))
+  } else {
+    ctq_items <- unique(unlist(ctq_rows$items, use.names = FALSE))
+    ctq_items[is_ctq_md_item_number(ctq_items)]
+  }
+  items <- items[!is.na(items) & nzchar(trimws(as.character(items)))]
+  if (length(unique(normalize_id_local(items))) != 3L) {
+    stop("CTQ Minimization/Denial needs exactly three item keys (items 10, 16, 22); found ",
+         length(unique(normalize_id_local(items))), ". Check the CTQ keys before scoring.")
+  }
+
+  label <- if (!is.null(md_rows) && nrow(md_rows)) {
+    safe_score_name(md_rows$subscale[1])
+  } else "minimization_denial"
+  list(items = items, label = label)
+}
+
+add_ctq_md_score <- function(df, md_definition, prefix = "score_") {
+  if (is.null(md_definition)) return(df)
+  col_map <- make_col_map(df)
+  item_norm <- normalize_id_local(md_definition$items)
+  cols <- col_map$orig[match(item_norm, col_map$item_norm)]
+  if (anyNA(cols)) {
+    stop("CTQ Minimization/Denial item columns missing from clean master: ",
+         paste(md_definition$items[is.na(cols)], collapse = ", "))
+  }
+
+  responses <- df[, cols, drop = FALSE]
+  responses[] <- lapply(responses, function(x) suppressWarnings(as.numeric(as.character(x))))
+  values <- as.matrix(responses)
+  if (any(!is.na(values) & !(as.vector(values) %in% 1:5))) {
+    stop("CTQ Minimization/Denial responses must be coded from 1 to 5.")
+  }
+  score <- rowSums(values == 5, na.rm = TRUE)
+  score[rowSums(is.na(values)) > 0L] <- NA_real_
+  new_col <- paste0(prefix, "ctq__", md_definition$label)
+  df[[new_col]] <- score
+  log_msg("Scored CTQ Minimization/Denial -> ", new_col,
+          " (three items: response 5 = 1, responses 1-4 = 0; range 0-3)")
+  df
+}
+
 add_z_score_columns <- function(df,
                                 score_pattern = "^score_",
                                 z_prefix = "z_",
@@ -642,7 +799,8 @@ add_scale_scores <- function(df, keys, scoring_df,
                              default_min_prop = CFG$min_prop_items_default,
                              exclude_scales = character(0),
                              force_mean_scores = FALSE,
-                             suq_total_agg = "sum") {
+                             suq_total_agg = "sum",
+                             ctq_md_definition = NULL) {
   if (is.null(keys) || is.null(keys$items_by_scale) || !nrow(keys$items_by_scale)) return(df)
   
   col_map <- make_col_map(df)
@@ -656,6 +814,10 @@ add_scale_scores <- function(df, keys, scoring_df,
   for (i in seq_len(nrow(scales_tbl))) {
     sc    <- as.character(scales_tbl$scale[i])
     items <- scales_tbl$items[[i]]
+    if (toupper(trimws(sc)) == "CTQ" && !is.null(ctq_md_definition)) {
+      md_norm <- normalize_id_local(ctq_md_definition$items)
+      items <- items[!(normalize_id_local(items) %in% md_norm | is_ctq_md_item_number(items))]
+    }
     if (length(items) < 1L) next
     
     new_col <- paste0(prefix, safe_score_name(sc))
@@ -706,6 +868,7 @@ add_subscale_scores <- function(df, keys, scoring_df,
     sc    <- as.character(subs_tbl$scale[i])
     sub   <- as.character(subs_tbl$subscale[i])
     items <- subs_tbl$items[[i]]
+    if (is_ctq_md_subscale(sc, sub)) next  # scored separately from the original three items
     if (length(items) < 1L) {
       log_msg(
         "Skipped subscale '", sc, " / ", sub,
@@ -1172,18 +1335,18 @@ add_fhs_scores <- function(df, sample, item_info = NULL) {
   work
 }
 
-write_master_variant <- function(df, sample, suffix = NULL) {
+write_master_variant <- function(df, sample, input_date, suffix = NULL) {
   out_dir <- fs::path(DIR_EXPORT, sample)
   fs::dir_create(out_dir)
   
   fname <- if (is.null(suffix) || !nzchar(suffix)) {
-    glue::glue("{sample}_clean_master_scored.csv")
+    glue::glue("{input_date}_{sample}_clean_master_scored.xlsx")
   } else {
-    glue::glue("{sample}_clean_master_scored_{suffix}.csv")
+    glue::glue("{input_date}_{sample}_clean_master_scored_{suffix}.xlsx")
   }
   
   out_path <- fs::path(out_dir, fname)
-  write.csv2(df, out_path, row.names = FALSE)
+  writexl::write_xlsx(df, out_path)
   log_msg("Wrote scored master: ", out_path)
   out_path
 }
@@ -1191,13 +1354,17 @@ write_master_variant <- function(df, sample, suffix = NULL) {
 process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_) {
   log_msg("\n--- Scoring sample: ", sample, " ---")
   
-  master_path <- fs::path(DIR_EXPORT, sample, glue::glue("{sample}_clean_master.csv"))
-  keys_path   <- fs::path(DIR_KEYS, glue::glue("{sample}_keys.rds"))
-  
-  stopifnot(fs::file_exists(master_path), fs::file_exists(keys_path))
-  
-  df   <- read_master_csv_robust(master_path)
+  sample_inputs <- resolve_sample_inputs(sample)
+  master_path <- sample_inputs$master_path
+  keys_path <- sample_inputs$keys_path
+  input_date <- sample_inputs$input_date
+
+  log_msg("Using dated Step 03 master: ", master_path)
+  log_msg("Using matching Step 03 key: ", keys_path)
+
+  df   <- read_master_robust(master_path)
   keys <- readRDS(keys_path)
+  ctq_md_definition <- get_ctq_md_definition(keys)
 
   # FHS remains outside the internal-consistency/item-loading workflow, but its
   # derived family-history variables belong in every scored master variant.
@@ -1209,13 +1376,15 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
   df_scored <- add_scale_scores(
     df_scored, keys, scoring_df,
     prefix = "score_",
-    exclude_scales = NON_SCORABLE_SCALES
+    exclude_scales = NON_SCORABLE_SCALES,
+    ctq_md_definition = ctq_md_definition
   )
   df_scored <- add_subscale_scores(
     df_scored, keys, scoring_df,
     prefix = "score_",
     exclude_scales = NON_SCORABLE_SCALES
   )
+  df_scored <- add_ctq_md_score(df_scored, ctq_md_definition)
   df_scored <- add_suq_illegal_drugs_score(
     df_scored,
     keys,
@@ -1231,7 +1400,7 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
     )
   }
   
-  write_master_variant(df_scored, sample)
+  write_master_variant(df_scored, sample, input_date = input_date)
 
   # round 2: filtered scores
   if (isTRUE(CFG$export_filtered_scores)) {
@@ -1251,7 +1420,8 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         prefix = "score_",
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean,
-        suq_total_agg = CFG$suq_filtered_total_agg
+        suq_total_agg = CFG$suq_filtered_total_agg,
+        ctq_md_definition = ctq_md_definition
       )
       df_scored_f <- add_subscale_scores(
         df_scored_f, keys_filt, scoring_df,
@@ -1259,6 +1429,7 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean
       )
+      df_scored_f <- add_ctq_md_score(df_scored_f, ctq_md_definition)
       df_scored_f <- add_suq_illegal_drugs_score(
         df_scored_f,
         keys_filt,
@@ -1276,7 +1447,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         )
       }
       
-      write_master_variant(df_scored_f, sample, suffix = suffix_tag)
+      write_master_variant(
+        df_scored_f,
+        sample,
+        input_date = input_date,
+        suffix = suffix_tag
+      )
     } else {
       log_msg("No flagged-item helper found. Skipping filtered scored master.")
     }
@@ -1306,7 +1482,8 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         prefix = "score_",
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean,
-        suq_total_agg = CFG$suq_filtered_total_agg
+        suq_total_agg = CFG$suq_filtered_total_agg,
+        ctq_md_definition = ctq_md_definition
       )
       df_scored_combined_f <- add_subscale_scores(
         df_scored_combined_f, keys_combined_filt, scoring_df,
@@ -1314,6 +1491,7 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         exclude_scales = NON_SCORABLE_SCALES,
         force_mean_scores = CFG$force_filtered_scores_to_mean
       )
+      df_scored_combined_f <- add_ctq_md_score(df_scored_combined_f, ctq_md_definition)
       df_scored_combined_f <- add_suq_illegal_drugs_score(
         df_scored_combined_f,
         keys_combined_filt,
@@ -1332,7 +1510,12 @@ process_sample <- function(sample, scoring_df, flag_helper_path = NA_character_)
         )
       }
       
-      write_master_variant(df_scored_combined_f, sample, suffix = suffix_tag_combined)
+      write_master_variant(
+        df_scored_combined_f,
+        sample,
+        input_date = input_date,
+        suffix = suffix_tag_combined
+      )
     } else {
       log_msg("No flagged-item helper found. Skipping combined-filtered scored master.")
     }
