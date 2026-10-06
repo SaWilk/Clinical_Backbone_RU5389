@@ -177,6 +177,39 @@ as_time_safely <- function(x, tz = "Europe/Berlin") {
   as.Date(as_time_safely(x, tz = "Europe/Berlin"), tz = "Europe/Berlin")
 }
 
+# Match an exact questionnaire session time supplied in UTC against the
+# available LimeSurvey time columns. Questionnaire timestamps are interpreted
+# as Europe/Berlin during import, but may later be displayed in UTC.
+.questionnaire_time_matches_utc <- function(df,
+                                            timestamp_utc,
+                                            time_cols = c("startdate", "submitdate", "datestamp")) {
+  target <- as.POSIXct(
+    timestamp_utc,
+    format = "%Y-%m-%d %H:%M:%S",
+    tz = "UTC"
+  )
+
+  if (is.na(target)) {
+    stop("Invalid UTC questionnaire timestamp: ", timestamp_utc)
+  }
+
+  available_time_cols <- intersect(time_cols, names(df))
+  if (!length(available_time_cols)) {
+    stop(
+      "Questionnaire data contain none of the expected time columns: ",
+      paste(time_cols, collapse = ", ")
+    )
+  }
+
+  matched <- rep(FALSE, nrow(df))
+  for (time_col in available_time_cols) {
+    values <- as_time_safely(df[[time_col]], tz = "Europe/Berlin")
+    matched <- matched | (!is.na(values) & values == target)
+  }
+
+  matched
+}
+
 # --- ID remap: 30xxx -> 32xxx (keep last 3 digits); keep existing 32xxx untouched ---
 make_p3_exp2_id <- function(id_vec) {
   x <- suppressWarnings(as.integer(as.character(id_vec)))
@@ -1336,6 +1369,38 @@ if (any(idx_50056_p5_questionnaire, na.rm = TRUE)) {
 }
 rm(idx_50056_p5_questionnaire)
 
+# Project 7 --------------------------------------------------------------------
+PROJECT <- 7
+
+# VPID 70299 from 2026-05-13 is a mistyped questionnaire ID. Project 7 is
+# collected in both samples, so apply the same narrowly dated correction to
+# whichever questionnaire source contains the row.
+dat_adults <- audit_id_change(
+  dat_adults,
+  idx = dat_adults[[vp_col]] == 70299L &
+    dat_adults[[project_col]] == PROJECT &
+    .date_berlin(dat_adults$startdate) == as.Date("2026-05-13"),
+  id_col = vp_col,
+  new_id = 70229L,
+  project_col = project_col,
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire: VPID 70299 with startdate 2026-05-13 corrected to 70229."
+)
+
+dat_adolescents <- audit_id_change(
+  dat_adolescents,
+  idx = dat_adolescents[[vp_col]] == 70299L &
+    dat_adolescents[[project_col]] == PROJECT &
+    .date_berlin(dat_adolescents$startdate) == as.Date("2026-05-13"),
+  id_col = vp_col,
+  new_id = 70229L,
+  project_col = project_col,
+  sample = "adolescents",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire: VPID 70299 with startdate 2026-05-13 corrected to 70229."
+)
+
 # Project 8 --------------------------------------------------------------------
 PROJECT <- 8
 
@@ -1560,6 +1625,60 @@ dat_children_parents <- dat_children_parents %>%
 
 
 # Project 7 --------------------------------------------------------------------
+# VPID 70088: keep the first adolescent session from 2025-06-24. The later
+# session was an accidental restart of the questionnaire.
+dat_adolescents <- audit_row_action(
+  dat_adolescents,
+  idx = dat_adolescents[[project_col]] == 7L &
+    dat_adolescents[[vp_col]] == 70088L &
+    .questionnaire_time_matches_utc(
+      dat_adolescents,
+      "2025-07-04 07:59:31"
+    ),
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adolescents",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adolescents: VPID 70088 session at 2025-07-04 07:59:31 UTC deleted because the questionnaire was accidentally started again; the earlier session from 2025-06-24 was retained.",
+  action = "deleted"
+)
+
+# VPID 70091 belongs to the adolescent session from 2025-09-05. Delete the
+# later adult record created after the ID had been reassigned.
+dat_adults <- audit_row_action(
+  dat_adults,
+  idx = dat_adults[[project_col]] == 7L &
+    dat_adults[[vp_col]] == 70091L &
+    .questionnaire_time_matches_utc(
+      dat_adults,
+      "2026-04-09 12:59:24"
+    ),
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adults",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adults: VPID 70091 session at 2026-04-09 12:59:24 UTC deleted because the valid assignment is the adolescent session from 2025-09-05.",
+  action = "deleted"
+)
+
+# VPID 70164 belongs to the adult session from 2026-04-07. Delete the earlier
+# adolescent record because the ID was subsequently reassigned to an adult.
+dat_adolescents <- audit_row_action(
+  dat_adolescents,
+  idx = dat_adolescents[[project_col]] == 7L &
+    dat_adolescents[[vp_col]] == 70164L &
+    .questionnaire_time_matches_utc(
+      dat_adolescents,
+      "2026-03-02 12:12:00"
+    ),
+  id_col = "vpid",
+  project_col = "project",
+  sample = "adolescents",
+  data_type = "questionnaire",
+  criterion = "Project 7 questionnaire adolescents: VPID 70164 session at 2026-03-02 12:12:00 UTC deleted because the valid assignment is the adult session from 2026-04-07.",
+  action = "deleted"
+)
+
 # Participants filled out questionnaires twice.
 drop_ids_p7 <- c(70076L, 70072L, 70062L)
 

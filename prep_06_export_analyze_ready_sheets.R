@@ -305,15 +305,16 @@ sample_tag <- function(samples) {
   paste(samples, collapse = "_")
 }
 
-read_master_robust <- function(master_path, default_delim = ";") {
+read_master_robust <- function(master_path, default_delim = ";", clean_column_names = TRUE) {
   extension <- tolower(fs::path_ext(master_path))
 
   if (identical(extension, "xlsx")) {
-    return(
-      suppressMessages(readxl::read_excel(master_path)) %>%
-        janitor::clean_names() %>%
-        tibble::as_tibble()
-    )
+    out <- suppressMessages(readxl::read_excel(master_path)) %>%
+      tibble::as_tibble()
+    # Step 05 writes subscale names with a double underscore (score_scale__subscale).
+    # janitor::clean_names() collapses that delimiter, so preserve scored headers.
+    if (isTRUE(clean_column_names)) out <- janitor::clean_names(out)
+    return(out)
   }
 
   if (!identical(extension, "csv")) {
@@ -582,16 +583,16 @@ read_one_sample_master <- function(sample) {
     suffix = scored_combined_suffix
   )
   
-  d_scored_full <- read_master_robust(scored_full_path)
+  d_scored_full <- read_master_robust(scored_full_path, clean_column_names = FALSE)
   
   d_scored_filtered <- if (!is.na(scored_filtered_path) && fs::file_exists(scored_filtered_path)) {
-    read_master_robust(scored_filtered_path)
+    read_master_robust(scored_filtered_path, clean_column_names = FALSE)
   } else {
     NULL
   }
   
   d_scored_combined <- if (!is.na(scored_combined_path) && fs::file_exists(scored_combined_path)) {
-    read_master_robust(scored_combined_path)
+    read_master_robust(scored_combined_path, clean_column_names = FALSE)
   } else {
     NULL
   }
@@ -738,7 +739,8 @@ expected_score_cols_from_keys <- function(
   expected_total <- tibble::tibble()
   if (!is.null(keys_obj$items_by_scale) && nrow(keys_obj$items_by_scale)) {
     expected_total <- keys_obj$items_by_scale %>%
-      dplyr::filter(.data$scale %in% scales) %>%
+      # FHS is exported through its derived fhs_* fields, not a score_fhsfamilytree total.
+      dplyr::filter(.data$scale %in% scales, .data$scale != "FHSfamilytree") %>%
       dplyr::mutate(
         level = "scale",
         subscale = NA_character_,

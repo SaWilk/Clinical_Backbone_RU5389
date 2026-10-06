@@ -29,9 +29,9 @@
 #   allow it.
 # * Existing header cells, their comments, and conditional formatting are
 #   preserved. The SOLVED column is never rewritten.
-# * Additional Overview columns are treated as optional, unmanaged columns.
-#   They may be added or removed without changing this script, and their
-#   existing values and formulas are preserved.
+# * Additional named Overview columns are optional and unmanaged. Data in
+#   trailing columns without a header are also preserved, but are not treated
+#   as part of the Overview table (for example, notes in column W).
 # * Merged cells in Overview data rows are removed. Each row represents one
 #   record, and mixed merge sizes prevent Excel from sorting the table. The
 #   header row and all other worksheets are left unchanged.
@@ -77,7 +77,7 @@ PROJECT_8_CHILD_MIN_ID <- 80500
 PROJECT_8_CHILD_MAX_ID <- 89999
 
 # This identifier is printed at startup so the executed version is explicit.
-SCRIPT_REVISION <- "2026-09-15_sortable-overview-unmerge-v7"
+SCRIPT_REVISION <- "2026-09-28_trailing-unnamed-overview-columns-v8"
 
 # The 1.29 series supports the modern/threaded Excel comments and workbook
 # relationships used by this workbook.
@@ -437,6 +437,26 @@ resolve_columns <- function(actual_names, wanted, context) {
   stats::setNames(idx, wanted)
 }
 
+trim_trailing_unnamed_columns <- function(x, context) {
+  headers <- names(x)
+  named <- which(!is_blank(headers))
+  if (length(named) == 0L) {
+    stopf("No named columns were found in %s; no changes were made.", context)
+  }
+
+  last_named <- max(named)
+  if (any(is_blank(headers[seq_len(last_named)]))) {
+    stopf(
+      "A blank header occurs between named columns in %s; no changes were made.",
+      context
+    )
+  }
+
+  # A blank header after the last named column may still have data underneath.
+  # Keep those worksheet cells in place; only exclude them from table updates.
+  x[, seq_len(last_named), drop = FALSE]
+}
+
 select_latest_report <- function(report_dir) {
   if (!dir.exists(report_dir)) {
     stopf("Report directory not found: %s", report_dir)
@@ -703,7 +723,7 @@ main <- function() {
   manual_sheet_exists <- !is.na(manual_sheet_existing)
   manual_sheet <- if (manual_sheet_exists) manual_sheet_existing else MANUAL_SHEET_WANTED
 
-  overview_raw <- openxlsx2::wb_to_df(
+  overview_raw_full <- openxlsx2::wb_to_df(
     wb,
     sheet = overview_sheet,
     col_names = TRUE,
@@ -713,6 +733,10 @@ main <- function() {
     check_names = FALSE
   )
 
+  overview_raw <- trim_trailing_unnamed_columns(
+    overview_raw_full,
+    paste0("sheet '", overview_sheet, "'")
+  )
   overview_headers <- names(overview_raw)
   if (any(is_blank(overview_headers)) || anyDuplicated(normalize_token(overview_headers))) {
     stopf("Overview headers must be nonblank and unique; no changes were made.")
@@ -777,6 +801,17 @@ main <- function() {
   preserved_overview_columns <- which(
     !normalize_token(overview_headers) %in%
       normalize_token(rewritten_overview_headers)
+  )
+  trailing_overview_columns <- if (ncol(overview_raw_full) > length(overview_headers)) {
+    seq.int(length(overview_headers) + 1L, ncol(overview_raw_full))
+  } else {
+    integer()
+  }
+  # Include unlabelled columns in the byte-for-byte value/formula check. Their
+  # contents may be meaningful even though they are outside the named table.
+  preserved_overview_columns <- c(
+    preserved_overview_columns,
+    trailing_overview_columns
   )
   preserved_overview_data_rows <- seq.int(2L, original_existing_data_rows + 1L)
   preserved_overview_data_before <- snapshot_cell_data(
@@ -1640,7 +1675,7 @@ main <- function() {
     )
   }
 
-  check_overview_raw <- openxlsx2::wb_to_df(
+  check_overview_raw_full <- openxlsx2::wb_to_df(
     check_wb,
     sheet = overview_sheet,
     col_names = TRUE,
@@ -1649,7 +1684,12 @@ main <- function() {
     detect_dates = TRUE,
     check_names = FALSE
   )
-  if (!identical(names(check_overview_raw), overview_headers)) {
+  check_overview_raw <- trim_trailing_unnamed_columns(
+    check_overview_raw_full,
+    paste0("updated sheet '", overview_sheet, "'")
+  )
+  if (!identical(names(check_overview_raw_full), names(overview_raw_full)) ||
+      !identical(names(check_overview_raw), overview_headers)) {
     stopf("Validation failed: the Overview header row changed.")
   }
   check_idx <- resolve_columns(

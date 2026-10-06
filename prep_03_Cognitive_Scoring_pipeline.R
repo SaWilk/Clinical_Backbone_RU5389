@@ -429,6 +429,7 @@ empty_wcst_result <- function(status) {
     Status_WCST = status,
     score_WCST_correct = NA_integer_,
     score_WCST_errors = NA_integer_,
+    score_WCST_pers_resp = NA_integer_,
     score_WCST_pers_err = NA_integer_,
     score_WCST_nonpers_err = NA_integer_,
     score_WCST_cat_comp = NA_integer_,
@@ -472,15 +473,26 @@ score_wcst_single <- function(path) {
 
   current_principle <- NA_character_
   candidate_principle <- NA_character_
-  consecutive_new_errors <- 0L
+  candidate_indices <- integer(0)
+  rule_of_block <- c(
+    "1" = "color", "2" = "shape", "3" = "number",
+    "4" = "color", "5" = "shape", "6" = "number"
+  )
   block_key <- ifelse(is.na(df$block_count), "__NA__", as.character(df$block_count))
   current_block <- block_key[1]
 
   for (i in seq_len(nrow(df))) {
     if (!identical(block_key[i], current_block)) {
-      current_principle <- NA_character_
+      # The just-completed category's rule becomes the perseverated principle
+      # on the first trial of the new category.
+      previous_rule <- unname(rule_of_block[current_block])
+      current_principle <- if (length(previous_rule) && !is.na(previous_rule)) {
+        previous_rule
+      } else {
+        NA_character_
+      }
       candidate_principle <- NA_character_
-      consecutive_new_errors <- 0L
+      candidate_indices <- integer(0)
       current_block <- block_key[i]
     }
 
@@ -500,23 +512,27 @@ score_wcst_single <- function(path) {
       } else if (identical(matched_dim, current_principle)) {
         df$is_pers_resp[i] <- TRUE
         candidate_principle <- NA_character_
-        consecutive_new_errors <- 0L
+        candidate_indices <- integer(0)
       } else {
         if (is.na(candidate_principle) || !identical(candidate_principle, matched_dim)) {
           candidate_principle <- matched_dim
-          consecutive_new_errors <- 1L
+          candidate_indices <- i
         } else {
-          consecutive_new_errors <- consecutive_new_errors + 1L
+          candidate_indices <- c(candidate_indices, i)
         }
-        if (consecutive_new_errors >= 3L) {
+        if (length(candidate_indices) >= 3L) {
+          # Error 1 establishes the new principle; errors 2 and 3 count
+          # retrospectively as perseverative responses.
+          df$is_pers_resp[candidate_indices[2:3]] <- TRUE
+          df$pers_principle_active[candidate_indices[2:3]] <- candidate_principle
           current_principle <- candidate_principle
           candidate_principle <- NA_character_
-          consecutive_new_errors <- 0L
+          candidate_indices <- integer(0)
         }
       }
     } else if (is_correct && unambiguous) {
       candidate_principle <- NA_character_
-      consecutive_new_errors <- 0L
+      candidate_indices <- integer(0)
     }
     df$pers_principle_active[i] <- current_principle
   }
@@ -559,6 +575,7 @@ score_wcst_single <- function(path) {
 
   score_correct <- sum(df$anyerror == 0, na.rm = TRUE)
   score_errors <- sum(df$anyerror == 1, na.rm = TRUE)
+  score_pers_resp <- sum(df$is_pers_resp, na.rm = TRUE)
   score_pers_err <- sum(df$is_pers_resp & df$anyerror == 1, na.rm = TRUE)
   score_nonpers_err <- score_errors - score_pers_err
   score_cat_comp <- sum(df$correct_count == 10, na.rm = TRUE)
@@ -601,6 +618,7 @@ score_wcst_single <- function(path) {
     Status_WCST = "Erfolgreich",
     score_WCST_correct = score_correct,
     score_WCST_errors = score_errors,
+    score_WCST_pers_resp = score_pers_resp,
     score_WCST_pers_err = score_pers_err,
     score_WCST_nonpers_err = score_nonpers_err,
     score_WCST_cat_comp = score_cat_comp,
@@ -738,7 +756,8 @@ process_master <- function(master) {
       tibble::tibble(
         source_row = row,
         sample = master$sample,
-        score_vp_id = as.character(master_df[[id_column]][row])
+        score_vp_id = as.character(master_df[[id_column]][row]),
+        source_BACS_file = if (is.na(bacs_path)) NA_character_ else normalize_path(bacs_path)
       ),
       if (is.na(bacs_column)) empty_bacs_result("Nicht in Master angegeben") else score_bacs_single(bacs_path),
       if (is.na(wcst_column)) empty_wcst_result("Nicht in Master angegeben") else score_wcst_single(wcst_path),
